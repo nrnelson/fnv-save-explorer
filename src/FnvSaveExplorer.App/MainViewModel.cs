@@ -1,0 +1,235 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.CompilerServices;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using FnvSaveExplorer.Core;
+
+namespace FnvSaveExplorer.App;
+
+public sealed class FltRow
+{
+    public int Index { get; init; }
+    public uint Value { get; init; }
+    public string Hex => $"0x{Value:X8}";
+}
+
+public sealed class MiscStatRow
+{
+    public int Index { get; init; }
+    public uint Value { get; init; }
+}
+
+/// <summary>One editable SPECIAL attribute row for the GUI grid.</summary>
+public sealed class SpecialAttr : INotifyPropertyChanged
+{
+    public required string Name { get; init; }
+
+    private byte _value;
+    public byte Value
+    {
+        get => _value;
+        set { if (_value != value) { _value = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Value))); } }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+}
+
+public sealed class MainViewModel : INotifyPropertyChanged
+{
+    private FalloutSave? _save;
+    private string? _loadedPath;
+
+    public ObservableCollection<string> Plugins { get; } = [];
+    public ObservableCollection<FltRow> FileLocationTable { get; } = [];
+    public ObservableCollection<SpecialAttr> Special { get; } = [];
+    public ObservableCollection<MiscStatRow> MiscStats { get; } = [];
+
+    private static readonly string[] SpecialNames =
+        ["Strength", "Perception", "Endurance", "Charisma", "Intelligence", "Agility", "Luck"];
+
+    // ---- Display state -----------------------------------------------------
+    private string _windowTitle = "FNV Save Explorer";
+    public string WindowTitle { get => _windowTitle; private set => Set(ref _windowTitle, value); }
+
+    private string _status = "Open a .fos save to begin.";
+    public string Status { get => _status; private set => Set(ref _status, value); }
+
+    private ImageSource? _screenshot;
+    public ImageSource? Screenshot { get => _screenshot; private set => Set(ref _screenshot, value); }
+
+    private bool _hasSave;
+    public bool HasSave { get => _hasSave; private set => Set(ref _hasSave, value); }
+
+    private string _playerName = "";
+    public string PlayerName { get => _playerName; private set => Set(ref _playerName, value); }
+
+    private string _playerTitle = "";
+    public string PlayerTitle { get => _playerTitle; private set => Set(ref _playerTitle, value); }
+
+    private string _language = "";
+    public string Language { get => _language; private set => Set(ref _language, value); }
+
+    private string _location = "";
+    public string Location { get => _location; private set => Set(ref _location, value); }
+
+    private string _playtime = "";
+    public string Playtime { get => _playtime; private set => Set(ref _playtime, value); }
+
+    private uint _level;
+    public uint Level { get => _level; private set => Set(ref _level, value); }
+
+    private uint _saveNumber;
+    public uint SaveNumber { get => _saveNumber; private set => Set(ref _saveNumber, value); }
+
+    private string _bodyInfo = "";
+    public string BodyInfo { get => _bodyInfo; private set => Set(ref _bodyInfo, value); }
+
+    // ---- Edit fields (two-way bound) --------------------------------------
+    private string _editName = "";
+    public string EditName { get => _editName; set => Set(ref _editName, value); }
+
+    private string _editLevel = "";
+    public string EditLevel { get => _editLevel; set => Set(ref _editLevel, value); }
+
+    private string _editSaveNumber = "";
+    public string EditSaveNumber { get => _editSaveNumber; set => Set(ref _editSaveNumber, value); }
+
+    // ---- Operations --------------------------------------------------------
+    public void Load(string path)
+    {
+        try
+        {
+            var save = FalloutSave.Load(path);
+            _save = save;
+            _loadedPath = path;
+
+            PlayerName = save.PlayerName;
+            PlayerTitle = save.PlayerTitle;
+            Language = save.Language;
+            Location = save.PlayerLocation;
+            Playtime = save.Playtime;
+            Level = save.PlayerLevel;
+            SaveNumber = save.SaveNumber;
+
+            EditName = save.PlayerName;
+            EditLevel = save.PlayerLevel.ToString();
+            EditSaveNumber = save.SaveNumber.ToString();
+
+            Screenshot = BuildScreenshot(save.Screenshot);
+
+            Plugins.Clear();
+            foreach (var p in save.Plugins)
+                Plugins.Add(p);
+
+            FileLocationTable.Clear();
+            var flt = save.PeekBodyUInt32(28);
+            for (var i = 0; i < flt.Length; i++)
+                FileLocationTable.Add(new FltRow { Index = i, Value = flt[i] });
+
+            Special.Clear();
+            if (save.Special is { } sp)
+                for (var i = 0; i < SpecialNames.Length; i++)
+                    Special.Add(new SpecialAttr { Name = SpecialNames[i], Value = sp.Values[i] });
+
+            MiscStats.Clear();
+            if (save.MiscStats is { } ms)
+                foreach (var stat in ms.Stats)
+                    MiscStats.Add(new MiscStatRow { Index = stat.Index, Value = stat.Value });
+
+            var bodyBytes = save.FileLength - save.BodyOffset;
+            BodyInfo =
+                $"Body begins at offset 0x{save.BodyOffset:X} ({save.BodyOffset:N0}).\n" +
+                $"{bodyBytes:N0} bytes of globals, change forms and the FormID array follow — " +
+                "preserved verbatim and not yet decoded.";
+
+            HasSave = true;
+            WindowTitle = $"FNV Save Explorer — {Path.GetFileName(path)}";
+            Status = $"Loaded {Path.GetFileName(path)} ({save.FileLength:N0} bytes).";
+        }
+        catch (SaveFormatException ex)
+        {
+            Status = $"Could not parse save: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
+    }
+
+    /// <summary>Stages the edit-tab values onto the loaded save (same-length / fixed-width only).</summary>
+    public void ApplyEdits()
+    {
+        if (_save is null)
+            return;
+
+        var messages = new List<string>();
+
+        if (uint.TryParse(EditLevel, out var lvl))
+        {
+            _save.SetPlayerLevel(lvl);
+            Level = lvl;
+        }
+        else messages.Add("level must be a whole number");
+
+        if (uint.TryParse(EditSaveNumber, out var num))
+        {
+            _save.SetSaveNumber(num);
+            SaveNumber = num;
+        }
+        else messages.Add("save number must be a whole number");
+
+        if (EditName != PlayerName)
+        {
+            if (_save.TrySetPlayerName(EditName))
+                PlayerName = EditName;
+            else
+                messages.Add($"name must stay {PlayerName.Length} characters (same-length edits only)");
+        }
+
+        if (Special.Count == 7 && !_save.TrySetSpecial(Special.Select(a => a.Value).ToArray()))
+            messages.Add("could not apply SPECIAL");
+
+        Status = messages.Count == 0
+            ? "Edits staged. Use \"Save As…\" to write a new .fos."
+            : "Some edits were skipped: " + string.Join("; ", messages);
+    }
+
+    public void SaveAs(string path)
+    {
+        if (_save is null)
+            return;
+        try
+        {
+            _save.Save(path, backup: true);
+            Status = $"Saved to {Path.GetFileName(path)}.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Save failed: {ex.Message}";
+        }
+    }
+
+    public string? SuggestedSavePath => _loadedPath;
+
+    private static ImageSource BuildScreenshot(SaveScreenshot shot)
+    {
+        var bgra = shot.ToBgra32();
+        var bmp = BitmapSource.Create(
+            shot.Width, shot.Height, 96, 96, PixelFormats.Bgra32, null, bgra, shot.Width * 4);
+        bmp.Freeze();
+        return bmp;
+    }
+
+    // ---- INotifyPropertyChanged -------------------------------------------
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+            return;
+        field = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+}

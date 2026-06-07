@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FnvSaveExplorer.App/FnvSaveExplorer.App.csproj" />
+    <Project Path="src/FnvSaveExplorer.Cli/FnvSaveExplorer.Cli.csproj" />
+    <Project Path="src/FnvSaveExplorer.Core/FnvSaveExplorer.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FnvSaveExplorer.Tests/FnvSaveExplorer.Tests.csproj" />
+  </Folder>
+</Solution>

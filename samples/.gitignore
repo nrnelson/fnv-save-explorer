@@ -1,0 +1,4 @@
+# Local sample saves (personal data) — never commit real .fos saves.
+# This folder is kept so tests can discover fixtures placed here.
+*
+!.gitignore

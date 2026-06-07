@@ -1,0 +1,27 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+
+# .NET / test
+*.user
+*.suo
+project.lock.json
+TestResults/
+[Tt]est[Rr]esults/
+*.trx
+
+# IDE
+.vs/
+.idea/
+*.userprefs
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Personal save backups
+*.fos.bak
+*.bak

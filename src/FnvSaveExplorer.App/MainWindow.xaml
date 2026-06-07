@@ -1,0 +1,124 @@
+<Window x:Class="FnvSaveExplorer.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:FnvSaveExplorer.App"
+        mc:Ignorable="d"
+        Title="{Binding WindowTitle}" Height="600" Width="940">
+    <DockPanel>
+        <ToolBar DockPanel.Dock="Top">
+            <Button Content="Open…" Padding="10,2" Click="OnOpenClick"/>
+            <Button Content="Save As…" Padding="10,2" Margin="4,0,0,0"
+                    IsEnabled="{Binding HasSave}" Click="OnSaveAsClick"/>
+        </ToolBar>
+
+        <StatusBar DockPanel.Dock="Bottom">
+            <TextBlock Text="{Binding Status}"/>
+        </StatusBar>
+
+        <Grid Margin="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="380"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Left: screenshot + character summary -->
+            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                <Border BorderBrush="#FF555555" BorderThickness="1" Background="#FF1B1B1B"
+                        Height="220" Margin="0,0,0,8">
+                    <Image Source="{Binding Screenshot}" Stretch="Uniform" Margin="4"/>
+                </Border>
+                <GroupBox Header="Character">
+                    <Grid Margin="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Name" Margin="0,2,12,2" Foreground="Gray"/>
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding PlayerName}" Margin="0,2"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Title" Margin="0,2,12,2" Foreground="Gray"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding PlayerTitle}" Margin="0,2"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Level" Margin="0,2,12,2" Foreground="Gray"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Level}" Margin="0,2"/>
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Location" Margin="0,2,12,2" Foreground="Gray"/>
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Location}" Margin="0,2"/>
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Playtime" Margin="0,2,12,2" Foreground="Gray"/>
+                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Playtime}" Margin="0,2"/>
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Save #" Margin="0,2,12,2" Foreground="Gray"/>
+                        <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SaveNumber}" Margin="0,2"/>
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Language" Margin="0,2,12,2" Foreground="Gray"/>
+                        <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Language}" Margin="0,2"/>
+                    </Grid>
+                </GroupBox>
+            </StackPanel>
+
+            <!-- Right: detail tabs -->
+            <TabControl Grid.Column="1">
+                <TabItem Header="Plugins">
+                    <ListBox ItemsSource="{Binding Plugins}" FontFamily="Consolas" Margin="2"/>
+                </TabItem>
+
+                <TabItem Header="File Location Table (R&amp;D)">
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="4" Foreground="Gray"
+                                   Text="Raw uint32 values at the start of the save body. These are absolute file offsets and counts pointing into the globals / change-form / FormID-array sections — the gateway for decoding deeper data."/>
+                        <DataGrid ItemsSource="{Binding FileLocationTable}" AutoGenerateColumns="False"
+                                  IsReadOnly="True" HeadersVisibility="Column" FontFamily="Consolas" Margin="2">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="#" Binding="{Binding Index}" Width="40"/>
+                                <DataGridTextColumn Header="Decimal" Binding="{Binding Value}" Width="140"/>
+                                <DataGridTextColumn Header="Hex" Binding="{Binding Hex}" Width="120"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
+                </TabItem>
+
+                <TabItem Header="Edit (safe)">
+                    <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10"
+                                   Text="Only fixed-width / same-length edits are offered: these change values in place without shifting the file, so the undecoded body and its absolute offsets stay valid. Click Apply, then Save As to write a new file (the original is backed up)."/>
+                        <TextBlock Text="Player name (same length only)"/>
+                        <TextBox Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" Width="240" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Level"/>
+                        <TextBox Text="{Binding EditLevel, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" Width="120" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Save number"/>
+                        <TextBox Text="{Binding EditSaveNumber, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" Width="120" HorizontalAlignment="Left"/>
+                        <TextBlock Text="SPECIAL" Margin="0,4,0,2"/>
+                        <DataGrid ItemsSource="{Binding Special}" AutoGenerateColumns="False" CanUserAddRows="False"
+                                  HeadersVisibility="Column" Width="240" HorizontalAlignment="Left" Margin="0,0,0,10">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Attribute" Binding="{Binding Name}" IsReadOnly="True" Width="140"/>
+                                <DataGridTextColumn Header="Value" Binding="{Binding Value, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <Button Content="Apply staged edits" Padding="10,3" HorizontalAlignment="Left" Click="OnApplyClick"/>
+                    </StackPanel>
+                </TabItem>
+
+                <TabItem Header="Misc Stats">
+                    <DataGrid ItemsSource="{Binding MiscStats}" AutoGenerateColumns="False" IsReadOnly="True"
+                              HeadersVisibility="Column" FontFamily="Consolas" Margin="2">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="60"/>
+                            <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="120"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </TabItem>
+
+                <TabItem Header="Body">
+                    <TextBlock Text="{Binding BodyInfo}" TextWrapping="Wrap" Margin="10" FontFamily="Consolas"/>
+                </TabItem>
+            </TabControl>
+        </Grid>
+    </DockPanel>
+</Window>
