@@ -18,7 +18,8 @@ a CLI — and validated against real saves.
 | **Misc Stats** counters (quests, kills, locations…) | ✅ decoded **and safely editable** (stat 1→999 = 2-byte diff) |
 | **FormID array** + iref resolution | ✅ decoded; locates the **player change forms** in all 16 saves |
 | **Player SPECIAL** (S P E C I A L) | ✅ decoded **and safely editable** — verified on all 16 saves (each sums to 40) |
-| **Change forms** (inventory, perks, per-actor state) | 🔬 region/count/player located; full per-record decode **next** |
+| **Player skills** (actor-value block in the PlayerRef change form) | ✅ decoded **and safely editable** — format + 13-skill index map verified; storage is sparse (modified-only) |
+| **Change forms** (inventory, perks, per-actor state) | 🔬 region/count/player located; SPECIAL + skills decoded; full per-record decode **next** |
 
 ## The `.fos` format (validated against real New Vegas saves)
 
@@ -85,9 +86,19 @@ length-prefixed player-name field (fenced by `0x7C`). Located by name-adjacency 
 forms (skipping the header name), it is verified on every save — each sums to 40 (the chargen
 budget) and is consistent per character — and is **safely editable** in place.
 
+**Skills** live in the **PlayerRef (`0x14`) change form** as an actor-value modification list —
+`[count*4][7C]` then entries of `[avIndex:u8][7C][value:float32][7C]` (7 bytes each). The 13 skill
+indices (`0x20` Barter … `0x2D` Unarmed, skipping the FO3-only `0x21` "Big Guns") were verified by
+setting all 13 to distinct values via console `setav` and byte-diffing. Storage is **sparse**: the
+engine computes skills from base + SPECIAL + perks and only stores *deviations*, so the tool reads
+and **safely edits** exactly what's stored (it can't show all 13 on a save that never modified them).
+The block is located by anchoring on the length prefix and choosing the validating block with the
+most recognised skills.
+
 **Still next:** the general per-record header (changeFlags / type / variable length) to walk all
-~4134 forms and decode inventory, perks, and skills. This needs controlled in-game diffs (change one
-thing, save, byte-diff) — the tooling (`probe`, `hex`, `findplayer`) is in place to support it.
+~4134 forms and decode inventory and perks. This needs controlled in-game diffs (change one thing,
+save, byte-diff) — the tooling (`probe`, `hex`, `findplayer`, `playerdump`, and the player-relative
+`diff` annotations) is in place to support it.
 
 ## Architecture — the "retention model"
 
@@ -100,8 +111,8 @@ even though the body isn't fully understood.
 ## Projects
 
 - `src/FnvSaveExplorer.Core` — UI-agnostic parser/writer (`FalloutSave`, `ByteReader`, `SaveScreenshot`).
-- `src/FnvSaveExplorer.App` — WPF GUI: screenshot, character panel, plugins, File Location Table, safe edits.
-- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`.
+- `src/FnvSaveExplorer.App` — WPF GUI: screenshot, character panel, plugins, File Location Table, SPECIAL/skills/safe edits.
+- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`, `special`, `skills`, `setskill`, `playerdump`, `diff`, … (run with no args to list all).
 - `tests/FnvSaveExplorer.Tests` — synthetic-save unit tests + a theory that round-trips every real `.fos` it finds.
 
 ## Usage
@@ -115,6 +126,7 @@ dotnet run --project src/FnvSaveExplorer.App
 # CLI (run with no args to list all commands)
 dotnet run --project src/FnvSaveExplorer.Cli -- dump    "<save.fos>"   # metadata + plugins
 dotnet run --project src/FnvSaveExplorer.Cli -- special "<save.fos>"   # player SPECIAL
+dotnet run --project src/FnvSaveExplorer.Cli -- skills  "<save.fos>"   # stored skill modifications
 dotnet run --project src/FnvSaveExplorer.Cli -- stats   "<save.fos>"   # Misc Stats counters
 dotnet run --project src/FnvSaveExplorer.Cli -- globals "<save.fos>"   # global data records
 dotnet run --project src/FnvSaveExplorer.Cli -- check   "<save.fos>"   # round-trip safety

@@ -105,6 +105,20 @@
                     </StackPanel>
                 </TabItem>
 
+                <TabItem Header="Skills">
+                    <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10" Text="{Binding SkillsInfo}"/>
+                        <DataGrid ItemsSource="{Binding Skills}" AutoGenerateColumns="False" CanUserAddRows="False"
+                                  HeadersVisibility="Column" Width="260" HorizontalAlignment="Left" Margin="0,0,0,10">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Skill" Binding="{Binding Name}" IsReadOnly="True" Width="160"/>
+                                <DataGridTextColumn Header="Value" Binding="{Binding Value, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <Button Content="Apply staged edits" Padding="10,3" HorizontalAlignment="Left" Click="OnApplyClick"/>
+                    </StackPanel>
+                </TabItem>
+
                 <TabItem Header="Misc Stats">
                     <DataGrid ItemsSource="{Binding MiscStats}" AutoGenerateColumns="False" IsReadOnly="True"
                               HeadersVisibility="Column" FontFamily="Consolas" Margin="2">

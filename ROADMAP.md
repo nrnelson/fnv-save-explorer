@@ -35,7 +35,8 @@ quicksave). The test theory auto-discovers them (and a local `samples/`) and ski
 **Never write to the originals** — all edit demos write to new files.
 
 CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setstat`, `formids`,
-`findplayer`, `special`, `setspecial`, `setlevel`, `diff`. Run with no args to list them.
+`findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `setlevel`, `diff`. Run
+with no args to list them.
 
 ---
 
@@ -44,13 +45,13 @@ CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setst
 - **`src/FnvSaveExplorer.Core`** (`net10.0`, UI-agnostic)
   - `FalloutSave.cs` — parser, retention writer, all decoders + same-length editors.
   - `ByteReader.cs` — little-endian cursor; throws `SaveFormatException` with the failing offset.
-  - `FileLocationTable.cs`, `GlobalData.cs`, `MiscStats.cs`, `PlayerSpecial.cs`, `SaveScreenshot.cs`.
+  - `FileLocationTable.cs`, `GlobalData.cs`, `MiscStats.cs`, `PlayerSpecial.cs`, `PlayerSkills.cs`, `SaveScreenshot.cs`.
 - **`src/FnvSaveExplorer.App`** (`net10.0-windows`, WPF MVVM) — `MainViewModel.cs`, `MainWindow.xaml`
   (+ code-behind for file dialogs). Tabs: Plugins, File Location Table, Edit (name/level/save#/SPECIAL),
   Misc Stats, Body. Left panel: screenshot + character summary.
 - **`src/FnvSaveExplorer.Cli`** — `Program.cs` (top-level statements; all commands + diagnostics).
-- **`tests/FnvSaveExplorer.Tests`** — xUnit; 70 tests. Synthetic-save unit tests + theories over
-  every real `.fos` found (round-trip identity, globals, Misc Stats, SPECIAL locate + edit).
+- **`tests/FnvSaveExplorer.Tests`** — xUnit; 112 tests. Synthetic-save unit tests + theories over
+  every real `.fos` found (round-trip identity, globals, Misc Stats, SPECIAL + skills locate + edit).
 
 ---
 
@@ -99,6 +100,26 @@ Variables (large), `4`=Created Objects, `6`=Weather, … (7–11 unlabeled).
   inside the player base record (fenced by `0x7C`). Located by name-adjacency within the change-forms
   region. Verified: every save sums to 40 (chargen budget), consistent per character. Editable.
 
+### 4e. Player skills — actor-value modification block (PlayerRef / ACHR change form)
+Skills are **not** stored inline like SPECIAL and **not** in the base record (that record is FaceGen
+data, byte-stable across same-character saves). They live in the volatile **PlayerRef (FormID `0x14`)
+change form** as an **actor-value modification list**:
+```
+[count*4 : u8][7C]   then count × ( [avIndex : u8][7C][value : float32 LE][7C] )   # 7 bytes/entry
+```
+AV-index → skill (verified by setting all 13 to distinct values via console `setav` and diffing):
+`0x20`=Barter, `0x22`=Energy Weapons, `0x23`=Explosives, `0x24`=Lockpick, `0x25`=Medicine,
+`0x26`=Melee Weapons, `0x27`=Repair, `0x28`=Science, `0x29`=Guns, `0x2A`=Sneak, `0x2B`=Speech,
+`0x2C`=Survival, `0x2D`=Unarmed (`0x21` = FO3 "Big Guns", unused in NV — the index run skips it).
+
+**Storage is sparse.** The engine computes a skill from base + SPECIAL + perks + tag skills and only
+writes an entry when it *deviates* — a fresh character stores none, a typical played save ~3. So the
+tool reads/edits exactly what's stored; it can't enumerate all 13 on an unmodified save, and adding a
+missing entry would be length-changing (unsupported). Editing a stored value is a safe same-length
+float splice. **Locator:** the lone `0x7C` also occurs inside float bytes, so single-entry blocks are
+indistinguishable from noise; we anchor on the length prefix and pick the validating block with the
+most recognised skills (≥2). Verified across all 16 saves.
+
 ---
 
 ## 5. Completed (with verification)
@@ -113,24 +134,27 @@ Variables (large), `4`=Created Objects, `6`=Weather, … (7–11 unlabeled).
 | Misc Stats decode + edit | ✅ (e.g. stat 1→999 = 2-byte diff) |
 | FormID array + iref resolution | ✅ locates player change forms in all 16 |
 | Player SPECIAL decode + edit | ✅ all 16 sum to 40; edit round-trips |
-| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL edit) | ✅ launches + builds |
+| Player skills decode + edit (ACHR actor-value block, §4e) | ✅ format + index map verified; same-length float edit round-trips; sparse (modified-only) |
+| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills edit) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte |
 | Tests | ✅ 70 xUnit, all green |
 
-**Editable today:** level, save number, name (same-length), Misc Stats, full SPECIAL — all safe
-same-length splices.
+**Editable today:** level, save number, name (same-length), Misc Stats, full SPECIAL, stored skill
+modifications (§4e) — all safe same-length splices.
 
 ---
 
 ## 6. Next steps (in priority order)
 
-1. **Skills** — not stored as plain inline values. The player base record after SPECIAL is the name
-   then ~50 small signed floats (**FaceGen** face-morph data); the PlayerRef record is world
-   position/rotation then a long run of **zeroed actor-value modifiers**. So skills live in an
-   actor-value structure that doesn't surface by inspection → use the **controlled-diff method**
-   (§7). Add a typed accessor + same-length editor once located.
+1. ~~**Skills**~~ — ✅ **DONE** (§4e). Located via the controlled-diff method: skills are floats in
+   the PlayerRef (`0x14`) actor-value modification block, not an inline structure. Decoder + index map
+   + same-length float editor shipped (Core `PlayerSkills`/`TrySetSkill`, CLI `skills`/`setskill`, GUI
+   Skills tab). Remaining nuance: storage is sparse (modified-only) and the absolute-vs-modifier
+   semantics of naturally-occurring small entries (vs console `setav`, which writes absolute) is not
+   yet pinned — a follow-up controlled diff (read a single skill book, +3) could confirm it.
 2. **Inventory** — in the PlayerRef (0x14) change form; items are form references (likely irefs) with
    counts/extra-data. Locate via controlled diff (drop/pick up one item) + cross-reference FormID array.
+   The actor-value block decode (§4e) and the new `playerdump` helper are useful anchors for this.
 3. **Caps / karma / XP** — single values; controlled-diff to locate, then same-length edit.
 4. **General change-form record header** — the per-record `[refID][changeFlags][type][version]
    [length...]` layout to *walk* all ~4134 records (enables a full change-form browser). Needs careful
@@ -155,7 +179,8 @@ same-length splices.
    real-save test.
 
 Diagnostics already available for RE: `probe` (FLT + what offsets point to), `hex <off> <len>`,
-`findplayer`, `formids`, `globals`, `special`, `diff`.
+`findplayer`, `playerdump` (player change-form anchors + hex; `diff` also reports `playerBase±0x..` /
+`playerRef±0x..` / `special±0x..` for change-form runs), `formids`, `globals`, `special`, `skills`, `diff`.
 
 ---
 

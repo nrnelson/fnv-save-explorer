@@ -36,6 +36,20 @@ public sealed class SpecialAttr : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 }
 
+public sealed class SkillRow : INotifyPropertyChanged
+{
+    public required string Name { get; init; }
+
+    private float _value;
+    public float Value
+    {
+        get => _value;
+        set { if (_value != value) { _value = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Value))); } }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+}
+
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private FalloutSave? _save;
@@ -44,6 +58,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<string> Plugins { get; } = [];
     public ObservableCollection<FltRow> FileLocationTable { get; } = [];
     public ObservableCollection<SpecialAttr> Special { get; } = [];
+    public ObservableCollection<SkillRow> Skills { get; } = [];
     public ObservableCollection<MiscStatRow> MiscStats { get; } = [];
 
     private static readonly string[] SpecialNames =
@@ -85,6 +100,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private string _bodyInfo = "";
     public string BodyInfo { get => _bodyInfo; private set => Set(ref _bodyInfo, value); }
+
+    private string _skillsInfo = "";
+    public string SkillsInfo { get => _skillsInfo; private set => Set(ref _skillsInfo, value); }
 
     // ---- Edit fields (two-way bound) --------------------------------------
     private string _editName = "";
@@ -132,6 +150,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (save.Special is { } sp)
                 for (var i = 0; i < SpecialNames.Length; i++)
                     Special.Add(new SpecialAttr { Name = SpecialNames[i], Value = sp.Values[i] });
+
+            Skills.Clear();
+            if (save.Skills is { } sk)
+            {
+                foreach (var s in sk.Skills.OrderBy(s => s.Name))
+                    Skills.Add(new SkillRow { Name = s.Name, Value = s.Value });
+                SkillsInfo = "Stored skill modifications (actor-value entries). Only skills the game has " +
+                             "modified from their computed base are stored, so this may be a subset; values " +
+                             "edit in place (same-length).";
+            }
+            else
+            {
+                SkillsInfo = "This save stores no editable skill modifications. The engine computes skills " +
+                             "from base + SPECIAL + perks and only writes deviations (e.g. from a console " +
+                             "setav, an implant, or certain effects), of which this save has fewer than two.";
+            }
 
             MiscStats.Clear();
             if (save.MiscStats is { } ms)
@@ -190,6 +224,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         if (Special.Count == 7 && !_save.TrySetSpecial(Special.Select(a => a.Value).ToArray()))
             messages.Add("could not apply SPECIAL");
+
+        foreach (var skill in Skills)
+            if (!_save.TrySetSkill(skill.Name, skill.Value))
+                messages.Add($"could not apply skill {skill.Name}");
 
         Status = messages.Count == 0
             ? "Edits staged. Use \"Save As…\" to write a new .fos."

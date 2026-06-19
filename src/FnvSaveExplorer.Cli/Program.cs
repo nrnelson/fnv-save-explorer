@@ -17,8 +17,11 @@ if (args.Length < 2)
           fnvsave stats <save.fos>            Show decoded Misc Stats counters
           fnvsave formids <save.fos> [n]      Show the FormID array (iref -> FormID)
           fnvsave findplayer <save.fos>       Locate the player change forms via the FormID array
+          fnvsave playerdump <save.fos>       Dump player change-form anchors + hex (R&D for skills)
           fnvsave special <save.fos>          Show the player's SPECIAL attributes
           fnvsave setspecial <in.fos> <out.fos> S P E C I A L   Edit SPECIAL (writes a new file)
+          fnvsave skills <save.fos>           Show stored skill modifications (actor-value entries)
+          fnvsave setskill <in.fos> <out.fos> <skill> <value>  Edit a stored skill (writes a new file)
           fnvsave diff <a.fos> <b.fos>        Byte-diff two saves (best on controlled same-size pairs)
         """);
     return 1;
@@ -67,6 +70,9 @@ try
         case "findplayer":
             FindPlayer(FalloutSave.Load(path));
             break;
+        case "playerdump":
+            PlayerDump(FalloutSave.Load(path));
+            break;
         case "special":
             Special(FalloutSave.Load(path));
             break;
@@ -75,6 +81,11 @@ try
             break;
         case "setspecial":
             return SetSpecial(path, args[2], args[3..10]);
+        case "skills":
+            Skills(FalloutSave.Load(path));
+            break;
+        case "setskill":
+            return SetSkill(path, args[2], args[3], float.Parse(args[4]));
         default:
             Console.Error.WriteLine($"Unknown command: {command}");
             return 1;
@@ -177,6 +188,27 @@ static void Diff(string pathA, string pathB)
         return "formID array/footer";
     }
 
+    // Stable anchors (from A) so a change-forms hit reads as e.g. "playerBase+0x3C" — reusable across saves.
+    var baseStart = save.PlayerBaseRecordStart;
+    var specialOff = save.Special?.Offset;
+    var refHits = save.PlayerAnchors().FirstOrDefault(x => x.Label == "playerRef").RecordStarts ?? [];
+    string Anchors(int off)
+    {
+        // Only meaningful inside the change-forms region where the player records live.
+        if (off < save.Flt.ChangeFormsOffset || off >= save.Flt.GlobalData3Offset)
+            return "";
+        var parts = new List<string>();
+        void Add(string label, int anchor)
+        {
+            var d = off - anchor;
+            parts.Add(d >= 0 ? $"{label}+0x{d:X}" : $"{label}-0x{-d:X}");
+        }
+        if (baseStart is { } b) Add("playerBase", b);
+        if (specialOff is { } sp) Add("special", sp);
+        if (refHits.Count > 0) Add("playerRef", refHits.MinBy(h => Math.Abs(h - off)));
+        return parts.Count > 0 ? "  {" + string.Join(" ", parts) + "}" : "";
+    }
+
     Console.WriteLine($"A: {a.Length:N0} bytes   B: {b.Length:N0} bytes" +
                       (a.Length != b.Length ? $"   (sizes differ by {Math.Abs(a.Length - b.Length):N0} — diff is only meaningful up to the first size-changing region)" : "   (same size — clean diff)"));
 
@@ -194,7 +226,7 @@ static void Diff(string pathA, string pathB)
     {
         var sa = string.Join(' ', a.Skip(r.Start).Take(Math.Min(r.Len, 10)).Select(x => x.ToString("X2")));
         var sb = string.Join(' ', b.Skip(r.Start).Take(Math.Min(r.Len, 10)).Select(x => x.ToString("X2")));
-        Console.WriteLine($"  @0x{r.Start:X} ({r.Len,4} B) [{Region(r.Start)}]  A: {sa}  B: {sb}");
+        Console.WriteLine($"  @0x{r.Start:X} ({r.Len,4} B) [{Region(r.Start)}]  A: {sa}  B: {sb}{Anchors(r.Start)}");
     }
     if (runs.Count > 80)
         Console.WriteLine("  ... (truncated)");
@@ -231,6 +263,44 @@ static int SetSpecial(string inPath, string outPath, string[] values)
     return ok ? 0 : 4;
 }
 
+static void Skills(FalloutSave s)
+{
+    var skills = s.Skills;
+    if (skills is null)
+    {
+        Console.WriteLine("No skill modifications stored (the engine computes skills from base+SPECIAL+perks;");
+        Console.WriteLine("only deviations are written, and this save stores fewer than two).");
+        return;
+    }
+    Console.WriteLine($"Stored skill modifications @ 0x{skills.Offset:X}  ({skills.Modifications.Count} actor-value entries):");
+    foreach (var sk in skills.Skills.OrderBy(x => x.Name))
+        Console.WriteLine($"  {sk.Name,-15} = {sk.Value,7:0.##}   (edit offset 0x{sk.ValueOffset:X})");
+    var nonSkill = skills.Modifications.Count - skills.Skills.Count;
+    if (nonSkill > 0)
+        Console.WriteLine($"  (+{nonSkill} non-skill actor-value entries in the same block)");
+}
+
+static int SetSkill(string inPath, string outPath, string skill, float value)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+    var old = save.Skills?.Skills.FirstOrDefault(x => x.Index == PlayerSkills.IndexForSkill(skill))?.Value;
+    if (!save.TrySetSkill(skill, value))
+    {
+        Console.WriteLine($"FAIL: '{skill}' is not a known skill, or it has no stored entry to edit in this save.");
+        return 4;
+    }
+    save.Save(outPath, backup: false);
+
+    var after = File.ReadAllBytes(outPath);
+    var reloaded = FalloutSave.Parse(after);
+    var now = reloaded.Skills?.Skills.FirstOrDefault(x => x.Index == PlayerSkills.IndexForSkill(skill))?.Value;
+    Console.WriteLine($"{skill}: {old} -> {now};  size {before.Length:N0} -> {after.Length:N0}");
+    var ok = now == value && before.Length == after.Length;
+    Console.WriteLine(ok ? "OK: skill edit applied, size unchanged, re-parses." : "FAIL: did not verify.");
+    return ok ? 0 : 4;
+}
+
 static void FindPlayer(FalloutSave s)
 {
     foreach (var (formId, label) in new (uint, string)[] { (0x07u, "Player base (TESNPC_)"), (0x14u, "PlayerRef (ACHR)") })
@@ -244,6 +314,34 @@ static void FindPlayer(FalloutSave s)
         var hits = s.FindRefIdInChangeForms(iref);
         var where = hits.Count > 0 ? string.Join(", ", hits.Select(h => $"0x{h:X}")) : "(no change form)";
         Console.WriteLine($"{label}: FormID 0x{formId:X8} = iref {iref}; change form @ {where}");
+    }
+}
+
+static void PlayerDump(FalloutSave s)
+{
+    Console.WriteLine($"changeForms @ 0x{s.Flt.ChangeFormsOffset:X} .. 0x{s.Flt.GlobalData3Offset:X}");
+    if (s.Special is { } sp)
+        Console.WriteLine($"SPECIAL block        @ 0x{sp.Offset:X}   ({sp})");
+    if (s.PlayerBaseRecordStart is { } baseStart)
+    {
+        var rel = s.Special is { } sp2 ? $"  (SPECIAL = playerBase+0x{sp2.Offset - baseStart:X})" : "";
+        Console.WriteLine($"player base record    @ 0x{baseStart:X}{rel}");
+    }
+    foreach (var a in s.PlayerAnchors())
+    {
+        var starts = a.RecordStarts.Count == 0
+            ? "(none)"
+            : string.Join(", ", a.RecordStarts.Take(16).Select(h => $"0x{h:X}")) +
+              (a.RecordStarts.Count > 16 ? $" … (+{a.RecordStarts.Count - 16} more)" : "");
+        Console.WriteLine($"  {a.Label,-10} FormID 0x{a.FormId:X8} = iref {a.Iref}; refID hits [{a.RecordStarts.Count}]: {starts}");
+    }
+
+    var anchor = s.PlayerBaseRecordStart ?? s.Special?.Offset;
+    if (anchor is { } at)
+    {
+        var from = Math.Max(0, at - 16);
+        Console.WriteLine($"\nhex around player base record (0x{at:X}):");
+        Hex(s, (uint)from, 320);
     }
 }
 

@@ -304,6 +304,50 @@ public sealed class FalloutSave
         return hits;
     }
 
+    /// <summary>A located player change form and where its 3-byte big-endian refID appears in the
+    /// change-forms region (candidate record starts — a raw byte scan, so it may include false positives).</summary>
+    public readonly record struct PlayerAnchor(string Label, uint FormId, int Iref, IReadOnlyList<int> RecordStarts);
+
+    /// <summary>
+    /// Locates the player's change forms — the base actor (TESNPC_, FormID 0x07) and the PlayerRef
+    /// (ACHR, FormID 0x14) — by resolving each FormID to its iref and scanning for its 3-byte refID.
+    /// Useful as stable anchors when reporting controlled-diff hits (e.g. "playerBase+0x3C").
+    /// </summary>
+    public IReadOnlyList<PlayerAnchor> PlayerAnchors()
+    {
+        var anchors = new List<PlayerAnchor>(2);
+        foreach (var (formId, label) in new (uint FormId, string Label)[] { (0x07u, "playerBase"), (0x14u, "playerRef") })
+        {
+            var iref = FindIref(formId);
+            if (iref >= 0)
+                anchors.Add(new PlayerAnchor(label, formId, iref, FindRefIdInChangeForms(iref)));
+        }
+        return anchors;
+    }
+
+    /// <summary>
+    /// The player base (TESNPC_) change-form record start, disambiguated from any false-positive
+    /// refID hits as the candidate immediately preceding the validated (name-anchored) SPECIAL block.
+    /// Null if SPECIAL or the player base iref wasn't found. This is the stable anchor the skills
+    /// locator and diff-relative reporting build on.
+    /// </summary>
+    public int? PlayerBaseRecordStart
+    {
+        get
+        {
+            if (Special is not { } sp)
+                return null;
+            var iref = FindIref(0x07);
+            if (iref < 0)
+                return null;
+            var best = -1;
+            foreach (var hit in FindRefIdInChangeForms(iref))
+                if (hit <= sp.Offset && hit > best)
+                    best = hit;
+            return best >= 0 ? best : null;
+        }
+    }
+
     // ---- Player SPECIAL ---------------------------------------------------
     private PlayerSpecial? _special;
     private bool _specialLocated;
@@ -386,6 +430,102 @@ public sealed class FalloutSave
         return true;
     }
 
+    // ---- Player skills (actor-value modification block in the ACHR change form) ----------
+    private PlayerSkills? _skills;
+    private bool _skillsLocated;
+
+    /// <summary>
+    /// The player's stored skill modifications, or null if fewer than two recognised skills are
+    /// stored (the engine only persists deviations from a skill's computed base — see <see cref="PlayerSkills"/>).
+    /// </summary>
+    public PlayerSkills? Skills
+    {
+        get
+        {
+            if (!_skillsLocated)
+            {
+                _skillsLocated = true;
+                _skills = LocateSkills();
+            }
+            return _skills;
+        }
+    }
+
+    /// <summary>
+    /// Locates the actor-value modification block within the change-forms region. Entries are
+    /// <c>[avIndex:u8][7C][f32][7C]</c> (7 bytes), preceded by a length prefix <c>[count*4:u8][7C]</c>.
+    /// Because the lone <c>0x7C</c> delimiter also occurs inside binary data, single-entry blocks are
+    /// indistinguishable from noise; we anchor on the length prefix and choose the validating block
+    /// that contains the most recognised <i>skills</i>, requiring at least two to accept it.
+    /// </summary>
+    private PlayerSkills? LocateSkills()
+    {
+        var start = Math.Max(3, (int)Flt.ChangeFormsOffset);
+        var end = Math.Min((int)Flt.GlobalData3Offset, _raw.Length) - 7;
+        var bestSkillCount = 0;
+        PlayerSkills? best = null;
+
+        for (var s = start; s <= end; s++)
+        {
+            // Length prefix immediately before the first entry: [7C][len][7C], len = entryCount * 4.
+            if (_raw[s - 1] != Delimiter || _raw[s - 3] != Delimiter)
+                continue;
+            int len = _raw[s - 2];
+            if (len == 0 || len % 4 != 0)
+                continue;
+            var count = len / 4;
+            if (count > 63)
+                continue;
+
+            var entries = new List<ActorValueMod>(count);
+            var p = s;
+            var ok = true;
+            for (var k = 0; k < count; k++)
+            {
+                if (p + 7 > _raw.Length || _raw[p + 1] != Delimiter || _raw[p + 6] != Delimiter || _raw[p] > 0x4F)
+                {
+                    ok = false;
+                    break;
+                }
+                var value = BinaryPrimitives.ReadSingleLittleEndian(_raw.AsSpan(p + 2, 4));
+                if (float.IsNaN(value) || value < -1000f || value > 1000f)
+                {
+                    ok = false;
+                    break;
+                }
+                entries.Add(new ActorValueMod(_raw[p], value, p + 2));
+                p += 7;
+            }
+            if (!ok)
+                continue;
+
+            var skillCount = entries.Count(e => PlayerSkills.SkillNames.ContainsKey(e.Index));
+            if (skillCount > bestSkillCount)
+            {
+                bestSkillCount = skillCount;
+                best = new PlayerSkills(s, entries);
+            }
+        }
+
+        return bestSkillCount >= 2 ? best : null;
+    }
+
+    /// <summary>
+    /// Stages a same-length edit to a stored skill's float value (safe — shifts nothing). Returns false
+    /// if skills weren't located or that skill has no stored entry (adding one would change the length).
+    /// </summary>
+    public bool TrySetSkill(string skillName, float value)
+    {
+        var index = PlayerSkills.IndexForSkill(skillName);
+        if (index is null || Skills is not { } skills)
+            return false;
+        var entry = skills.Skills.FirstOrDefault(s => s.Index == index);
+        if (entry is null)
+            return false;
+        StageSingle(entry.ValueOffset, value);
+        return true;
+    }
+
     // ---- Editing (same-length splices only) --------------------------------
     public void SetPlayerLevel(uint level) => StageUInt32(_playerLevelOffset, level);
 
@@ -411,6 +551,13 @@ public sealed class FalloutSave
     {
         var bytes = new byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
+        _edits[offset] = bytes;
+    }
+
+    private void StageSingle(int offset, float value)
+    {
+        var bytes = new byte[4];
+        BinaryPrimitives.WriteSingleLittleEndian(bytes, value);
         _edits[offset] = bytes;
     }
 
