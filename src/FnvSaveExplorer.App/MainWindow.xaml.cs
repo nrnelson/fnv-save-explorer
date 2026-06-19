@@ -39,6 +39,22 @@ public partial class MainWindow : Window
 
     private void OnApplyClick(object sender, RoutedEventArgs e) => _vm.ApplyEdits();
 
+    private void OnResolveNamesClick(object sender, RoutedEventArgs e) => _vm.ReresolveNames();
+
+    private void OnBrowseDataFolderClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "Select the Fallout: New Vegas Data folder (contains FalloutNV.esm)",
+            InitialDirectory = Directory.Exists(_vm.EditDataFolder) ? _vm.EditDataFolder : DefaultSaveDirectory,
+        };
+        if (dialog.ShowDialog(this) == true)
+        {
+            _vm.EditDataFolder = dialog.FolderName;
+            _vm.ReresolveNames();
+        }
+    }
+
     private void OnSaveAsClick(object sender, RoutedEventArgs e)
     {
         var suggested = _vm.SuggestedSavePath;

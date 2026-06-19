@@ -36,7 +36,7 @@ quicksave). The test theory auto-discovers them (and a local `samples/`) and ski
 
 CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setstat`, `formids`,
 `findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `inventory`, `setcount`,
-`setlevel`, `diff`, plus R&D helpers `walk`, `idiff`, `find`, `irefscan`. Run with no args to list them.
+`names`, `setlevel`, `diff`, plus R&D helpers `walk`, `idiff`, `find`, `irefscan`. Run with no args to list them.
 
 ---
 
@@ -46,6 +46,7 @@ CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setst
   - `FalloutSave.cs` — parser, retention writer, all decoders + same-length editors, change-form walker.
   - `ByteReader.cs` — little-endian cursor; throws `SaveFormatException` with the failing offset.
   - `FileLocationTable.cs`, `GlobalData.cs`, `MiscStats.cs`, `PlayerSpecial.cs`, `PlayerSkills.cs`, `PlayerInventory.cs`, `SaveScreenshot.cs`.
+  - `TesPlugin.cs`, `PluginDatabase.cs`, `GameDataLocator.cs` — FormID → display-name resolution from the game's ESM/ESP masters (§4h / §6.3).
 - **`src/FnvSaveExplorer.App`** (`net10.0-windows`, WPF MVVM) — `MainViewModel.cs`, `MainWindow.xaml`
   (+ code-behind for file dialogs). Tabs: Plugins, File Location Table, Edit (name/level/save#/SPECIAL),
   Misc Stats, Body. Left panel: screenshot + character summary.
@@ -152,6 +153,28 @@ run of entries, requiring iref ≠ 0 that resolves, both `0x7C` delimiters, and 
 bytes aren't the `0x7C` delimiter (which rejects misaligned reads of a stack's extra data). Validated
 across all real saves (sane stack/item totals; the drop-1 stack reads 9 then 8).
 
+### 4h. FormID → display name — reading the game's ESM/ESP masters
+Every FormID the tool surfaces (inventory above all) is resolved to a human name by a small custom
+**TES4 plugin reader** (`TesPlugin`) over the game masters. FNV stores the `FULL` (display) name
+**inline** per record (no Skyrim-style `.STRINGS`), so names read directly. FO3/FNV use **24-byte**
+record and group headers; a record's `DataSize` excludes its header, a group's `GroupSize` includes it.
+```
+record  [type:4][dataSize:u32][flags:u32][formID:u32][vc:8][data]
+field   [type:4][size:u16][data]               # EDID = editor id, FULL = display name (zstring)
+```
+- **GRUP-skipping:** only top-level groups whose label is an item record type (`WEAP ARMO ALCH AMMO
+  MISC BOOK NOTE KEYM IMOD` + NV `CCRD CHIP CMNY CDCK`) are decoded; the rest are seeked past, so the
+  245 MB `FalloutNV.esm` + 9 DLC/pack esms index in ~2 s.
+- **Compressed records** (flag `0x00040000`) are `[u32 decompSize][zlib]` → inflated.
+- **DLC renumbering:** each plugin numbers forms against *its own* master list, so `PluginDatabase`
+  remaps every plugin's local high byte onto the save's load order (master-name match; a form's own
+  high byte == the plugin's master count). Plugins are indexed in load order so overrides win.
+- The `Data` folder is auto-detected (`GameDataLocator`, with an override); absent → FormIDs stay hex.
+**Verified** on a real save: all 10 plugins parse, 3,985 named forms indexed, inventory shows Stimpak /
+Vault 21 Jumpsuit / Weapon Repair Kit / … Forms that resolve to placed references (ACHR/ACRE/REFR — not
+item templates, surfaced by the inventory decoder's known imprecision) or `0xFF…` runtime FormIDs show
+`?` / `(created)`.
+
 ---
 
 ## 5. Completed (with verification)
@@ -169,6 +192,7 @@ across all real saves (sane stack/item totals; the drop-1 stack reads 9 then 8).
 | Player skills decode + edit (ACHR actor-value block, §4e) | ✅ format + index map verified; same-length float edit round-trips; sparse (modified-only) |
 | Change-form record header / walker (§4f) | ✅ exact: walks to `ChangeFormCount` records, lands on `GlobalData3Offset` (both characters, fresh→4 h) |
 | Player inventory decode + edit (§4g) | ✅ located via PlayerRef iref+1; `[iref][7C][u32 count][7C]` entries; drop-1 diff confirms count 9→8; same-length count edit round-trips |
+| FormID → display name (§4h / §6.3) | ✅ custom TES4 reader over the ESM/ESP masters; 10/10 plugins of a real save parse, 3,985 named forms; DLC renumbering + compressed records handled; inventory CLI + GUI show names |
 | WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory edit) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion |
 | Tests | ✅ 160 xUnit, all green |
@@ -191,23 +215,17 @@ modifications (§4e), inventory stack counts (§4g) — all safe same-length spl
    same-length. Decoder + `TrySetItemCount` + CLI `inventory`/`setcount` + GUI Inventory tab shipped.
    Remaining nuance: per-stack **extra data** (condition / equip / mods) isn't decoded yet, and editing
    targets the first stack of a given FormID (duplicate-FormID stacks are ambiguous by FormID alone).
-3. **Item / form name resolution (FormID → display name)** — inventory (and every FormID we surface)
-   currently shows raw hex; the human names live in the game's **ESM/ESP master files**
-   (`<game>/Data/*.esm`), confirmed present locally (`C:\Games\Steam\steamapps\common\Fallout New
-   Vegas\Data`). FNV stores the `FULL` (display name) **inline** in each record — no Skyrim-style
-   `.STRINGS` files — so names are directly readable (verified: `FalloutNV.esm` contains "Stimpak",
-   "Vault 21", … as plain text). **Plan:** a `Core` plugin database that parses the TES4 plugin format
-   (records `[type:4][dataSize:u32][flags:u32][formID:u32][version…]` then subrecords
-   `[type:4][size:u16][data]`, grouped in `GRUP`s) and builds a `FormID → FULL/EDID` index for item
-   record types (`WEAP`/`ARMO`/`ALCH`/`AMMO`/`MISC`/`BOOK`/`NOTE`/`KEYM`/`IMOD`…). Resolve a stack by
-   mapping its FormID's high byte through the save's plugin list (already parsed as `Plugins`) to the
-   owning ESM, then look up the form. Wire into CLI `inventory` + the GUI Inventory tab (and retro-fit
-   onto any other FormID display). **Wrinkles:** (a) **DLC renumbering** — inside a DLC ESM its own forms
-   use high byte = index in *its own* master list, so swap the save's load-order byte for the plugin-local
-   master index (base-game `0x00` maps directly); (b) **compressed records** (flag `0x00040000`) are
-   zlib-deflated; (c) cache the index once — `FalloutNV.esm` is 245 MB, but `GRUP` sizes let us skip
-   non-item groups; (d) `0xFF…` FormIDs are runtime-created → no name (`(created)`). No off-the-shelf C#
-   lib covers FNV (Mutagen is Skyrim/FO4/Starfield), so it's a small custom TES4 reader.
+3. ~~**Item / form name resolution (FormID → display name)**~~ — ✅ **DONE** (§4h). Small custom TES4
+   reader (`TesPlugin`/`PluginDatabase`/`GameDataLocator`) over the ESM/ESP masters builds a
+   `FormID → FULL/EDID` index in the save's FormID space; wired into CLI `inventory`/`formids`/`names`
+   and the GUI Inventory tab. Auto-detects the `Data` folder (override supported); DLC renumbering,
+   zlib-compressed records, and `GRUP`-skipping over the 245 MB `FalloutNV.esm` are handled; `0xFF…`
+   runtime forms → `(created)`. Verified on a real save (10/10 plugins, 3,985 named forms; Stimpak /
+   Vault 21 Jumpsuit / … resolve). No off-the-shelf C# lib covers FNV (Mutagen is Skyrim/FO4/Starfield).
+   **Remaining nuance:** a few inventory stacks resolve to placed references (ACHR/ACRE/REFR), not item
+   templates, so they show `?` — these are spurious reads from the inventory decoder's per-stack
+   imprecision (§6.1 territory), not a name-resolution gap; the resolver could in future *reject* such
+   non-item FormIDs to tighten inventory decoding.
 4. **Caps / karma / XP** — single values; controlled-diff to locate, then same-length edit. (Caps may
    simply be an inventory stack — check the inventory list first.)
 5. ~~**General change-form record header**~~ — ✅ **DONE** (§4f). Walker (`EnumerateChangeForms`) reproduces

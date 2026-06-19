@@ -23,7 +23,9 @@ if (args.Length < 2)
           fnvsave setspecial <in.fos> <out.fos> S P E C I A L   Edit SPECIAL (writes a new file)
           fnvsave skills <save.fos>           Show stored skill modifications (actor-value entries)
           fnvsave setskill <in.fos> <out.fos> <skill> <value>  Edit a stored skill (writes a new file)
-          fnvsave inventory <save.fos>        Show the player's inventory (item FormID x count)
+          fnvsave inventory <save.fos> [dataDir]   Show the player's inventory (resolves item names from
+                                              the game masters; dataDir overrides Data-folder auto-detect)
+          fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
           fnvsave setcount <in.fos> <out.fos> <formId> <count>  Edit a stack count (writes a new file)
           fnvsave diff <a.fos> <b.fos> [body|cf]   Byte-diff two saves (best on controlled pairs); 'body'
                                               hides header/screenshot churn, 'cf' restricts to change forms
@@ -105,7 +107,10 @@ try
         case "setskill":
             return SetSkill(path, args[2], args[3], float.Parse(args[4]));
         case "inventory":
-            Inventory(FalloutSave.Load(path));
+            Inventory(FalloutSave.Load(path), args.Length > 2 ? args[2] : null);
+            break;
+        case "names":
+            Names(FalloutSave.Load(path), args.Length > 2 ? args[2] : null);
             break;
         case "setcount":
             return SetCount(path, args[2], ParseOffset(args[3]), uint.Parse(args[4]));
@@ -192,9 +197,13 @@ static void Stats(FalloutSave s)
 static void FormIds(FalloutSave s, int n)
 {
     var array = s.FormIdArray;
+    var db = PluginDatabase.ForSave(s);
     Console.WriteLine($"FormID array: {array.Count:N0} entries");
     for (var i = 0; i < Math.Min(n, array.Count); i++)
-        Console.WriteLine($"  iref [{i,5}] -> 0x{array[i]:X8}");
+    {
+        var name = db.Resolve(array[i]);
+        Console.WriteLine($"  iref [{i,5}] -> 0x{array[i]:X8}{(name is null ? "" : $"  {name}")}");
+    }
 }
 
 static void Diff(string pathA, string pathB, string? filter = null)
@@ -360,7 +369,7 @@ static int SetSkill(string inPath, string outPath, string skill, float value)
     return ok ? 0 : 4;
 }
 
-static void Inventory(FalloutSave s)
+static void Inventory(FalloutSave s, string? dataDir)
 {
     var inv = s.Inventory;
     if (inv is null)
@@ -368,9 +377,33 @@ static void Inventory(FalloutSave s)
         Console.WriteLine("Inventory not located (no change form parsed as a recognisable item list).");
         return;
     }
+    var db = PluginDatabase.ForSave(s, dataDir);
     Console.WriteLine($"Player inventory @ 0x{inv.Offset:X}  ({inv.Items.Count} stacks, {inv.TotalItems:N0} items):");
+    if (db.Count == 0)
+        Console.WriteLine("  (item names unavailable — game Data folder not found; pass it as the 2nd argument)");
     foreach (var item in inv.Items.OrderByDescending(i => i.Count))
-        Console.WriteLine($"  0x{item.FormId:X8} (mod {item.ModIndex:X2})  x{item.Count,-6}  iref {item.Iref,-6}  (edit offset 0x{item.CountValueOffset:X})");
+    {
+        var name = db.Resolve(item.FormId) ?? "?";
+        Console.WriteLine($"  {name,-28}  0x{item.FormId:X8} (mod {item.ModIndex:X2})  x{item.Count,-6}  iref {item.Iref,-6}  (edit offset 0x{item.CountValueOffset:X})");
+    }
+}
+
+static void Names(FalloutSave s, string? dataDir)
+{
+    var folder = GameDataLocator.FindDataFolder(dataDir);
+    if (folder is null)
+    {
+        Console.WriteLine("Game Data folder not found. Pass it explicitly, e.g.:");
+        Console.WriteLine("  fnvsave names <save.fos> \"C:\\...\\Fallout New Vegas\\Data\"");
+        Console.WriteLine($"Save load order ({s.Plugins.Count} plugins): {string.Join(", ", s.Plugins)}");
+        return;
+    }
+    var db = PluginDatabase.Build(s.Plugins, folder);
+    Console.WriteLine($"Data folder : {folder}");
+    Console.WriteLine($"Resolved {db.ResolvedPlugins.Count}/{s.Plugins.Count} plugins; {db.Count:N0} named forms indexed.");
+    var resolvedSet = db.ResolvedPlugins.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    foreach (var p in s.Plugins)
+        Console.WriteLine($"  {(resolvedSet.Contains(p) ? "[ok]" : "[--]")} {p}");
 }
 
 static int SetCount(string inPath, string outPath, uint formId, uint count)

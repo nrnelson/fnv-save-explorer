@@ -23,7 +23,8 @@ public sealed record InventoryItem(int Iref, uint FormId, uint Count, int CountV
 /// <para><b>Verified</b> by a controlled drop-1 diff: dropping one of a stacked item decremented exactly
 /// one entry's <c>count</c> (9 → 8) as a little-endian u32 — so editing a count is a safe same-length
 /// splice. Items are referenced by <i>iref</i> (an index into the FormID array); the tool surfaces the
-/// resolved FormID and its mod index, not a display name (names need the GECK/ESM masters, out of scope).</para>
+/// resolved FormID and its mod index, and display names are resolved separately from the game's ESM/ESP
+/// masters via <see cref="PluginDatabase"/>.</para>
 /// </summary>
 public sealed class PlayerInventory
 {

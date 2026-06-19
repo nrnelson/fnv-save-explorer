@@ -21,6 +21,7 @@ a CLI — and validated against real saves.
 | **Player skills** (actor-value block in the PlayerRef change form) | ✅ decoded **and safely editable** — format + 13-skill index map verified; storage is sparse (modified-only) |
 | **Change-form record header / walker** | ✅ decoded — walks to exactly `ChangeFormCount` records, lands on `GlobalData3Offset` (both characters, fresh→4 h) |
 | **Player inventory** (item stacks in the player's inventory change form) | ✅ decoded **and safely editable** — `[iref][7C][u32 count][7C]` entries; a controlled drop-1 diff confirms the count (9→8) |
+| **FormID → display name** (item names from the game's ESM/ESP masters) | ✅ custom TES4 reader resolves inventory/FormID names (Stimpak, Vault 21 Jumpsuit…); all 10 base+DLC plugins parse, DLC renumbering + compressed records handled |
 | **Change forms** (per-stack extra data, perks, per-actor state) | 🔬 walker + inventory + skills decoded; remaining per-record internals **next** |
 
 ## The `.fos` format (validated against real New Vegas saves)
@@ -107,8 +108,19 @@ decoding any per-record state.
 dedicated reference change form (iref = PlayerRef + 1). Its entries are
 `[itemIref:3 BE][7C][count:u32 LE][7C]` (plus per-stack extra data — condition/equip — not yet
 decoded). A controlled drop-1 diff confirmed the format: dropping one of a stacked item decremented
-exactly one `count` from 9 → 8, so counts are **safely editable** in place. Items show as FormID +
-mod index (names need the GECK/ESM masters).
+exactly one `count` from 9 → 8, so counts are **safely editable** in place. Items now show their
+**display name** (see below).
+
+**FormID → display name.** A small custom **TES4 plugin reader** (`Core/TesPlugin.cs`) reads the
+game's ESM/ESP masters and builds a `FormID → FULL/EDID` index, so inventory (and any FormID the tool
+surfaces) shows a real name — "Stimpak", "Vault 21 Jumpsuit", "Weapon Repair Kit" — instead of raw hex.
+FNV stores the `FULL` name **inline** in each record (no `.STRINGS` localization), so names are read
+directly. Each plugin's forms are remapped into the save's FormID space via its master list, which
+handles **DLC renumbering**; **compressed records** (zlib) and `GRUP`-skipping over the 245 MB
+`FalloutNV.esm` are handled too (all 10 base+DLC plugins of a real save parse in ~2 s). The game's
+`Data` folder is auto-detected (with an override); when it isn't found, FormIDs fall back to hex.
+Forms that resolve to placed references (ACHR/REFR — not item templates) or runtime-created `0xFF…`
+FormIDs show `?` / `(created)`.
 
 **Still next:** per-stack extra data, perks, and other per-record internals — reachable now that the
 walker enumerates records. This needs controlled in-game diffs (change one thing, save, byte-diff) —
@@ -124,9 +136,10 @@ even though the body isn't fully understood.
 
 ## Projects
 
-- `src/FnvSaveExplorer.Core` — UI-agnostic parser/writer (`FalloutSave`, `ByteReader`, `SaveScreenshot`).
-- `src/FnvSaveExplorer.App` — WPF GUI: screenshot, character panel, plugins, File Location Table, SPECIAL/skills/safe edits.
-- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`, `special`, `skills`, `setskill`, `inventory`, `setcount`, `walk`, `find`, `diff`/`idiff`, `playerdump`, … (run with no args to list all).
+- `src/FnvSaveExplorer.Core` — UI-agnostic parser/writer (`FalloutSave`, `ByteReader`, `SaveScreenshot`)
+  plus the FormID-name resolver (`TesPlugin`, `PluginDatabase`, `GameDataLocator`).
+- `src/FnvSaveExplorer.App` — WPF GUI: screenshot, character panel, plugins, File Location Table, SPECIAL/skills/safe edits, named inventory.
+- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`, `special`, `skills`, `setskill`, `inventory`, `setcount`, `names`, `walk`, `find`, `diff`/`idiff`, `playerdump`, … (run with no args to list all).
 - `tests/FnvSaveExplorer.Tests` — synthetic-save unit tests + a theory that round-trips every real `.fos` it finds.
 
 ## Usage
@@ -141,7 +154,8 @@ dotnet run --project src/FnvSaveExplorer.App
 dotnet run --project src/FnvSaveExplorer.Cli -- dump    "<save.fos>"   # metadata + plugins
 dotnet run --project src/FnvSaveExplorer.Cli -- special "<save.fos>"   # player SPECIAL
 dotnet run --project src/FnvSaveExplorer.Cli -- skills  "<save.fos>"   # stored skill modifications
-dotnet run --project src/FnvSaveExplorer.Cli -- inventory "<save.fos>" # player inventory (FormID x count)
+dotnet run --project src/FnvSaveExplorer.Cli -- inventory "<save.fos>" # player inventory (name + FormID x count)
+dotnet run --project src/FnvSaveExplorer.Cli -- names   "<save.fos>"   # FormID->name resolver status (masters)
 dotnet run --project src/FnvSaveExplorer.Cli -- stats   "<save.fos>"   # Misc Stats counters
 dotnet run --project src/FnvSaveExplorer.Cli -- globals "<save.fos>"   # global data records
 dotnet run --project src/FnvSaveExplorer.Cli -- check   "<save.fos>"   # round-trip safety
@@ -163,7 +177,8 @@ offset. The recipe to locate any value (a skill, caps, a perk):
 ## Next: decoding the body (R&D)
 
 The header, File Location Table, global-data tables, Misc Stats, the FormID array, the change-form
-record header/walker, SPECIAL, skills, and inventory item stacks are decoded. Remaining:
+record header/walker, SPECIAL, skills, inventory item stacks, and FormID→display-name resolution are
+decoded. Remaining:
 
 1. **Per-stack inventory extra data** — condition / equip state / weapon mods attached to each stack.
 2. **Caps / karma / XP** — caps may simply be an inventory stack; karma/XP via controlled diffs.

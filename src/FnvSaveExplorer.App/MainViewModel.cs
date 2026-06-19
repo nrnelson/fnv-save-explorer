@@ -57,6 +57,14 @@ public sealed class InventoryRow : INotifyPropertyChanged
     public uint OriginalCount { get; init; }
     public string Item => $"0x{FormId:X8} (mod {ModIndex:X2})";
 
+    private string _name = "";
+    /// <summary>Display name resolved from the game masters; empty until/unless a Data folder is found.</summary>
+    public string Name
+    {
+        get => _name;
+        set { if (_name != value) { _name = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Name))); } }
+    }
+
     private uint _count;
     public uint Count
     {
@@ -135,6 +143,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _editSaveNumber = "";
     public string EditSaveNumber { get => _editSaveNumber; set => Set(ref _editSaveNumber, value); }
 
+    private string _editDataFolder = "";
+    /// <summary>Optional override for the game Data folder used to resolve item names.</summary>
+    public string EditDataFolder { get => _editDataFolder; set => Set(ref _editDataFolder, value); }
+
     // ---- Operations --------------------------------------------------------
     public void Load(string path)
     {
@@ -191,17 +203,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Inventory.Clear();
             if (save.Inventory is { } inv)
             {
+                var db = PluginDatabase.ForSave(save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder);
+                if (db.DataFolder is not null && string.IsNullOrWhiteSpace(EditDataFolder))
+                    EditDataFolder = db.DataFolder;
                 foreach (var item in inv.Items.OrderByDescending(i => i.Count))
                     Inventory.Add(new InventoryRow
                     {
                         FormId = item.FormId,
                         ModIndex = item.ModIndex,
+                        Name = db.Resolve(item.FormId) ?? "",
                         Count = item.Count,
                         OriginalCount = item.Count,
                     });
-                InventoryInfo = $"Player inventory ({inv.Items.Count} stacks). Items show as FormID (and mod " +
-                                "index) — names need the GECK/ESM masters. Stack counts edit in place (same-length); " +
-                                "edit a Count and Apply, then Save As.";
+                InventoryInfo = DescribeInventory(inv.Items.Count, db);
             }
             else
             {
@@ -232,6 +246,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Status = $"Error: {ex.Message}";
         }
     }
+
+    /// <summary>
+    /// Re-resolves inventory item names using the current <see cref="EditDataFolder"/> override (or
+    /// auto-detection when it's blank), updating rows in place so staged count edits are preserved.
+    /// </summary>
+    public void ReresolveNames()
+    {
+        if (_save is null)
+            return;
+        var db = PluginDatabase.ForSave(_save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder);
+        if (db.DataFolder is not null)
+            EditDataFolder = db.DataFolder;
+        foreach (var row in Inventory)
+            row.Name = db.Resolve(row.FormId) ?? "";
+        InventoryInfo = DescribeInventory(Inventory.Count, db);
+    }
+
+    private static string DescribeInventory(int stacks, PluginDatabase db) =>
+        db.Count > 0
+            ? $"Player inventory ({stacks} stacks). Names resolved from the game masters in {db.DataFolder}. " +
+              "Stack counts edit in place (same-length); edit a Count and Apply, then Save As."
+            : $"Player inventory ({stacks} stacks). Item names need the game's Data folder (FalloutNV.esm) — " +
+              "not found automatically. Set the Data folder below and click Resolve names. Stack counts edit " +
+              "in place (same-length); edit a Count and Apply, then Save As.";
 
     /// <summary>Stages the edit-tab values onto the loaded save (same-length / fixed-width only).</summary>
     public void ApplyEdits()
