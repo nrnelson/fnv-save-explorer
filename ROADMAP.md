@@ -191,19 +191,36 @@ modifications (§4e), inventory stack counts (§4g) — all safe same-length spl
    same-length. Decoder + `TrySetItemCount` + CLI `inventory`/`setcount` + GUI Inventory tab shipped.
    Remaining nuance: per-stack **extra data** (condition / equip / mods) isn't decoded yet, and editing
    targets the first stack of a given FormID (duplicate-FormID stacks are ambiguous by FormID alone).
-3. **Caps / karma / XP** — single values; controlled-diff to locate, then same-length edit. (Caps may
+3. **Item / form name resolution (FormID → display name)** — inventory (and every FormID we surface)
+   currently shows raw hex; the human names live in the game's **ESM/ESP master files**
+   (`<game>/Data/*.esm`), confirmed present locally (`C:\Games\Steam\steamapps\common\Fallout New
+   Vegas\Data`). FNV stores the `FULL` (display name) **inline** in each record — no Skyrim-style
+   `.STRINGS` files — so names are directly readable (verified: `FalloutNV.esm` contains "Stimpak",
+   "Vault 21", … as plain text). **Plan:** a `Core` plugin database that parses the TES4 plugin format
+   (records `[type:4][dataSize:u32][flags:u32][formID:u32][version…]` then subrecords
+   `[type:4][size:u16][data]`, grouped in `GRUP`s) and builds a `FormID → FULL/EDID` index for item
+   record types (`WEAP`/`ARMO`/`ALCH`/`AMMO`/`MISC`/`BOOK`/`NOTE`/`KEYM`/`IMOD`…). Resolve a stack by
+   mapping its FormID's high byte through the save's plugin list (already parsed as `Plugins`) to the
+   owning ESM, then look up the form. Wire into CLI `inventory` + the GUI Inventory tab (and retro-fit
+   onto any other FormID display). **Wrinkles:** (a) **DLC renumbering** — inside a DLC ESM its own forms
+   use high byte = index in *its own* master list, so swap the save's load-order byte for the plugin-local
+   master index (base-game `0x00` maps directly); (b) **compressed records** (flag `0x00040000`) are
+   zlib-deflated; (c) cache the index once — `FalloutNV.esm` is 245 MB, but `GRUP` sizes let us skip
+   non-item groups; (d) `0xFF…` FormIDs are runtime-created → no name (`(created)`). No off-the-shelf C#
+   lib covers FNV (Mutagen is Skyrim/FO4/Starfield), so it's a small custom TES4 reader.
+4. **Caps / karma / XP** — single values; controlled-diff to locate, then same-length edit. (Caps may
    simply be an inventory stack — check the inventory list first.)
-4. ~~**General change-form record header**~~ — ✅ **DONE** (§4f). Walker (`EnumerateChangeForms`) reproduces
+5. ~~**General change-form record header**~~ — ✅ **DONE** (§4f). Walker (`EnumerateChangeForms`) reproduces
    all records exactly; CLI `walk` validates. Enables a future full change-form browser.
-5. **Length-changing edits** (arbitrary rename, add/remove plugins, add/remove items) — requires rewriting every
+6. **Length-changing edits** (arbitrary rename, add/remove plugins, add/remove items) — requires rewriting every
    absolute offset in the File Location Table (and any internal absolute offsets). Deferred.
-6. **Quick win (no new saves):** label the 43 Misc Stat indices by name (diff an early vs late save
+7. **Quick win (no new saves):** label the 43 Misc Stat indices by name (diff an early vs late save
    of the same character) so the GUI reads "Quests Completed: 4" instead of "[0]: 4".
-7. **GUI/UX polish:** screenshot export (PNG), a raw hex viewer tab, backup management.
+8. **GUI/UX polish:** screenshot export (PNG), a raw hex viewer tab, backup management.
 
 ---
 
-## 7. The controlled-diff methodology (how to crack §6.1–6.3)
+## 7. The controlled-diff methodology (how to crack §6.4 and the like)
 
 `diff` is surgical on **same-size** save pairs (a value change keeps the file the same size):
 1. In-game: **save A** → change exactly one thing (spend 1 skill point / read one skill book / drop
@@ -224,9 +241,14 @@ modes: `diff a b cf` annotates each differing run with the change form that cont
 ---
 
 ## 8. Reference sources
-- `Nexus-Mods/node-gamebryo-savegames` — C++ header parser (FO3/FNV/FO4/Skyrim).
+- `Nexus-Mods/node-gamebryo-savegames` — C++ parser (FO3/FNV/FO4/Skyrim). **Header-only**: stops at the
+  plugin list, does not decode the body — the change-form/inventory format here was reverse-engineered locally.
 - Vault-Tec Labs "FOS file format" (falloutmods wiki) — header + stats tables.
 - UESP "Oblivion / Skyrim Save File Format" — change-record / FormID-array model NV mirrors.
+- **Game ESM/ESP master files** (`<game>/Data/*.esm`) — the source for FormID → display name (§6.3). On
+  this machine: `C:\Games\Steam\steamapps\common\Fallout New Vegas\Data` (`FalloutNV.esm` + DLC esms).
+  Standard Bethesda TES4 plugin format; FNV stores `FULL` names **inline** (no `.STRINGS` localization
+  files), so names are readable directly. UESP "Mod File Format" (TES4/FO3) documents the record/GRUP/subrecord layout.
 - FNVEdit + GECK — resolve FormIDs/irefs while reverse-engineering.
 - Note: those wikis block automated fetchers on `/wiki/` URLs; Fandom's `api.php?action=parse` works.
 
