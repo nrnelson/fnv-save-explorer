@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(dotnet --version)",
-      "Bash(dotnet --list-sdks)"
+      "Bash(dotnet --list-sdks)",
+      "Bash(dotnet test *)"
     ]
   }
 }
