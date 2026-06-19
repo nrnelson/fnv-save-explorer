@@ -35,23 +35,23 @@ quicksave). The test theory auto-discovers them (and a local `samples/`) and ski
 **Never write to the originals** — all edit demos write to new files.
 
 CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setstat`, `formids`,
-`findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `setlevel`, `diff`. Run
-with no args to list them.
+`findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `inventory`, `setcount`,
+`setlevel`, `diff`, plus R&D helpers `walk`, `idiff`, `find`, `irefscan`. Run with no args to list them.
 
 ---
 
 ## 3. Architecture & key files
 
 - **`src/FnvSaveExplorer.Core`** (`net10.0`, UI-agnostic)
-  - `FalloutSave.cs` — parser, retention writer, all decoders + same-length editors.
+  - `FalloutSave.cs` — parser, retention writer, all decoders + same-length editors, change-form walker.
   - `ByteReader.cs` — little-endian cursor; throws `SaveFormatException` with the failing offset.
-  - `FileLocationTable.cs`, `GlobalData.cs`, `MiscStats.cs`, `PlayerSpecial.cs`, `PlayerSkills.cs`, `SaveScreenshot.cs`.
+  - `FileLocationTable.cs`, `GlobalData.cs`, `MiscStats.cs`, `PlayerSpecial.cs`, `PlayerSkills.cs`, `PlayerInventory.cs`, `SaveScreenshot.cs`.
 - **`src/FnvSaveExplorer.App`** (`net10.0-windows`, WPF MVVM) — `MainViewModel.cs`, `MainWindow.xaml`
   (+ code-behind for file dialogs). Tabs: Plugins, File Location Table, Edit (name/level/save#/SPECIAL),
   Misc Stats, Body. Left panel: screenshot + character summary.
 - **`src/FnvSaveExplorer.Cli`** — `Program.cs` (top-level statements; all commands + diagnostics).
-- **`tests/FnvSaveExplorer.Tests`** — xUnit; 112 tests. Synthetic-save unit tests + theories over
-  every real `.fos` found (round-trip identity, globals, Misc Stats, SPECIAL + skills locate + edit).
+- **`tests/FnvSaveExplorer.Tests`** — xUnit; 160 tests. Synthetic-save unit tests + theories over
+  every real `.fos` found (round-trip identity, globals, Misc Stats, SPECIAL + skills + inventory locate + edit).
 
 ---
 
@@ -120,6 +120,38 @@ float splice. **Locator:** the lone `0x7C` also occurs inside float bytes, so si
 indistinguishable from noise; we anchor on the length prefix and pick the validating block with the
 most recognised skills (≥2). Verified across all 16 saves.
 
+### 4f. Change-form record header — the walker (general; was next-step #4)
+Every change form is a fixed header then a variable payload:
+```
+[refID : 3 bytes BE]   index (iref) into the FormID array
+[changeFlags : u32 LE]
+[type : u8]            low 6 bits = form type; high 2 bits select the length width (0→u8, 1→u16, 2/3→u32)
+[version : u8]         0x1B on NV
+[length : u8|u16|u32]  payload size, width per the type byte's high bits
+[data : length bytes]
+```
+**Verified decisively:** walking from `ChangeFormsOffset` yields exactly `ChangeFormCount` records and
+lands *precisely* on `GlobalData3Offset` on every save tested (both characters, fresh→4 h). `Core`
+exposes `EnumerateChangeForms()` (each record's iref/FormID/flags/type/data span) and `PlayerRefChangeForm`;
+the CLI `walk` validates the count/landing and histograms form types. This is the foundation the
+inventory decode (and any future per-record browser) builds on.
+
+### 4g. Player inventory — item list in the player's inventory change form
+The player's carried items are **not** in the PlayerRef (`0x14`) ACHR record (that holds actor state —
+6 bytes fresh, 293 bytes mid-game, never growing with items). They live in a **dedicated reference
+change form** whose **iref = (PlayerRef iref) + 1** (type `0x41`). After the record's 3D/position
+preamble and a zeroed array, the items are a run of stacks:
+```
+[itemIref : 3 bytes BE][7C][count : u32 LE][7C]  ( extra-data: 7C-delimited condition/equip fields, not yet decoded )
+```
+**Verified** by a controlled drop-1 diff (Save 26→27): dropping one of a stacked item decremented
+exactly one stack's `count` from 9→8 as a little-endian u32 — so editing a count is a **safe
+same-length splice**. Items are referenced by iref; the tool surfaces the resolved FormID + mod index,
+not a display name (names need the GECK/ESM masters). **Decoder:** parse the record's longest contiguous
+run of entries, requiring iref ≠ 0 that resolves, both `0x7C` delimiters, and a sane count whose upper
+bytes aren't the `0x7C` delimiter (which rejects misaligned reads of a stack's extra data). Validated
+across all real saves (sane stack/item totals; the drop-1 stack reads 9 then 8).
+
 ---
 
 ## 5. Completed (with verification)
@@ -135,12 +167,14 @@ most recognised skills (≥2). Verified across all 16 saves.
 | FormID array + iref resolution | ✅ locates player change forms in all 16 |
 | Player SPECIAL decode + edit | ✅ all 16 sum to 40; edit round-trips |
 | Player skills decode + edit (ACHR actor-value block, §4e) | ✅ format + index map verified; same-length float edit round-trips; sparse (modified-only) |
-| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills edit) | ✅ launches + builds |
-| `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte |
-| Tests | ✅ 70 xUnit, all green |
+| Change-form record header / walker (§4f) | ✅ exact: walks to `ChangeFormCount` records, lands on `GlobalData3Offset` (both characters, fresh→4 h) |
+| Player inventory decode + edit (§4g) | ✅ located via PlayerRef iref+1; `[iref][7C][u32 count][7C]` entries; drop-1 diff confirms count 9→8; same-length count edit round-trips |
+| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory edit) | ✅ launches + builds |
+| `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion |
+| Tests | ✅ 160 xUnit, all green |
 
 **Editable today:** level, save number, name (same-length), Misc Stats, full SPECIAL, stored skill
-modifications (§4e) — all safe same-length splices.
+modifications (§4e), inventory stack counts (§4g) — all safe same-length splices.
 
 ---
 
@@ -152,15 +186,16 @@ modifications (§4e) — all safe same-length splices.
    Skills tab). Remaining nuance: storage is sparse (modified-only) and the absolute-vs-modifier
    semantics of naturally-occurring small entries (vs console `setav`, which writes absolute) is not
    yet pinned — a follow-up controlled diff (read a single skill book, +3) could confirm it.
-2. **Inventory** — in the PlayerRef (0x14) change form; items are form references (likely irefs) with
-   counts/extra-data. Locate via controlled diff (drop/pick up one item) + cross-reference FormID array.
-   The actor-value block decode (§4e) and the new `playerdump` helper are useful anchors for this.
-3. **Caps / karma / XP** — single values; controlled-diff to locate, then same-length edit.
-4. **General change-form record header** — the per-record `[refID][changeFlags][type][version]
-   [length...]` layout to *walk* all ~4134 records (enables a full change-form browser). Needs careful
-   work; the `0x7C` delimiters appear both structurally and inside binary data, so length-driven
-   walking (not delimiter-splitting) is required.
-5. **Length-changing edits** (arbitrary rename, add/remove plugins) — requires rewriting every
+2. ~~**Inventory**~~ — ✅ **DONE** (§4g). Cracked via a controlled drop-1 diff: items live in a dedicated
+   reference change form (iref = PlayerRef+1), entries are `[iref][7C][u32 count][7C]`, count edits are
+   same-length. Decoder + `TrySetItemCount` + CLI `inventory`/`setcount` + GUI Inventory tab shipped.
+   Remaining nuance: per-stack **extra data** (condition / equip / mods) isn't decoded yet, and editing
+   targets the first stack of a given FormID (duplicate-FormID stacks are ambiguous by FormID alone).
+3. **Caps / karma / XP** — single values; controlled-diff to locate, then same-length edit. (Caps may
+   simply be an inventory stack — check the inventory list first.)
+4. ~~**General change-form record header**~~ — ✅ **DONE** (§4f). Walker (`EnumerateChangeForms`) reproduces
+   all records exactly; CLI `walk` validates. Enables a future full change-form browser.
+5. **Length-changing edits** (arbitrary rename, add/remove plugins, add/remove items) — requires rewriting every
    absolute offset in the File Location Table (and any internal absolute offsets). Deferred.
 6. **Quick win (no new saves):** label the 43 Misc Stat indices by name (diff an early vs late save
    of the same character) so the GUI reads "Quests Completed: 4" instead of "[0]: 4".
@@ -180,7 +215,11 @@ modifications (§4e) — all safe same-length splices.
 
 Diagnostics already available for RE: `probe` (FLT + what offsets point to), `hex <off> <len>`,
 `findplayer`, `playerdump` (player change-form anchors + hex; `diff` also reports `playerBase±0x..` /
-`playerRef±0x..` / `special±0x..` for change-form runs), `formids`, `globals`, `special`, `skills`, `diff`.
+`playerRef±0x..` / `special±0x..` for change-form runs), `formids`, `globals`, `special`, `skills`,
+`inventory`, `walk` (walk every change form + form-type histogram), `find <hexbytes>` (locate a byte
+pattern + name the containing record), `irefscan <off> <len>` (resolve iref+count sites), and two `diff`
+modes: `diff a b cf` annotates each differing run with the change form that contains it, and
+`idiff a b` aligns records by FormID across an insertion (drop/pickup) to surface the exact data change.
 
 ---
 
@@ -194,7 +233,11 @@ Diagnostics already available for RE: `probe` (FLT + what offsets point to), `he
 ---
 
 ## 9. Known limitations / risks
-- Change-form **internals** (inventory/perks/skills) are not yet decoded — needs controlled diffs.
+- Change-form **internals**: skills (§4e) and inventory item stacks (§4g) are decoded; per-stack extra
+  data (condition/equip/mods), perks, and most other per-record state are not yet decoded — needs more
+  controlled diffs. The walker (§4f) makes these reachable record-by-record.
+- Inventory editing targets the **first** stack of a given FormID; duplicate-FormID stacks (same item,
+  different extra data) can't be disambiguated by FormID alone yet.
 - SPECIAL locator relies on the player-name field appearing in the player base record (held on all 16
   saves); a save lacking it would return null (handled gracefully).
 - Only **same-length** edits are supported by design (see §1). Length-changing edits are unsafe until

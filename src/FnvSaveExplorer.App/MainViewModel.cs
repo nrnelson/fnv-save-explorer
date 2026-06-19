@@ -50,6 +50,23 @@ public sealed class SkillRow : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 }
 
+public sealed class InventoryRow : INotifyPropertyChanged
+{
+    public uint FormId { get; init; }
+    public int ModIndex { get; init; }
+    public uint OriginalCount { get; init; }
+    public string Item => $"0x{FormId:X8} (mod {ModIndex:X2})";
+
+    private uint _count;
+    public uint Count
+    {
+        get => _count;
+        set { if (_count != value) { _count = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Count))); } }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+}
+
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private FalloutSave? _save;
@@ -59,6 +76,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<FltRow> FileLocationTable { get; } = [];
     public ObservableCollection<SpecialAttr> Special { get; } = [];
     public ObservableCollection<SkillRow> Skills { get; } = [];
+    public ObservableCollection<InventoryRow> Inventory { get; } = [];
     public ObservableCollection<MiscStatRow> MiscStats { get; } = [];
 
     private static readonly string[] SpecialNames =
@@ -103,6 +121,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private string _skillsInfo = "";
     public string SkillsInfo { get => _skillsInfo; private set => Set(ref _skillsInfo, value); }
+
+    private string _inventoryInfo = "";
+    public string InventoryInfo { get => _inventoryInfo; private set => Set(ref _inventoryInfo, value); }
 
     // ---- Edit fields (two-way bound) --------------------------------------
     private string _editName = "";
@@ -167,6 +188,26 @@ public sealed class MainViewModel : INotifyPropertyChanged
                              "setav, an implant, or certain effects), of which this save has fewer than two.";
             }
 
+            Inventory.Clear();
+            if (save.Inventory is { } inv)
+            {
+                foreach (var item in inv.Items.OrderByDescending(i => i.Count))
+                    Inventory.Add(new InventoryRow
+                    {
+                        FormId = item.FormId,
+                        ModIndex = item.ModIndex,
+                        Count = item.Count,
+                        OriginalCount = item.Count,
+                    });
+                InventoryInfo = $"Player inventory ({inv.Items.Count} stacks). Items show as FormID (and mod " +
+                                "index) — names need the GECK/ESM masters. Stack counts edit in place (same-length); " +
+                                "edit a Count and Apply, then Save As.";
+            }
+            else
+            {
+                InventoryInfo = "Inventory not located in this save (no change form parsed as a recognisable item list).";
+            }
+
             MiscStats.Clear();
             if (save.MiscStats is { } ms)
                 foreach (var stat in ms.Stats)
@@ -228,6 +269,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         foreach (var skill in Skills)
             if (!_save.TrySetSkill(skill.Name, skill.Value))
                 messages.Add($"could not apply skill {skill.Name}");
+
+        // Only stage stacks whose count actually changed (editing by FormID targets the first matching
+        // stack, so applying unchanged rows would be needless and could disturb duplicate-FormID stacks).
+        foreach (var row in Inventory)
+            if (row.Count != row.OriginalCount && !_save.TrySetItemCount(row.FormId, row.Count))
+                messages.Add($"could not apply count for 0x{row.FormId:X8}");
 
         Status = messages.Count == 0
             ? "Edits staged. Use \"Save As…\" to write a new .fos."

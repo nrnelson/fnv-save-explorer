@@ -19,7 +19,9 @@ a CLI — and validated against real saves.
 | **FormID array** + iref resolution | ✅ decoded; locates the **player change forms** in all 16 saves |
 | **Player SPECIAL** (S P E C I A L) | ✅ decoded **and safely editable** — verified on all 16 saves (each sums to 40) |
 | **Player skills** (actor-value block in the PlayerRef change form) | ✅ decoded **and safely editable** — format + 13-skill index map verified; storage is sparse (modified-only) |
-| **Change forms** (inventory, perks, per-actor state) | 🔬 region/count/player located; SPECIAL + skills decoded; full per-record decode **next** |
+| **Change-form record header / walker** | ✅ decoded — walks to exactly `ChangeFormCount` records, lands on `GlobalData3Offset` (both characters, fresh→4 h) |
+| **Player inventory** (item stacks in the player's inventory change form) | ✅ decoded **and safely editable** — `[iref][7C][u32 count][7C]` entries; a controlled drop-1 diff confirms the count (9→8) |
+| **Change forms** (per-stack extra data, perks, per-actor state) | 🔬 walker + inventory + skills decoded; remaining per-record internals **next** |
 
 ## The `.fos` format (validated against real New Vegas saves)
 
@@ -95,10 +97,22 @@ and **safely edits** exactly what's stored (it can't show all 13 on a save that 
 The block is located by anchoring on the length prefix and choosing the validating block with the
 most recognised skills.
 
-**Still next:** the general per-record header (changeFlags / type / variable length) to walk all
-~4134 forms and decode inventory and perks. This needs controlled in-game diffs (change one thing,
-save, byte-diff) — the tooling (`probe`, `hex`, `findplayer`, `playerdump`, and the player-relative
-`diff` annotations) is in place to support it.
+**Change-form walker.** Every change form is `[refID:3 BE][changeFlags:u32][type:u8][version:u8]
+[length][data]`, where the top two bits of `type` size the length field (u8/u16/u32). Walking from the
+change-forms offset reproduces **exactly** `ChangeFormCount` records and lands precisely on the next
+section — verified on every save, both characters, fresh through 4 hours. This is the foundation for
+decoding any per-record state.
+
+**Player inventory.** Items are **not** in the PlayerRef ACHR record (that's actor state) but in a
+dedicated reference change form (iref = PlayerRef + 1). Its entries are
+`[itemIref:3 BE][7C][count:u32 LE][7C]` (plus per-stack extra data — condition/equip — not yet
+decoded). A controlled drop-1 diff confirmed the format: dropping one of a stacked item decremented
+exactly one `count` from 9 → 8, so counts are **safely editable** in place. Items show as FormID +
+mod index (names need the GECK/ESM masters).
+
+**Still next:** per-stack extra data, perks, and other per-record internals — reachable now that the
+walker enumerates records. This needs controlled in-game diffs (change one thing, save, byte-diff) —
+the tooling (`walk`, `find`, `diff … cf`, `idiff`, `probe`, `hex`, `playerdump`) is in place to support it.
 
 ## Architecture — the "retention model"
 
@@ -112,7 +126,7 @@ even though the body isn't fully understood.
 
 - `src/FnvSaveExplorer.Core` — UI-agnostic parser/writer (`FalloutSave`, `ByteReader`, `SaveScreenshot`).
 - `src/FnvSaveExplorer.App` — WPF GUI: screenshot, character panel, plugins, File Location Table, SPECIAL/skills/safe edits.
-- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`, `special`, `skills`, `setskill`, `playerdump`, `diff`, … (run with no args to list all).
+- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`, `special`, `skills`, `setskill`, `inventory`, `setcount`, `walk`, `find`, `diff`/`idiff`, `playerdump`, … (run with no args to list all).
 - `tests/FnvSaveExplorer.Tests` — synthetic-save unit tests + a theory that round-trips every real `.fos` it finds.
 
 ## Usage
@@ -127,6 +141,7 @@ dotnet run --project src/FnvSaveExplorer.App
 dotnet run --project src/FnvSaveExplorer.Cli -- dump    "<save.fos>"   # metadata + plugins
 dotnet run --project src/FnvSaveExplorer.Cli -- special "<save.fos>"   # player SPECIAL
 dotnet run --project src/FnvSaveExplorer.Cli -- skills  "<save.fos>"   # stored skill modifications
+dotnet run --project src/FnvSaveExplorer.Cli -- inventory "<save.fos>" # player inventory (FormID x count)
 dotnet run --project src/FnvSaveExplorer.Cli -- stats   "<save.fos>"   # Misc Stats counters
 dotnet run --project src/FnvSaveExplorer.Cli -- globals "<save.fos>"   # global data records
 dotnet run --project src/FnvSaveExplorer.Cli -- check   "<save.fos>"   # round-trip safety
@@ -140,17 +155,20 @@ exactly what changed — e.g. editing Strength 5→6 shows a single differing by
 offset. The recipe to locate any value (a skill, caps, a perk):
 
 1. In-game, save (A). Change *one thing* (spend a skill point, read a skill book). Save again (B).
-2. `fnvsave diff A B` → the differing run(s) point straight at the bytes for that value.
-3. Add a typed accessor + same-length editor for it (as done for SPECIAL / Misc Stats).
+2. `fnvsave diff A B cf` annotates each differing run with the change form that contains it; if the
+   change inserted/removed a record (e.g. dropping an item), `fnvsave idiff A B` aligns records by
+   FormID across the insertion and reports the one record whose **data** changed.
+3. Add a typed accessor + same-length editor for it (as done for SPECIAL / Misc Stats / inventory).
 
 ## Next: decoding the body (R&D)
 
-1. Label the File Location Table fields (offsets vs counts) by cross-comparing several saves.
-2. Walk the globals tables; the FO3/FNV "stats" counters and SPECIAL likely live in a global-data
-   record (cf. Skyrim's "Misc Stats" global), reachable via the table.
-3. Decode change forms (type, flags, FormID/iref, `dataSize`) — enumerable via per-record size
-   even before contents are understood. Use a diff lab (one controlled in-game change → byte-diff)
-   and cross-reference FormIDs in FNVEdit.
+The header, File Location Table, global-data tables, Misc Stats, the FormID array, the change-form
+record header/walker, SPECIAL, skills, and inventory item stacks are decoded. Remaining:
+
+1. **Per-stack inventory extra data** — condition / equip state / weapon mods attached to each stack.
+2. **Caps / karma / XP** — caps may simply be an inventory stack; karma/XP via controlled diffs.
+3. **Other per-record state** (perks, quest/script data) — now enumerable record-by-record via the
+   walker; crack each with a controlled in-game change → `idiff`, cross-referencing FormIDs in FNVEdit.
 
 ### References
 

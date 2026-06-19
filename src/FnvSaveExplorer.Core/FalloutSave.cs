@@ -186,6 +186,9 @@ public sealed class FalloutSave
     /// <summary>Reads a little-endian uint32 at an absolute file offset.</summary>
     public uint ReadUInt32At(int offset) => BinaryPrimitives.ReadUInt32LittleEndian(_raw.AsSpan(offset, 4));
 
+    /// <summary>Reads a little-endian uint16 at an absolute file offset.</summary>
+    public ushort ReadUInt16At(int offset) => BinaryPrimitives.ReadUInt16LittleEndian(_raw.AsSpan(offset, 2));
+
     /// <summary>True when <paramref name="value"/> is a plausible in-file offset into the body.</summary>
     public bool IsBodyOffset(uint value) => value >= (uint)BodyOffset && value < (uint)_raw.Length;
 
@@ -302,6 +305,74 @@ public sealed class FalloutSave
             if (_raw[i] == b0 && _raw[i + 1] == b1 && _raw[i + 2] == b2)
                 hits.Add(i);
         return hits;
+    }
+
+    // ---- Change-form record walker ----------------------------------------
+    // Each change form is [refID:3 BE][changeFlags:u32 LE][type:u8][version:u8][length][data]. The top
+    // two bits of the type byte select the length field's width (0 -> u8, 1 -> u16, 2/3 -> u32); the low
+    // six bits are the form type. Verified by walking from ChangeFormsOffset and landing exactly on
+    // GlobalData3Offset after ChangeFormCount records.
+
+    /// <summary>One change-form record header plus the absolute span of its data payload.</summary>
+    public readonly record struct ChangeFormHeader(
+        int Offset, int Iref, uint FormId, uint ChangeFlags, byte TypeByte, byte Version, int DataOffset, int DataLength)
+    {
+        /// <summary>The form type (low six bits of the type byte).</summary>
+        public int FormType => TypeByte & 0x3F;
+
+        /// <summary>Absolute offset of the next record (end of this record's data).</summary>
+        public int Next => DataOffset + DataLength;
+    }
+
+    /// <summary>
+    /// Walks the change-forms region record-by-record using the per-record header. Stops at
+    /// GlobalData3Offset or on the first malformed/over-running record (so a wrong assumption can't read
+    /// out of bounds). The number of records yielded should equal <see cref="FileLocationTable.ChangeFormCount"/>.
+    /// </summary>
+    public IEnumerable<ChangeFormHeader> EnumerateChangeForms()
+    {
+        var at = (int)Flt.ChangeFormsOffset;
+        var end = Math.Min((int)Flt.GlobalData3Offset, _raw.Length);
+        while (at + 9 <= end)
+        {
+            var iref = (_raw[at] << 16) | (_raw[at + 1] << 8) | _raw[at + 2];
+            var flags = ReadUInt32At(at + 3);
+            var type = _raw[at + 7];
+            var version = _raw[at + 8];
+            var lenWidth = (type >> 6) switch { 0 => 1, 1 => 2, _ => 4 };
+            if (at + 9 + lenWidth > end)
+                yield break;
+            int length = lenWidth switch
+            {
+                1 => _raw[at + 9],
+                2 => ReadUInt16At(at + 9),
+                _ => (int)ReadUInt32At(at + 9),
+            };
+            var dataOffset = at + 9 + lenWidth;
+            if (length < 0 || dataOffset + length > end)
+                yield break;
+            yield return new ChangeFormHeader(at, iref, ResolveIref(iref), flags, type, version, dataOffset, length);
+            at = dataOffset + length;
+        }
+    }
+
+    /// <summary>
+    /// The PlayerRef (ACHR, FormID 0x14) change-form record — the one that holds the player's
+    /// inventory and actor-value modifications — located by walking the change forms for its iref.
+    /// Null if the iref isn't in the FormID array or the walk doesn't reach it.
+    /// </summary>
+    public ChangeFormHeader? PlayerRefChangeForm
+    {
+        get
+        {
+            var iref = FindIref(0x14);
+            if (iref < 0)
+                return null;
+            foreach (var cf in EnumerateChangeForms())
+                if (cf.Iref == iref)
+                    return cf;
+            return null;
+        }
     }
 
     /// <summary>A located player change form and where its 3-byte big-endian refID appears in the
@@ -523,6 +594,126 @@ public sealed class FalloutSave
         if (entry is null)
             return false;
         StageSingle(entry.ValueOffset, value);
+        return true;
+    }
+
+    // ---- Player inventory (item list in the player's inventory change form) ----------
+    private PlayerInventory? _inventory;
+    private bool _inventoryLocated;
+
+    /// <summary>
+    /// The player's inventory (carried item stacks), or null if it can't be located. Decoded from a
+    /// dedicated reference change form, not the PlayerRef record — see <see cref="PlayerInventory"/>.
+    /// </summary>
+    public PlayerInventory? Inventory
+    {
+        get
+        {
+            if (!_inventoryLocated)
+            {
+                _inventoryLocated = true;
+                _inventory = LocateInventory();
+            }
+            return _inventory;
+        }
+    }
+
+    private const int InventoryMinEntries = 3;  // enough to distinguish a real item list from coincidence
+    private const int InventoryExtraWindow = 96; // max extra-data bytes between consecutive stacks before a run is considered ended
+
+    /// <summary>
+    /// Locates the player's inventory change form and decodes its item stacks. The player's inventory
+    /// lives in the reference change form whose iref is (PlayerRef iref) + 1 — verified across saves; the
+    /// player ACHR (0x14) record itself holds actor state, not items. Returns null if that record can't be
+    /// found or doesn't parse as a recognisable item list (handled gracefully, like SPECIAL/skills).
+    /// </summary>
+    private PlayerInventory? LocateInventory()
+    {
+        var playerRefIref = FindIref(0x14);
+        if (playerRefIref < 0)
+            return null;
+        foreach (var cf in EnumerateChangeForms())
+        {
+            if (cf.Iref != playerRefIref + 1)
+                continue;
+            var inv = ParseInventoryRun(cf);
+            return inv.Items.Count >= InventoryMinEntries ? inv : null;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Parses the longest contiguous run of inventory stacks out of a record's data. Entries are scanned
+    /// across the whole record and grouped into runs; a gap larger than <see cref="InventoryExtraWindow"/>
+    /// bytes (more than a stack's variable extra data — condition / equip state) breaks the run. The
+    /// longest run is the item list, which excludes the record's leading 3D/position preamble and any
+    /// unrelated binary data later in the record.
+    /// </summary>
+    private PlayerInventory ParseInventoryRun(ChangeFormHeader cf)
+    {
+        var end = cf.DataOffset + cf.DataLength;
+        var best = new List<InventoryItem>();
+        var current = new List<InventoryItem>();
+        var lastEnd = int.MinValue;
+        for (var p = cf.DataOffset; p + 9 <= end;)
+        {
+            if (!TryReadInventoryEntry(p, out var iref, out var formId, out var count))
+            {
+                p++;
+                continue;
+            }
+            if (current.Count > 0 && p - lastEnd > InventoryExtraWindow)
+            {
+                if (current.Count > best.Count) best = current;
+                current = [];
+            }
+            current.Add(new InventoryItem(iref, formId, count, p + 4));
+            lastEnd = p + 9;
+            p += 9; // skip the fixed entry; its extra data is re-scanned but won't validate as an entry
+        }
+        if (current.Count > best.Count) best = current;
+        return new PlayerInventory(cf.DataOffset, best);
+    }
+
+    /// <summary>
+    /// Tries to read an inventory entry <c>[iref:3 BE][7C][count:u32 LE][7C]</c> at <paramref name="p"/>.
+    /// Requires both delimiters, an iref that resolves to a real FormID, a non-zero iref (rejects the
+    /// record's zeroed preamble, whose null iref also "resolves"), and a sane stack count.
+    /// </summary>
+    private bool TryReadInventoryEntry(int p, out int iref, out uint formId, out uint count)
+    {
+        iref = 0; formId = 0; count = 0;
+        if (p + 9 > _raw.Length)
+            return false;
+        if (_raw[p + 3] != Delimiter || _raw[p + 8] != Delimiter)
+            return false;
+        iref = (_raw[p] << 16) | (_raw[p + 1] << 8) | _raw[p + 2];
+        if (iref == 0)
+            return false;
+        formId = ResolveIref(iref);
+        if (formId == 0)
+            return false;
+        count = ReadUInt32At(p + 4);
+        // A real stack count is a small integer: its upper three bytes are never the 0x7C delimiter.
+        // Rejecting a delimiter there discards misaligned reads of a stack's extra data (where a 0x7C
+        // field separator falls inside the misread count), which is the main source of false entries.
+        if (((count >> 8) & 0xFF) == Delimiter || ((count >> 16) & 0xFF) == Delimiter || ((count >> 24) & 0xFF) == Delimiter)
+            return false;
+        return count <= 1_000_000;
+    }
+
+    /// <summary>
+    /// Stages a same-length edit to a stored item's stack count (safe — the count is a fixed-width u32).
+    /// Returns false if the inventory wasn't located or no stack of <paramref name="formId"/> is present.
+    /// </summary>
+    public bool TrySetItemCount(uint formId, uint count)
+    {
+        if (Inventory is not { } inv)
+            return false;
+        var item = inv.Items.FirstOrDefault(i => i.FormId == formId);
+        if (item is null)
+            return false;
+        StageUInt32(item.CountValueOffset, count);
         return true;
     }
 

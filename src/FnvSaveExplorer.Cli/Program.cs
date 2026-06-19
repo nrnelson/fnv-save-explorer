@@ -18,11 +18,17 @@ if (args.Length < 2)
           fnvsave formids <save.fos> [n]      Show the FormID array (iref -> FormID)
           fnvsave findplayer <save.fos>       Locate the player change forms via the FormID array
           fnvsave playerdump <save.fos>       Dump player change-form anchors + hex (R&D for skills)
+          fnvsave irefscan <save.fos> <off> <len>   Scan a byte range for valid iref+count pairs (R&D for inventory)
           fnvsave special <save.fos>          Show the player's SPECIAL attributes
           fnvsave setspecial <in.fos> <out.fos> S P E C I A L   Edit SPECIAL (writes a new file)
           fnvsave skills <save.fos>           Show stored skill modifications (actor-value entries)
           fnvsave setskill <in.fos> <out.fos> <skill> <value>  Edit a stored skill (writes a new file)
-          fnvsave diff <a.fos> <b.fos>        Byte-diff two saves (best on controlled same-size pairs)
+          fnvsave inventory <save.fos>        Show the player's inventory (item FormID x count)
+          fnvsave setcount <in.fos> <out.fos> <formId> <count>  Edit a stack count (writes a new file)
+          fnvsave diff <a.fos> <b.fos> [body|cf]   Byte-diff two saves (best on controlled pairs); 'body'
+                                              hides header/screenshot churn, 'cf' restricts to change forms
+                                              and names the containing record for each differing run
+          fnvsave walk <save.fos>             Walk all change-form records (validates the header format; R&D)
         """);
     return 1;
 }
@@ -73,11 +79,23 @@ try
         case "playerdump":
             PlayerDump(FalloutSave.Load(path));
             break;
+        case "irefscan":
+            IrefScan(FalloutSave.Load(path), ParseOffset(args[2]), int.Parse(args[3]));
+            break;
+        case "walk":
+            Walk(FalloutSave.Load(path));
+            break;
+        case "idiff":
+            IDiff(path, args[2]);
+            break;
+        case "find":
+            Find(FalloutSave.Load(path), args[2]);
+            break;
         case "special":
             Special(FalloutSave.Load(path));
             break;
         case "diff":
-            Diff(path, args[2]);
+            Diff(path, args[2], args.Length > 3 ? args[3] : null);
             break;
         case "setspecial":
             return SetSpecial(path, args[2], args[3..10]);
@@ -86,6 +104,11 @@ try
             break;
         case "setskill":
             return SetSkill(path, args[2], args[3], float.Parse(args[4]));
+        case "inventory":
+            Inventory(FalloutSave.Load(path));
+            break;
+        case "setcount":
+            return SetCount(path, args[2], ParseOffset(args[3]), uint.Parse(args[4]));
         default:
             Console.Error.WriteLine($"Unknown command: {command}");
             return 1;
@@ -174,11 +197,44 @@ static void FormIds(FalloutSave s, int n)
         Console.WriteLine($"  iref [{i,5}] -> 0x{array[i]:X8}");
 }
 
-static void Diff(string pathA, string pathB)
+static void Diff(string pathA, string pathB, string? filter = null)
 {
     var a = File.ReadAllBytes(pathA);
     var b = File.ReadAllBytes(pathB);
     var save = FalloutSave.Parse(a);
+
+    // Optional region filter: "body" hides the header/screenshot churn; "cf"/"changeforms" restricts to
+    // the change-forms region and annotates each run with the change form that contains it (the key
+    // signal for a controlled drop-item diff — it names the form whose inventory/count bytes moved).
+    var onlyChangeForms = filter is "cf" or "changeforms";
+    var minOffset = filter is "body" ? save.BodyOffset
+                  : onlyChangeForms ? (int)save.Flt.ChangeFormsOffset
+                  : 0;
+    var maxOffset = onlyChangeForms ? (int)save.Flt.GlobalData3Offset : int.MaxValue;
+
+    // Walk the change forms once so a body offset can be mapped to its containing record.
+    var records = onlyChangeForms ? save.EnumerateChangeForms().ToArray() : [];
+    string ContainingForm(int off)
+    {
+        if (records.Length == 0)
+            return "";
+        var lo = 0; var hi = records.Length - 1; var found = -1;
+        while (lo <= hi)
+        {
+            var mid = (lo + hi) / 2;
+            if (records[mid].Offset <= off) { found = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        if (found < 0)
+            return "";
+        var cf = records[found];
+        if (off >= cf.Next)
+            return "";
+        var d = off - cf.DataOffset;
+        var rel = d >= 0 ? $"data+0x{d:X}" : $"data-0x{-d:X}"; // negative = inside the record header
+        return $"  [cf @0x{cf.Offset:X} iref {cf.Iref} -> 0x{cf.FormId:X8} type 0x{cf.TypeByte:X2} len {cf.DataLength}; {rel}]";
+    }
+
     string Region(int off)
     {
         if (off < save.BodyOffset) return "header/screenshot/plugins";
@@ -221,14 +277,17 @@ static void Diff(string pathA, string pathB)
         else i++;
     }
 
-    Console.WriteLine($"{runs.Count:N0} differing run(s):");
-    foreach (var r in runs.Take(80))
+    var shown = runs.Where(r => r.Start >= minOffset && r.Start < maxOffset).ToList();
+    var label = onlyChangeForms ? " in change forms" : filter is "body" ? " in body" : "";
+    Console.WriteLine($"{runs.Count:N0} differing run(s); {shown.Count:N0} shown{label}:");
+    foreach (var r in shown.Take(120))
     {
         var sa = string.Join(' ', a.Skip(r.Start).Take(Math.Min(r.Len, 10)).Select(x => x.ToString("X2")));
         var sb = string.Join(' ', b.Skip(r.Start).Take(Math.Min(r.Len, 10)).Select(x => x.ToString("X2")));
-        Console.WriteLine($"  @0x{r.Start:X} ({r.Len,4} B) [{Region(r.Start)}]  A: {sa}  B: {sb}{Anchors(r.Start)}");
+        var extra = onlyChangeForms ? ContainingForm(r.Start) : Anchors(r.Start);
+        Console.WriteLine($"  @0x{r.Start:X} ({r.Len,4} B) [{Region(r.Start)}]  A: {sa}  B: {sb}{extra}");
     }
-    if (runs.Count > 80)
+    if (shown.Count > 120)
         Console.WriteLine("  ... (truncated)");
 }
 
@@ -301,6 +360,40 @@ static int SetSkill(string inPath, string outPath, string skill, float value)
     return ok ? 0 : 4;
 }
 
+static void Inventory(FalloutSave s)
+{
+    var inv = s.Inventory;
+    if (inv is null)
+    {
+        Console.WriteLine("Inventory not located (no change form parsed as a recognisable item list).");
+        return;
+    }
+    Console.WriteLine($"Player inventory @ 0x{inv.Offset:X}  ({inv.Items.Count} stacks, {inv.TotalItems:N0} items):");
+    foreach (var item in inv.Items.OrderByDescending(i => i.Count))
+        Console.WriteLine($"  0x{item.FormId:X8} (mod {item.ModIndex:X2})  x{item.Count,-6}  iref {item.Iref,-6}  (edit offset 0x{item.CountValueOffset:X})");
+}
+
+static int SetCount(string inPath, string outPath, uint formId, uint count)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+    var old = save.Inventory?.Items.FirstOrDefault(i => i.FormId == formId)?.Count;
+    if (!save.TrySetItemCount(formId, count))
+    {
+        Console.WriteLine($"FAIL: 0x{formId:X8} has no stack in this inventory (or inventory not located).");
+        return 4;
+    }
+    save.Save(outPath, backup: false);
+
+    var after = File.ReadAllBytes(outPath);
+    var reloaded = FalloutSave.Parse(after);
+    var now = reloaded.Inventory?.Items.FirstOrDefault(i => i.FormId == formId)?.Count;
+    Console.WriteLine($"0x{formId:X8}: {old} -> {now};  size {before.Length:N0} -> {after.Length:N0}");
+    var ok = now == count && before.Length == after.Length;
+    Console.WriteLine(ok ? "OK: count edit applied, size unchanged, re-parses." : "FAIL: did not verify.");
+    return ok ? 0 : 4;
+}
+
 static void FindPlayer(FalloutSave s)
 {
     foreach (var (formId, label) in new (uint, string)[] { (0x07u, "Player base (TESNPC_)"), (0x14u, "PlayerRef (ACHR)") })
@@ -343,6 +436,184 @@ static void PlayerDump(FalloutSave s)
         Console.WriteLine($"\nhex around player base record (0x{at:X}):");
         Hex(s, (uint)from, 320);
     }
+}
+
+static void Find(FalloutSave s, string hex)
+{
+    // R&D: find a byte pattern anywhere in the file; for change-forms hits, name the containing record
+    // and show its data-relative offset (so an inventory item reference reads as "cf … data+0xNN").
+    var pattern = Convert.FromHexString(hex.Replace(" ", "").Replace("0x", ""));
+    var all = s.ReadAt(0, s.FileLength);
+    var records = s.EnumerateChangeForms().ToArray();
+    string Containing(int off)
+    {
+        var lo = 0; var hi = records.Length - 1; var found = -1;
+        while (lo <= hi) { var m = (lo + hi) / 2; if (records[m].Offset <= off) { found = m; lo = m + 1; } else hi = m - 1; }
+        if (found < 0 || off >= records[found].Next) return "";
+        var cf = records[found];
+        var d = off - cf.DataOffset;
+        return $"  [cf iref {cf.Iref} -> 0x{cf.FormId:X8} type 0x{cf.TypeByte:X2} len {cf.DataLength}; data{(d >= 0 ? "+" : "-")}0x{Math.Abs(d):X}]";
+    }
+    var hits = 0;
+    for (var i = 0; i + pattern.Length <= all.Length; i++)
+    {
+        var match = true;
+        for (var k = 0; k < pattern.Length; k++)
+            if (all[i + k] != pattern[k]) { match = false; break; }
+        if (!match) continue;
+        var ctx = string.Join(' ', all.Skip(Math.Max(0, i - 2)).Take(pattern.Length + 8).Select(x => x.ToString("X2")));
+        Console.WriteLine($"  @0x{i:X}  …{ctx}…{Containing(i)}");
+        if (++hits >= 100) { Console.WriteLine("  … (truncated at 100)"); break; }
+    }
+    Console.WriteLine($"{hits} hit(s) for [{Convert.ToHexString(pattern)}]");
+}
+
+static void IDiff(string pathA, string pathB)
+{
+    // Insertion-aware change-form diff. Adding/removing an item shifts absolute offsets (a new change
+    // form + a new FormID-array entry), so a positional byte diff is useless. Instead we walk both saves'
+    // change forms and align them by record identity: records match until an insertion, after which B is
+    // offset by one. This surfaces (1) the inserted/removed record and (2) the record whose DATA changed
+    // in place — for a dropped stacked item that second record holds the inventory count.
+    var sa = FalloutSave.Parse(File.ReadAllBytes(pathA));
+    var sb = FalloutSave.Parse(File.ReadAllBytes(pathB));
+    var recsA = sa.EnumerateChangeForms().ToArray();
+    var recsB = sb.EnumerateChangeForms().ToArray();
+    Console.WriteLine($"A: {recsA.Length:N0} change forms   B: {recsB.Length:N0} change forms   (delta {recsB.Length - recsA.Length:+#;-#;0})");
+
+    // Align by resolved FormID, not raw iref: creating a form (e.g. a dropped item) renumbers the FormID
+    // array, so the same form can have a different iref in each save. FormIDs are stable, giving a clean
+    // alignment that survives the renumbering. Allow single insertions/deletions on either side.
+    int ia = 0, ib = 0, dataChanges = 0;
+    while (ia < recsA.Length && ib < recsB.Length)
+    {
+        var ca = recsA[ia];
+        var cb = recsB[ib];
+        if (ca.FormId == cb.FormId && ca.TypeByte == cb.TypeByte)
+        {
+            // Same record in both — compare its data payload byte-for-byte.
+            if (ca.DataLength == cb.DataLength)
+            {
+                var changes = new List<int>();
+                for (var k = 0; k < ca.DataLength; k++)
+                    if (sa.ReadAt(ca.DataOffset + k, 1)[0] != sb.ReadAt(cb.DataOffset + k, 1)[0])
+                        changes.Add(k);
+                if (changes.Count > 0)
+                {
+                    dataChanges++;
+                    Console.WriteLine($"\n~ DATA CHANGED  iref {ca.Iref} -> 0x{ca.FormId:X8}  type 0x{ca.TypeByte:X2}  len {ca.DataLength}  ({changes.Count} byte(s))");
+                    PrintDataChanges(sa, ca.DataOffset, sb, cb.DataOffset, changes);
+                }
+            }
+            else
+            {
+                Console.WriteLine($"\n~ LEN CHANGED   iref {ca.Iref} -> 0x{ca.FormId:X8}  type 0x{ca.TypeByte:X2}  {ca.DataLength} -> {cb.DataLength}");
+            }
+            ia++; ib++;
+        }
+        else if (ib + 1 < recsB.Length && recsB[ib + 1].FormId == ca.FormId)
+        {
+            Console.WriteLine($"\n+ INSERTED in B  iref {cb.Iref} -> 0x{cb.FormId:X8}  type 0x{cb.TypeByte:X2}  flags 0x{cb.ChangeFlags:X8}  len {cb.DataLength}  @0x{cb.Offset:X}");
+            DumpRecord(sb, cb);
+            ib++;
+        }
+        else if (ia + 1 < recsA.Length && recsA[ia + 1].FormId == cb.FormId)
+        {
+            Console.WriteLine($"\n- REMOVED from B iref {ca.Iref} -> 0x{ca.FormId:X8}  type 0x{ca.TypeByte:X2}  len {ca.DataLength}  @0x{ca.Offset:X}");
+            ia++;
+        }
+        else { ia++; ib++; } // unaligned single mismatch — skip both
+    }
+    Console.WriteLine($"\n{dataChanges} record(s) changed data in place.");
+}
+
+static void PrintDataChanges(FalloutSave sa, int aData, FalloutSave sb, int bData, List<int> changes)
+{
+    // Coalesce adjacent changed offsets into runs and print A/B bytes side by side with the data-relative offset.
+    var i = 0;
+    while (i < changes.Count)
+    {
+        var startK = changes[i];
+        var j = i;
+        while (j + 1 < changes.Count && changes[j + 1] == changes[j] + 1) j++;
+        var runLen = changes[j] - startK + 1;
+        var av = string.Join(' ', sa.ReadAt(aData + startK, Math.Min(runLen, 12)).Select(x => x.ToString("X2")));
+        var bv = string.Join(' ', sb.ReadAt(bData + startK, Math.Min(runLen, 12)).Select(x => x.ToString("X2")));
+        Console.WriteLine($"    data+0x{startK:X} ({runLen} B)  A: {av}  B: {bv}");
+        i = j + 1;
+    }
+}
+
+static void DumpRecord(FalloutSave s, FalloutSave.ChangeFormHeader cf)
+{
+    var bytes = s.ReadAt(cf.DataOffset, Math.Min(cf.DataLength, 64));
+    var hex = string.Join(' ', bytes.Select(x => x.ToString("X2")));
+    Console.WriteLine($"    data: {hex}{(cf.DataLength > 64 ? " …" : "")}");
+}
+
+static void Walk(FalloutSave s)
+{
+    // Validate the change-form header format: a correct walk yields exactly ChangeFormCount records
+    // and lands precisely on GlobalData3Offset.
+    var flt = s.Flt;
+    var typeCounts = new SortedDictionary<int, int>();
+    var count = 0;
+    var last = (int)flt.ChangeFormsOffset;
+    FnvSaveExplorer.Core.FalloutSave.ChangeFormHeader? player = null;
+    foreach (var cf in s.EnumerateChangeForms())
+    {
+        count++;
+        typeCounts[cf.FormType] = typeCounts.GetValueOrDefault(cf.FormType) + 1;
+        last = cf.Next;
+        if (cf.FormId == 0x14)
+            player = cf;
+    }
+    Console.WriteLine($"changeForms 0x{flt.ChangeFormsOffset:X}..0x{flt.GlobalData3Offset:X};  walked {count:N0} records (FLT says {flt.ChangeFormCount:N0})");
+    Console.WriteLine($"ended at 0x{last:X}  ->  {(last == (int)flt.GlobalData3Offset && count == flt.ChangeFormCount ? "EXACT MATCH (header format confirmed)" : "MISMATCH")}");
+    Console.WriteLine("form-type histogram (type -> records):");
+    foreach (var (t, n) in typeCounts)
+        Console.WriteLine($"   0x{t:X2} : {n,6:N0}");
+    if (player is { } p)
+        Console.WriteLine($"\nPlayerRef (0x14): record @0x{p.Offset:X}  type 0x{p.TypeByte:X2} (form 0x{p.FormType:X2})  flags 0x{p.ChangeFlags:X8}  data @0x{p.DataOffset:X} len {p.DataLength}");
+
+    Console.WriteLine("\nall change forms for player FormIDs 0x07 / 0x14:");
+    foreach (var cf in s.EnumerateChangeForms())
+        if (cf.FormId is 0x07 or 0x14)
+            Console.WriteLine($"   0x{cf.FormId:X8}: @0x{cf.Offset:X} type 0x{cf.TypeByte:X2} flags 0x{cf.ChangeFlags:X8} len {cf.DataLength}");
+
+    Console.WriteLine("\n12 largest change forms:");
+    foreach (var cf in s.EnumerateChangeForms().OrderByDescending(c => c.DataLength).Take(12))
+        Console.WriteLine($"   @0x{cf.Offset:X}  iref {cf.Iref,6} -> 0x{cf.FormId:X8}  type 0x{cf.TypeByte:X2}  flags 0x{cf.ChangeFlags:X8}  len {cf.DataLength,7:N0}");
+}
+
+static void IrefScan(FalloutSave s, uint offset, int len)
+{
+    // R&D: walk a byte range and report every position where the next 3 bytes form a valid iref
+    // (big-endian, index into the FormID array resolving to a non-zero FormID whose mod-index high
+    // byte is a loaded plugin) plus the following 4 bytes read as a candidate stack count. Inventory
+    // shows up as a dense run of such pairs; random data rarely resolves under both filters.
+    var bytes = s.ReadAt((int)offset, len);
+    var pluginCount = s.Plugins.Count;
+    var hits = 0;
+    for (var i = 0; i + 7 <= bytes.Length; i++)
+    {
+        var iref = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
+        var formId = s.ResolveIref(iref);
+        if (formId == 0)
+            continue;
+        var modIndex = formId >> 24;
+        if (modIndex >= (uint)pluginCount && modIndex != 0xFF) // 0xFF = save-created (in-game) form
+            continue;
+        var count = BitConverter.ToUInt32(bytes, i + 3);
+        var countHex = string.Join(' ', bytes.Skip(i + 3).Take(4).Select(x => x.ToString("X2")));
+        Console.WriteLine($"  @0x{offset + i:X}  iref {iref,6} -> 0x{formId:X8} (mod {modIndex:X2})  next4: {countHex} (={count})");
+        if (++hits >= 200)
+        {
+            Console.WriteLine("  ... (truncated at 200)");
+            break;
+        }
+    }
+    Console.WriteLine($"{hits} candidate iref site(s) in 0x{offset:X}..0x{offset + len:X}");
 }
 
 static uint ParseOffset(string s) =>
