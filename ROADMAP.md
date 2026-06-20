@@ -283,11 +283,16 @@ incl. real-save tests pinning the start at `dataOffset + MOVE + 1 + 1160` and `0
 `ReferenceChangeForm` (`InventorySearchStart`, `GatedArrayBlockLength`, `ReadVsval`, `TryInventoryItemsStart`,
 `TryReadStackExtra`) + CLI `refdump` (prints the `changeFlags` bits, the MOVE + fixed-array spans, and the sized
 ExtraDataList → first item + vsval count).
-**Remaining (the last ◑):** the ExtraDataList grammar is verified on the 30 vanilla saves; a record with a
-different entry composition (a heavily-modded/VNV ExtraDataList, or new BSExtraData types) isn't sized and
-**falls back** safely to the §4g forward scan + distinct-ref acceptance. Extending the typed-entry catalog (the
-`0x5E`/`0x18`/`0x74`/`0x60` set, and the per-stack `TryReadStackExtra` types) to those cases would make the start
-deterministic there too; `refdump` (which prints the sized ExtraDataList + vsval count) is the microscope for it.
+**Remaining (the last ◑) — quantified against a 479-save Viva New Vegas playthrough.** The deterministic grammar
+is vanilla-specific: of 479 modded VNV saves, only **15 size** (the vanilla-character saves copied into that
+profile); the entire modded **Courier** run (**464 saves**, fresh→60 h) **falls back** to the §4g forward scan —
+and **decodes correctly**, byte-identical to the pre-ExtraDataList decoder on a spot-checked spread (incl. a 40 h,
+183-stack/30,869-item save). So the fallback is well-exercised and safe — *determinism*, not correctness, is what's
+lost. The modded ExtraDataList differs structurally: the entries are **reordered** (the fixed `0x18` block leads,
+before the `0x5E` ref-list) and it carries **new types** (`0x75` = a 2-ref entry, `0x1D`) plus a long
+`[ref][count][00]` sub-list before the items — so a faithful decoder needs a general typed-entry walk (variable
+order + a fuller type catalog), not the fixed vanilla sequence. Extending it (with `refdump`, which prints the
+sized ExtraDataList + vsval count) would make the start deterministic on modded saves too.
 
 ---
 
@@ -446,12 +451,13 @@ modes: `diff a b cf` annotates each differing run with the change form that cont
 - The inventory walk is **deterministic** per-stack (exact extra-data lengths; no window — §4i) **and the list
   start is now structural too**: MOVE skip + fixed 1160-byte havok array + sized ExtraDataList → the `vsval`
   stack count → first item, with no scan/acceptance on all 30 saves. The residual caveats (§10):
-- The ExtraDataList grammar (header + `0x5E`/`0x18`/`0x74`/optional `0x60` + vsval) is verified on the 30 vanilla
-  saves; a record with a **different entry composition** (modded/VNV ExtraDataList, new BSExtraData types) isn't
-  sized and **falls back** to the §4g forward scan + distinct-ref acceptance. That fallback still rejects the
-  coincidental short chains (a pseudo-ref with `0x7C` in the would-be count; a count-0 phantom) but, taking the
-  **first** qualifying chain, a genuinely fragmented inventory split by a gap the ≤512 B resync can't bridge would
-  return only the first fragment. Not observed on the 30 saves; the catalog extension (§10) removes the fallback.
+- The ExtraDataList grammar (header + `0x5E`/`0x18`/`0x74`/optional `0x60` + vsval) is **vanilla-specific**; a
+  modded ExtraDataList isn't sized and **falls back** to the §4g forward scan + distinct-ref acceptance. **Measured
+  on a 479-save VNV playthrough:** the 464-save modded Courier run all falls back and decodes correctly (byte-identical
+  to the pre-ExtraDataList decoder). That fallback still rejects coincidental short chains (a pseudo-ref with `0x7C`
+  in the would-be count; a count-0 phantom) but, taking the **first** qualifying chain, a genuinely fragmented
+  inventory split by a gap the ≤512 B resync can't bridge would return only the first fragment — not observed across
+  the 30 vanilla + 479 VNV saves. The catalog extension (§10) makes the modded list deterministic too.
 - The **`vsval` reveals a decode imperfection** it doesn't fix: on quicksave + the 88-stack save the decoder reads
   two *more* stacks than the engine's count (interspersed non-item over-reads the name filter already hides). Core
   keeps the full chain (truncating to the count by position would drop real trailing items, since the over-reads
@@ -480,7 +486,7 @@ structure. None is a fundamental wall.
 
 | Caveat | Why it's good enough today | The full fix (and what unblocks it) |
 |---|---|---|
-| **Inventory list *start*** is now a **pure structural walk** on all 30 saves (MOVE + fixed havok array + sized ExtraDataList → vsval count → items), but the ExtraDataList grammar is only **verified on the 30 vanilla saves**; an unrecognised shape falls back to the §4g forward scan + distinct-ref acceptance (§4i). | Deterministic path taken on all 30 (zero fall-backs), **byte-identical** to the prior decoder, and the vsval count self-validates the start (= decoded count on 28/30). The fallback is the previous, already-verified behaviour, so an unseen shape loses *determinism*, not correctness. | Extend the typed-entry catalog (`0x5E`/`0x18`/`0x74`/`0x60` + the per-stack `TryReadStackExtra` types) to cover modded/VNV ExtraDataLists so the fallback is never needed. `refdump` prints the sized ExtraDataList + vsval count for it. |
+| **Inventory list *start*** is a **pure structural walk** on vanilla saves (MOVE + fixed havok array + sized ExtraDataList → vsval count → items), but the grammar is **vanilla-specific**; a modded ExtraDataList falls back to the §4g forward scan + distinct-ref acceptance (§4i). | Deterministic path on all 30 vanilla saves (byte-identical, vsval self-validates). **Validated against 479 VNV saves:** the 464-save modded run falls back and decodes **correctly** (byte-identical to the pre-ExtraDataList decoder, incl. a 40 h/183-stack save) — the fallback is the previous, already-verified behaviour, so an unseen shape loses *determinism*, not correctness. | Generalise to a typed-entry walk (variable order + a fuller catalog: the modded list reorders entries and adds `0x75`/`0x1D`) so modded ExtraDataLists size too. `refdump` prints the sized ExtraDataList + vsval count for it. |
 | **`vsval` over-read on two saves** — the decoder reads two more stacks than the engine's count (interspersed non-items the name filter hides); the full chain is kept rather than truncated (§9). | Byte-identical to the prior decoder; the extra stacks are hidden in display, and truncating by position would drop real trailing items. | Drop exactly the non-item over-reads using name resolution — but that lives in the CLI/GUI (`PluginDatabase`), not `Core`; surface the authoritative vsval count there as a cross-check. |
 | **Inventory edits target the *first* stack** of a given FormID (§4g). | Duplicate-FormID stacks (same item, different extra data) are uncommon; the everyday case is unambiguous. | Address stacks by file offset / extra-data signature rather than FormID — straightforward once a UI/CLI affordance picks the specific stack. |
 | **`0x21` extra-data semantics unpinned**, and types `0x0D`/`0x18`/`0x24`/`0x6E` aren't sized → ≤512 B resync (§4i). | Lengths that matter are right, so the per-stack walk stays deterministic; only modded weapons hit the resync, which stays tight. | Controlled diffs (attach a known weapon mod; inspect a modded weapon) to pin each type's payload length + meaning, extending the `TryReadStackExtra` catalog. |
