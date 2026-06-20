@@ -12,7 +12,7 @@ public class PlayerInventoryTests
         var save = FalloutSave.Parse(InventorySave.Build());
 
         Assert.NotNull(save.Inventory);
-        Assert.Equal(3, save.Inventory!.Items.Count);
+        Assert.Equal(3, save.Inventory!.Items.Count); // the 3 distinct items, not the longer repeated-ref run
         var byForm = save.Inventory.Items.ToDictionary(i => i.FormId, i => i.Count);
         Assert.Equal(5u, byForm[0x00AAAA01]);
         Assert.Equal(9u, byForm[0x00AAAA02]);
@@ -148,6 +148,11 @@ internal static class InventorySave
         Entry(2, 5);  // ref 2 -> FormIdArray[1] = 0x00AAAA01, x5
         Entry(3, 9);  // ref 3 -> FormIdArray[2] = 0x00AAAA02, x9
         Entry(4, 1);  // ref 4 -> FormIdArray[3] = 0x00AAAA03, x1
+        // Past a run-break gap, a *longer* run that repeats a single reference (a misaligned read of a
+        // record's non-item data). The decoder must still pick the real list above — it has more distinct
+        // references — even though this run has more entries.
+        data.AddRange(Enumerable.Repeat((byte)0x00, 300)); // gap > InventoryExtraWindow ends the real run
+        for (var i = 0; i < 12; i++) Entry(2, (uint)(50 - i));
 
         var rec = new List<byte>();
         rec.AddRange([0x00, 0x00, 0x06]);            // refID = iref 6

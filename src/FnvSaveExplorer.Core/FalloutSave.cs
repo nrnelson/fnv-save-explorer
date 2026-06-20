@@ -637,8 +637,9 @@ public sealed class FalloutSave
         }
     }
 
-    private const int InventoryMinEntries = 3;  // enough to distinguish a real item list from coincidence
-    private const int InventoryExtraWindow = 96; // max extra-data bytes between consecutive stacks before a run is considered ended
+    private const int InventoryMinEntries = 3;   // enough to distinguish a real item list from coincidence
+    private const int InventoryExtraWindow = 256; // max extra-data bytes between consecutive stacks before a run breaks
+                                                  // (a modded weapon's condition + mods can exceed the vanilla ~96)
 
     /// <summary>
     /// Locates the player's inventory change form and decodes its item stacks. The player's inventory
@@ -672,6 +673,7 @@ public sealed class FalloutSave
     {
         var end = cf.DataOffset + cf.DataLength;
         var best = new List<InventoryItem>();
+        var bestScore = 0;
         var current = new List<InventoryItem>();
         var lastEnd = int.MinValue;
         for (var p = cf.DataOffset; p + 9 <= end;)
@@ -683,15 +685,26 @@ public sealed class FalloutSave
             }
             if (current.Count > 0 && p - lastEnd > InventoryExtraWindow)
             {
-                if (current.Count > best.Count) best = current;
+                Consider(current, ref best, ref bestScore);
                 current = [];
             }
             current.Add(new InventoryItem(iref, formId, count, p + 4));
             lastEnd = p + 9;
             p += 9; // skip the fixed entry; its extra data is re-scanned but won't validate as an entry
         }
-        if (current.Count > best.Count) best = current;
+        Consider(current, ref best, ref bestScore);
         return new PlayerInventory(cf.DataOffset, best);
+
+        // Pick the run with the most *distinct* item references, not the most entries: a misaligned read
+        // of non-item data (a record's 3D/script region) forms a long run that repeats a handful of refs,
+        // so it scores far lower than the genuine item list even when it has more raw entries.
+        static void Consider(List<InventoryItem> run, ref List<InventoryItem> best, ref int bestScore)
+        {
+            if (run.Count == 0) return;
+            var distinct = new HashSet<int>(run.Count);
+            foreach (var i in run) distinct.Add(i.Iref);
+            if (distinct.Count > bestScore) { best = run; bestScore = distinct.Count; }
+        }
     }
 
     /// <summary>

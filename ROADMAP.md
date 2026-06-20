@@ -154,10 +154,13 @@ alone makes the whole list correct: every stack now resolves (Stimpak ×10, Supe
 Bag ×3, Weapon Repair Kit ×4, Bleak Venom ×5, Antivenom ×1, Bottle Cap/caps ×18, Pip-Boy 3000, …), with
 **no spurious entries** — the earlier `?` rows (ACHR/ACRE/REFR) were just `FormIdArray[ref]` landing on
 the neighbouring form. (A prior reading mistook this for a one-slot "count lag"; that was an artefact of
-the off-by-one and only held when references happened to be consecutive.) **Decoder:** parse the
-record's longest contiguous run of entries, requiring `ref ≠ 0` whose `ref - 1` resolves, both `0x7C`
-delimiters, and a sane count whose upper bytes aren't the `0x7C` delimiter. Editing a count is a **safe
-same-length splice**. Names resolve via the ESM masters (§4h).
+the off-by-one and only held when references happened to be consecutive.) **Decoder:** scan the record
+for runs of entries (`ref ≠ 0` whose `ref - 1` resolves, both `0x7C` delimiters, a sane count whose upper
+bytes aren't the `0x7C` delimiter), breaking a run when the gap to the next entry exceeds a window (256 B
+— a modded weapon's condition + mods can split the list), and pick the run with the **most distinct
+references**, not the most entries: a misaligned read of a record's non-item region forms a long run that
+repeats a handful of refs, so it scores far lower than the genuine item list (a VNV save that decoded
+0/127 named now reads 105/110). Editing a count is a **safe same-length splice**. Names resolve via §4h.
 
 ### 4h. FormID → display name — reading the game's ESM/ESP masters
 Every FormID the tool surfaces (inventory above all) is resolved to a human name by a small custom
@@ -196,9 +199,10 @@ the mod plugins aren't physically in the game `Data` folder and their item names
 save is loaded from an MO2 profile (`<root>\profiles\<profile>\saves\`), `GameDataLocator.FindMo2Mods`
 derives `<root>\mods` from the path, and `PluginDatabase.CollectPlugins` indexes both the `Data` folder
 (base/DLC, authoritative) and each `mods\<Mod>\` root (one VNV save went from 10/43 → 43/43 plugins
-resolved). **Caveat:** the inventory *decoder* still mis-aligns on large inventories with lots of per-stack
-extra data (the longest-run heuristic can latch onto a non-item run), so high-level/modded saves can still
-show wrong stacks even once names resolve — that's the §6.1 per-stack extra-data work, not a name gap.
+resolved). Large modded inventories used to mis-decode (the item run is split by big per-stack extra-data
+blocks, and a non-item run elsewhere in the record was longer) — fixed by the wider window + distinct-ref
+run selection in §4g (that VNV Courier save went from 0/127 named stacks to 105/110: Lead, caps,
+reloading components, …).
 
 ---
 
