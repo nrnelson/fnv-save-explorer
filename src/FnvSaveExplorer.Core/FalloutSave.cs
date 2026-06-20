@@ -666,20 +666,19 @@ public sealed class FalloutSave
     }
 
     /// <summary>
-    /// Locates and walks the inventory list in a reference change form. The list <em>start</em> is anchored
-    /// by changeFlags, not by ranking every run in the record: <see cref="ReferenceChangeForm.InventorySearchStart"/>
-    /// deterministically skips the gated 27-byte MOVE block <em>and</em> the fixed 1160-byte havok/float array
-    /// that follows it (both invariant across every real save — ROADMAP §4i), landing on the reference's
-    /// ExtraDataList. From there the walk takes the <em>first</em> contiguous stack chain with at least
-    /// <see cref="InventoryMinEntries"/> <em>distinct</em> references — a short forward scan over only the
-    /// still-undecoded ExtraDataList rather than the whole preamble. The genuine list references distinct items,
-    /// whereas the ExtraDataList yields at most short coincidental chains (a pseudo-ref carries a <c>0x7C</c>
-    /// inside the would-be count and rejects, or repeats a ref / reads a count-0 phantom), so they never reach
-    /// the distinct-ref bar. Each stack is the fixed 9-byte <c>[ref:3][7C][count:u32][7C]</c> entry followed by
-    /// a per-stack extra-data block whose exact byte length is computed from its decoded properties (condition /
-    /// equipped / weapon mods; see <see cref="ReferenceChangeForm.TryReadStackExtra"/>), so
-    /// <see cref="BuildChain"/> advances to the next stack precisely. Returns null when the record carries no
-    /// inventory (CHANGE_REFR_INVENTORY clear) or no qualifying chain is found.
+    /// Locates and walks the inventory list in a reference change form. The list <em>start</em> is structural:
+    /// <see cref="ReferenceChangeForm.InventorySearchStart"/> skips the gated 27-byte MOVE block <em>and</em> the
+    /// fixed 1160-byte havok/float array (both invariant across every real save), then
+    /// <see cref="ReferenceChangeForm.TryInventoryItemsStart"/> sizes the reference's ExtraDataList and reads the
+    /// inventory's <c>vsval</c> stack count to land on the first item with <em>no scan</em>. The walk decodes
+    /// exactly that many stacks and accepts only when the count matches — a self-validating anchor (ROADMAP §4i).
+    /// <para>If the ExtraDataList isn't the recognised shape (an atypical/modded record), it falls back to the
+    /// prior behaviour: a forward scan from the ExtraDataList for the first contiguous chain with at least
+    /// <see cref="InventoryMinEntries"/> <em>distinct</em> references, then from the record start. Each stack is
+    /// the fixed 9-byte <c>[ref:3][7C][count:u32][7C]</c> entry plus a per-stack extra-data block whose exact
+    /// length is computed (see <see cref="ReferenceChangeForm.TryReadStackExtra"/>), so <see cref="BuildChain"/>
+    /// advances precisely. Returns null when the record carries no inventory (CHANGE_REFR_INVENTORY clear) or no
+    /// list is found.</para>
     /// </summary>
     private PlayerInventory? WalkInventory(ChangeFormHeader cf)
     {
@@ -689,8 +688,23 @@ public sealed class FalloutSave
         var end = cf.DataOffset + cf.DataLength;
         var start = ReferenceChangeForm.InventorySearchStart(
             _raw.AsSpan(cf.DataOffset, cf.DataLength), cf.DataOffset, cf.ChangeFlags);
-        // Try the deterministic start (ExtraDataList). The fallback from the record start is dormant on all 30
-        // real saves — it only guards an atypical record where the fixed-array skip couldn't be validated.
+
+        // Deterministic path: size the ExtraDataList + read the vsval stack count to land on the first item with
+        // no scan, then decode the chain from there. The vsval is the engine's authoritative item-stack count and
+        // validates the start: a correctly-located list yields at least that many stacks (it matches exactly on
+        // 28/30 real saves; on the other two the decoder over-reads a couple of interspersed non-item stacks the
+        // §4g/name-resolution filter hides — so we keep the full chain rather than truncate, which would drop real
+        // trailing items). A mis-sized ExtraDataList yields fewer than the count and falls through to the scan.
+        if (ReferenceChangeForm.TryInventoryItemsStart(_raw.AsSpan(0, end), start, out var itemsOffset, out var stackCount)
+            && stackCount > 0)
+        {
+            var chain = BuildChain(itemsOffset, end, out _);
+            if (chain.Count >= stackCount)
+                return new PlayerInventory(cf.DataOffset, chain);
+        }
+
+        // Fallback (atypical/modded ExtraDataList): the prior forward scan + distinct-ref acceptance, from the
+        // ExtraDataList start and then, as a last resort, the record start.
         return ScanForInventory(cf, start, end)
             ?? (start != cf.DataOffset ? ScanForInventory(cf, cf.DataOffset, end) : null);
     }

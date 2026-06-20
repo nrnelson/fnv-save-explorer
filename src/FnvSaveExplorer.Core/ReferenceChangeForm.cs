@@ -154,6 +154,101 @@ public static class ReferenceChangeForm
         return true;
     }
 
+    // ---- The reference ExtraDataList + inventory count (the deterministic item-list start) ----------
+    //
+    // Between the fixed havok array (above) and the item stacks sit the reference's own ExtraDataList and
+    // the inventory's stack count. Decoded by aligning all 30 real saves; each entry is 0x7C-delimited:
+    //
+    //   [00][7C][scale:f32][7C]                 reference header (a flags byte + a 1.0 scale on every save)
+    //   [xx][7C][5E][7C][N*4][7C] N×(ref:3 7C flag:1 7C)   ExtraDataList ref-list (N entries)
+    //   [18][7C][ref:3][7C][pos:3×f32][7C][rot:f32][7C]    fixed 24-byte block (ref + position + rotation)
+    //   [74][7C][ref:3][7C]                     a linked-ref entry
+    //   ([60][7C][u32][7C])                     OPTIONAL — present on large inventories only
+    //   [stackCount : vsval][7C]                Bethesda variable-size value: low 2 bits = byte width
+    //   item stacks…
+    //
+    // The stack count is the key: a vsval whose value (>> 2) equals the number of item stacks that follow,
+    // so the walk lands on the first item with **no scan** and self-validates against the decoded count.
+    // Verified across all 30 saves (e.g. Save 31 → 0x90 → 36 stacks; quicksave → 0x0181 → 96). See ROADMAP §4i.
+
+    const byte RefListType = 0x5E;     // ExtraDataList ref-list entry
+    const byte FixedBlockType = 0x18;  // 24-byte ref + position + rotation block
+    const int FixedBlockLength = 24;
+    const byte LinkedRefType = 0x74;   // a linked-ref entry just before the count
+    const byte U32EntryType = 0x60;    // optional u32 entry on large inventories
+
+    /// <summary>The header (flags + scale) preceding the ExtraDataList: <c>[00][7C][f32][7C]</c> = 7 bytes.</summary>
+    public const int RefExtraHeaderLength = 7;
+
+    /// <summary>Reads a Bethesda <c>vsval</c> (variable-size value) at <paramref name="p"/>: the low 2 bits of
+    /// the first byte give the width (0→1, 1→2, 2→4 bytes) and the value is the little-endian field <c>&gt;&gt; 2</c>.
+    /// Outputs <paramref name="byteLength"/>. Returns -1 if the field would run past <paramref name="data"/>.</summary>
+    public static long ReadVsval(ReadOnlySpan<byte> data, int p, out int byteLength)
+    {
+        byteLength = (data.Length > p ? data[p] & 3 : 0) switch { 0 => 1, 1 => 2, _ => 4 };
+        if (p < 0 || p + byteLength > data.Length)
+            return -1;
+        long raw = 0;
+        for (var i = 0; i < byteLength; i++)
+            raw |= (long)data[p + i] << (8 * i);
+        return raw >> 2;
+    }
+
+    /// <summary>
+    /// Sizes the reference ExtraDataList + inventory count to land deterministically on the first item stack.
+    /// <paramref name="data"/> is indexed by absolute file offset and bounded to the record end;
+    /// <paramref name="extraDataListStart"/> is <see cref="InventorySearchStart"/> (past MOVE + the havok array).
+    /// On success outputs <paramref name="itemsOffset"/> (the first stack) and <paramref name="stackCount"/> (the
+    /// decoded vsval count, for the caller to validate by walking exactly that many stacks). Returns false — so
+    /// the caller falls back to the forward scan — if the ExtraDataList isn't the recognised shape (the structural
+    /// type anchors <see cref="RefListType"/>/<see cref="FixedBlockType"/>/<see cref="LinkedRefType"/> are the guard
+    /// against mis-sizing an atypical/modded record).
+    /// </summary>
+    public static bool TryInventoryItemsStart(ReadOnlySpan<byte> data, int extraDataListStart, out int itemsOffset, out int stackCount)
+    {
+        itemsOffset = -1;
+        stackCount = -1;
+        var p = extraDataListStart;
+
+        // 1. reference header: [00][7C][scale:f32][7C]  (lenient on content; the delimiters frame it).
+        if (!Within(data, p, RefExtraHeaderLength) || data[p + 1] != Delimiter || data[p + 6] != Delimiter)
+            return false;
+        p += RefExtraHeaderLength;
+
+        // 2. ExtraDataList ref-list: [xx][7C][5E][7C][N*4][7C] then N × (ref:3 7C flag:1 7C).
+        if (!Within(data, p, 6) || data[p + 1] != Delimiter || data[p + 2] != RefListType
+            || data[p + 3] != Delimiter || data[p + 5] != Delimiter)
+            return false;
+        var n = data[p + 4] / 4;
+        p += 6 + 6 * n;
+
+        // 3. fixed 24-byte block, type 0x18.
+        if (!Within(data, p, FixedBlockLength) || data[p] != FixedBlockType)
+            return false;
+        p += FixedBlockLength;
+
+        // 4. linked-ref entry: [74][7C][ref:3][7C].
+        if (!Within(data, p, 6) || data[p] != LinkedRefType || data[p + 1] != Delimiter || data[p + 5] != Delimiter)
+            return false;
+        p += 6;
+
+        // 5. optional u32 entry on large inventories: [60][7C][u32][7C]. (A genuine 24-stack count also encodes
+        //    as the byte 0x60, but then it isn't followed by this entry's framing — the count validation below,
+        //    and the forward-scan fallback, resolve that rare collision.)
+        if (Within(data, p, 7) && data[p] == U32EntryType && data[p + 1] == Delimiter && data[p + 6] == Delimiter)
+            p += 7;
+
+        // 6. inventory stack count (vsval) then the first item stack.
+        var count = ReadVsval(data, p, out var vlen);
+        if (count < 0 || !Within(data, p, vlen + 1) || data[p + vlen] != Delimiter)
+            return false;
+        stackCount = (int)count;
+        itemsOffset = p + vlen + 1;
+        return true;
+    }
+
+    static bool Within(ReadOnlySpan<byte> data, int start, int length) => start >= 0 && (long)start + length <= data.Length;
+
     /// <summary>Human description of the set bits in a reference record's <c>changeFlags</c> — labelled
     /// where known (<see cref="FlagBitLabels"/>), otherwise <c>bitN</c>.</summary>
     public static string DescribeFlags(uint flags)

@@ -257,27 +257,37 @@ deterministic sections** before scanning:
    structural skip, not a scan. `InventorySearchStart` validates the exact 232-slot shape before skipping (a
    delimiter at every 5th byte) and falls back to just-past-MOVE otherwise, so it can never mis-skip.
 
-That lands the search start on the reference's own **ExtraDataList** — the one short section still between the
-preamble and the items — from which the walk takes the **first** contiguous stack chain with ≥ 3 *distinct*
-references. That distinct-ref test is the §4g/§9 discriminator applied locally: the ExtraDataList carries no
-genuine stack — its pseudo-refs reject (a `0x7C` falls inside the would-be count) and the few coincidental ones
-repeat a ref or read a count-0 phantom, so they never reach 3 distinct refs. This **removed the old whole-record
-byte scan + global most-distinct-chain ranking** entirely, and the surviving forward scan now covers only the
-ExtraDataList (tens of bytes) rather than the whole ~1.2 KB preamble. **Verified byte-identical:** the decoded
-stack list (refs, counts, condition/equip, edit offsets) matches the previous decoder on **all 30 real saves**
-(`inventory` output diffed against `main`) — vanilla Save 31 still reads 36 stacks (272 items), the 88/96-stack
-late saves and the Mace Windu character all unchanged — and a real-save test asserts the search start equals
-`dataOffset + MOVE + 1 + 1160` on every save. Tooling: `Core` `ReferenceChangeForm` (the `0x7C` tokenizer,
-`changeFlags` describer + `FlagBitLabels`, `InventorySearchStart` + the `GatedArrayBlockLength` constant,
-`TryReadStackExtra` catalog) + CLI `refdump` (now prints the labelled `changeFlags` bits, the **MOVE + fixed-array
-spans**, and the computed ExtraDataList start).
-**Still deferred (the remaining ★):** only the reference's own **ExtraDataList** is now unsized — the short typed
-section directly before the items (it starts `00`, a `1.0` float, then typed entries; e.g. a `0x5E` entry is a
-ref-list using the same `count*4` framing as the per-stack extra data). The big gated array before it is now
-sized, so the forward scan + distinct-ref acceptance test is confined to the ExtraDataList. Decoding the
-ExtraDataList type catalog (extending `TryReadStackExtra`'s approach) would let the start land on the first item
-with no scan or acceptance test at all. `refdump` (which now prints the ExtraDataList bounds) is in place for that
-follow-up.
+That lands on the reference's own **ExtraDataList**, which is now **sized too** — so the start is reached with
+**no forward scan and no distinct-ref acceptance test**. The ExtraDataList is a fixed-shape typed list, decoded by
+aligning all 30 real saves (`ReferenceChangeForm.TryInventoryItemsStart`):
+```
+[00][7C][scale:f32][7C]                      reference header (a flags byte + a 1.0 scale)
+[xx][7C][5E][7C][N*4][7C] N×(ref:3 7C flag:1 7C)   ExtraDataList ref-list (N = byte/4 entries)
+[18][7C][ref:3][7C][pos:3×f32][7C][rot:f32][7C]    fixed 24-byte block (identical bytes on every save)
+[74][7C][ref:3][7C]                          a linked-ref entry
+([60][7C][u32][7C])                          OPTIONAL — present only on large inventories
+[stackCount : vsval][7C]                     Bethesda variable-size value: low 2 bits = byte width, value >> 2
+item stacks…
+```
+The clincher is the **`vsval` stack count** immediately before the items: a variable-size integer whose value is
+the number of item stacks (Save 31 → `0x90` → **36**; quicksave → `0x0181` → **96**; the late save → **88**).
+`WalkInventory` reads it and decodes from the computed offset, accepting only when at least that many stacks
+follow — a **self-validating** anchor that replaces the heuristic entirely on the deterministic path. The old
+whole-record byte scan + global most-distinct-chain ranking is **gone**, and so is the per-ExtraDataList forward
+scan. **Verified:** the deterministic path is taken on **all 30 real saves** (none fall back), the `inventory`
+output is **byte-identical** to the prior decoder (diffed across all 30), and the vsval count equals the decoded
+stack count on **28/30** (on quicksave + the 88-stack save the decoder over-reads two interspersed non-item stacks
+that name-resolution already hides — see §9; the vsval *reveals* this but Core can't drop them without the
+masters, so the full chain is kept rather than truncated, which would drop real trailing items). 283 tests green,
+incl. real-save tests pinning the start at `dataOffset + MOVE + 1 + 1160` and `0 ≤ decoded − vsval`. Tooling:
+`ReferenceChangeForm` (`InventorySearchStart`, `GatedArrayBlockLength`, `ReadVsval`, `TryInventoryItemsStart`,
+`TryReadStackExtra`) + CLI `refdump` (prints the `changeFlags` bits, the MOVE + fixed-array spans, and the sized
+ExtraDataList → first item + vsval count).
+**Remaining (the last ◑):** the ExtraDataList grammar is verified on the 30 vanilla saves; a record with a
+different entry composition (a heavily-modded/VNV ExtraDataList, or new BSExtraData types) isn't sized and
+**falls back** safely to the §4g forward scan + distinct-ref acceptance. Extending the typed-entry catalog (the
+`0x5E`/`0x18`/`0x74`/`0x60` set, and the per-stack `TryReadStackExtra` types) to those cases would make the start
+deterministic there too; `refdump` (which prints the sized ExtraDataList + vsval count) is the microscope for it.
 
 ---
 
@@ -302,9 +312,9 @@ follow-up.
 | Pip-Boy item category / tab (§4h) | ✅ from the base form's record type (read from the masters, not the save): `RecordType`/`Category`/`PipBoyTab`; verified in-game (WEAP/ARMO/AMMO; ALCH+BOOK→Aid; KEYM→Misc/"Keyring"; NOTE→Data) |
 | WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory edit) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion |
-| Tests | ✅ 250 xUnit, all green |
+| Tests | ✅ 283 xUnit, all green |
 | Deterministic inventory decoder + condition edit (§4i) | ✅ window removed; condition (`0x25`) editable + equipped/`0x21` surfaced in CLI + GUI; condition edit round-trips |
-| `changeFlags`-anchored inventory list *start* (§4i) | ◑ whole-record most-distinct ranking removed; start = MOVE-skip (`CHANGE_REFR_MOVE`) + **fixed 1160-byte havok-array skip** (232 `[u32][7C]` slots, invariant across all 30 saves, independent of bit22) → lands on the ExtraDataList, then first chain with ≥3 distinct refs; verified **byte-identical on all 30 real saves** + a test pins the start at `MOVE+1+1160`. Remaining: size the short ExtraDataList to drop the last forward scan |
+| Deterministic inventory list *start* (§4i) | ✅ fully structural on all 30 real saves: MOVE-skip + **fixed 1160-byte havok array** + **sized ExtraDataList** (header + `0x5E` ref-list + fixed `0x18` block + `0x74` entry + optional `0x60`) → the **`vsval` stack count** → first item, with **no forward scan and no distinct-ref test**. The vsval self-validates the start (= decoded count on 28/30; +2 over-read on two, hidden by name resolution). Verified **byte-identical** across all 30 saves; deterministic path taken on all 30 (heuristic kept only as a fallback for unrecognised ExtraDataLists — last ◑) |
 
 **Editable today:** level, save number, name (same-length), Misc Stats, full SPECIAL, stored skill
 modifications (§4e), inventory stack counts (§4g), **item condition/health (§4i)** — all safe same-length splices.
@@ -323,23 +333,24 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
 > back to a bounded 512-byte resync. Surfaced + editable in CLI (`inventory`, `setcondition`) and GUI. New
 > R&D microscope: CLI `refdump`.
 >
-> **◑ Mostly done (the deterministic *start*):** the whole-record byte scan + global most-distinct-chain
-> ranking is **gone**. The start is now `changeFlags`-anchored — `ReferenceChangeForm.InventorySearchStart`
-> skips the 27-byte MOVE block (`CHANGE_REFR_MOVE` bit 1, labelled in `FlagBitLabels`) **and the fixed
-> 1160-byte havok/float array** that follows it (232 `[u32][7C]` slots — an empirical invariant across all 30
-> saves, independent of bit22; the skip is shape-validated and falls back safely), landing on the ExtraDataList.
-> `FalloutSave.WalkInventory` then takes the first chain with ≥ 3 *distinct* refs. **Verified byte-identical
-> across all 30 real saves** vs the previous decoder (`inventory` output diffed against `main`), with a test
-> pinning the start at `dataOffset + MOVE + 1 + 1160`. `refdump` prints the labelled flags, the MOVE +
-> fixed-array spans, and the computed ExtraDataList start.
+> **✅ Done (the deterministic *start*):** the whole-record byte scan, the global most-distinct-chain ranking,
+> **and the per-ExtraDataList forward scan + distinct-ref acceptance** are all **gone** on the deterministic path.
+> `ReferenceChangeForm.InventorySearchStart` skips the 27-byte MOVE block + the **fixed 1160-byte havok array**
+> (232 `[u32][7C]` slots, shape-validated), then `ReferenceChangeForm.TryInventoryItemsStart` sizes the whole
+> **ExtraDataList** (header + `0x5E` ref-list of `N=byte/4` + a fixed 24-byte `0x18` block + a `0x74` entry +
+> optional `0x60`) and reads the inventory's **`vsval` stack count** to land on the first item. `WalkInventory`
+> decodes from there and accepts when ≥ that many stacks follow — the count **self-validates** the start.
+> **Verified:** deterministic path taken on **all 30 saves** (zero fall-backs), `inventory` output **byte-identical**
+> to the prior decoder, vsval = decoded count on 28/30 (the two outliers over-read two non-item stacks that name
+> resolution hides — §9). Tests pin the start at `MOVE+1+1160` and `0 ≤ decoded − vsval`. `refdump` prints the
+> sized ExtraDataList → first item + the vsval count.
 >
-> **★ Remaining:** just the reference's own **ExtraDataList** — the short typed section directly before the
-> items (starts `00`, a `1.0` float, then typed entries; e.g. a `0x5E` entry is a ref-list with the same
-> `count*4` framing as the per-stack extra data) — is **not yet sized**, so the walk forward-scans *only that
-> section* and still relies on the distinct-ref acceptance test (needed because the ExtraDataList harbours
-> coincidental short chains). Decode its type catalog (extending `TryReadStackExtra`'s approach) to land on the
-> first item with no scan/acceptance at all. Tools ready: `refdump` (field-by-field + labelled `changeFlags`
-> bits + ExtraDataList bounds), `walk`/`hex`/`diff`/`idiff`.
+> **◑ Remaining (last mile):** the ExtraDataList grammar is verified on the 30 vanilla saves; a record with a
+> different entry composition (heavily-modded/VNV ExtraDataList, or new BSExtraData types) isn't sized and
+> **falls back** safely to the §4g forward scan + distinct-ref acceptance — so determinism, not correctness, is
+> what's at stake there. Extend the typed-entry catalog (`0x5E`/`0x18`/`0x74`/`0x60` + the per-stack
+> `TryReadStackExtra` types) to cover those. Tools ready: `refdump` (sized ExtraDataList + vsval + labelled
+> `changeFlags` bits), `walk`/`hex`/`diff`/`idiff`.
 
 1. ~~**Skills**~~ — ✅ **DONE** (§4e). Located via the controlled-diff method: skills are floats in
    the PlayerRef (`0x14`) actor-value modification block, not an inline structure. Decoder + index map
@@ -355,11 +366,12 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
    (Antivenom, caps, Pip-Boy 3000, …) appear. The decoder is now **deterministic** (§4i): the 2048-byte window
    is gone, the per-stack **extra data** (condition / equipped / `0x21` ref) is decoded, and **condition is
    editable**. The list *start* is now `changeFlags`-anchored (MOVE skip + first ≥3-distinct chain), replacing
-   the whole-record most-distinct ranking (§4i; byte-identical on all 30 saves). The MOVE block **and the fixed
-   1160-byte havok array** after it are now sized deterministically, so the start lands on the ExtraDataList and
-   the forward scan is confined to it. Remaining nuance: editing targets the first stack of a given FormID
-   (duplicate-FormID stacks are ambiguous by FormID alone), and the short ExtraDataList isn't sized yet, so the
-   start still forward-scans *that section* (§4i ★).
+   the whole-record most-distinct ranking (§4i; byte-identical on all 30 saves). The start is now a **pure
+   structural walk** on all 30 saves: the MOVE block, the fixed 1160-byte havok array, **and the ExtraDataList**
+   are sized, and the inventory's **`vsval` stack count** anchors the first item — no forward scan, no distinct-ref
+   test. Remaining nuance: editing targets the first stack of a given FormID (duplicate-FormID stacks are
+   ambiguous by FormID alone), and the ExtraDataList grammar is verified on the 30 vanilla saves — an unrecognised
+   shape falls back to the §4g scan (§4i ◑).
 3. ~~**Item / form name resolution (FormID → display name)**~~ — ✅ **DONE** (§4h). Small custom TES4
    reader (`TesPlugin`/`PluginDatabase`/`GameDataLocator`) over the ESM/ESP masters builds a
    `FormID → FULL/EDID` index in the save's FormID space; wired into CLI `inventory`/`formids`/`names`
@@ -431,17 +443,19 @@ modes: `diff a b cf` annotates each differing run with the change form that cont
   condition (`0x25`, editable), equipped (`0x16`), and the `0x21` ref (§4i) — are decoded; perks and most
   other per-record state are not yet decoded — needs more controlled diffs. The walker (§4f) makes these
   reachable record-by-record.
-- The inventory walk is **deterministic** per-stack (exact extra-data lengths; no window — §4i). The list
-  *start* skips the MOVE block + the fixed 1160-byte havok array deterministically, then `changeFlags`-anchored
-  forward-scans the **short ExtraDataList** for the first chain with ≥3 distinct refs (rather than a whole-record
-  most-distinct ranking) — an **accepted caveat** with a full-fix path (§10), since the ExtraDataList isn't sized
-  yet. The genuine *risk* from that:
-- The distinct-ref acceptance is what rejects the coincidental short chains in the undecoded ExtraDataList (a
-  pseudo-ref with a `0x7C` inside the would-be count, or a count-0 phantom — below the ≥3-distinct bar) and the
-  non-item tails (e.g. Save 335: a 367-row tail of ~7 unresolved FormIDs). Because the walk takes the **first**
-  qualifying chain (not a global best), a *genuinely* fragmented real inventory (real clusters split by a gap
-  the ≤512 B resync can't bridge) would return only the first fragment. Not observed on the 30 tested saves
-  (decode is byte-identical to the prior decoder), but the fully-deterministic preamble walk (§10) is the real fix.
+- The inventory walk is **deterministic** per-stack (exact extra-data lengths; no window — §4i) **and the list
+  start is now structural too**: MOVE skip + fixed 1160-byte havok array + sized ExtraDataList → the `vsval`
+  stack count → first item, with no scan/acceptance on all 30 saves. The residual caveats (§10):
+- The ExtraDataList grammar (header + `0x5E`/`0x18`/`0x74`/optional `0x60` + vsval) is verified on the 30 vanilla
+  saves; a record with a **different entry composition** (modded/VNV ExtraDataList, new BSExtraData types) isn't
+  sized and **falls back** to the §4g forward scan + distinct-ref acceptance. That fallback still rejects the
+  coincidental short chains (a pseudo-ref with `0x7C` in the would-be count; a count-0 phantom) but, taking the
+  **first** qualifying chain, a genuinely fragmented inventory split by a gap the ≤512 B resync can't bridge would
+  return only the first fragment. Not observed on the 30 saves; the catalog extension (§10) removes the fallback.
+- The **`vsval` reveals a decode imperfection** it doesn't fix: on quicksave + the 88-stack save the decoder reads
+  two *more* stacks than the engine's count (interspersed non-item over-reads the name filter already hides). Core
+  keeps the full chain (truncating to the count by position would drop real trailing items, since the over-reads
+  aren't last); dropping exactly the non-items needs the masters, which live in the CLI/GUI, not `Core`.
 - The `0x21` extra-data type is decoded as a 3-byte ref (length is right) but its **semantics** aren't
   pinned — an attached weapon mod on weapons, but reused for other linked refs (a VNV "Bill of Sale"); a
   few structured/mod-added types (`0x0D`/`0x18`/`0x24`/`0x6E`) aren't sized, so the walk resyncs (≤512 B).
@@ -466,14 +480,15 @@ structure. None is a fundamental wall.
 
 | Caveat | Why it's good enough today | The full fix (and what unblocks it) |
 |---|---|---|
-| **Inventory list *start*** skips the MOVE block + the fixed 1160-byte havok array deterministically, then forward-scans the **short ExtraDataList** for the first chain with ≥3 *distinct* refs — not yet a pure structural walk (§4i). | Verified **byte-identical** to the prior decoder on all 30 real saves (with a test pinning the start at `MOVE+1+1160`); the scan is now confined to the ExtraDataList, and the distinct-ref test cleanly rejects its coincidental junk (a pseudo-ref's count carries `0x7C`, or a count-0 phantom → rejected). | Size the one remaining section — the reference's own **ExtraDataList** (starts `00`, `1.0`, then typed entries; a `0x5E` entry is a `count*4` ref-list like the per-stack extra data) — so the start is reached with **no scan and no acceptance test**. Unblocked by extending the `TryReadStackExtra` type catalog to the ExtraDataList (§6 ★; `refdump` prints its bounds). |
+| **Inventory list *start*** is now a **pure structural walk** on all 30 saves (MOVE + fixed havok array + sized ExtraDataList → vsval count → items), but the ExtraDataList grammar is only **verified on the 30 vanilla saves**; an unrecognised shape falls back to the §4g forward scan + distinct-ref acceptance (§4i). | Deterministic path taken on all 30 (zero fall-backs), **byte-identical** to the prior decoder, and the vsval count self-validates the start (= decoded count on 28/30). The fallback is the previous, already-verified behaviour, so an unseen shape loses *determinism*, not correctness. | Extend the typed-entry catalog (`0x5E`/`0x18`/`0x74`/`0x60` + the per-stack `TryReadStackExtra` types) to cover modded/VNV ExtraDataLists so the fallback is never needed. `refdump` prints the sized ExtraDataList + vsval count for it. |
+| **`vsval` over-read on two saves** — the decoder reads two more stacks than the engine's count (interspersed non-items the name filter hides); the full chain is kept rather than truncated (§9). | Byte-identical to the prior decoder; the extra stacks are hidden in display, and truncating by position would drop real trailing items. | Drop exactly the non-item over-reads using name resolution — but that lives in the CLI/GUI (`PluginDatabase`), not `Core`; surface the authoritative vsval count there as a cross-check. |
 | **Inventory edits target the *first* stack** of a given FormID (§4g). | Duplicate-FormID stacks (same item, different extra data) are uncommon; the everyday case is unambiguous. | Address stacks by file offset / extra-data signature rather than FormID — straightforward once a UI/CLI affordance picks the specific stack. |
 | **`0x21` extra-data semantics unpinned**, and types `0x0D`/`0x18`/`0x24`/`0x6E` aren't sized → ≤512 B resync (§4i). | Lengths that matter are right, so the per-stack walk stays deterministic; only modded weapons hit the resync, which stays tight. | Controlled diffs (attach a known weapon mod; inspect a modded weapon) to pin each type's payload length + meaning, extending the `TryReadStackExtra` catalog. |
 | **Skills are sparse** (only modified entries stored) and the absolute-vs-modifier semantics of small natural entries aren't pinned (§4e). | Reads/edits exactly what's stored; SPECIAL/skill sums verified across all 16 saves. | A single +3 skill-book controlled diff to confirm modifier vs absolute, then enumerate the full 13 from base + perks + tags. |
 
-> **Could the inventory start become *fully* deterministic?** Yes — and it's now one section away. The MOVE
-> block and the fixed 1160-byte havok array preceding the item list are sized; only the reference's ExtraDataList
-> remains, and it too is structured, `changeFlags`-gated engine output — nothing genuinely ambiguous, only
-> not-yet-decoded. Size the ExtraDataList (its typed entries, e.g. the `0x5E` `count*4` ref-list) and the walk
-> lands on the first item with zero heuristics. It's an RE-effort question (and possibly a few more controlled
-> saves), not a limitation of the format.
+> **Is the inventory start *fully* deterministic now?** Yes, on every real save tested. The MOVE block, the fixed
+> 1160-byte havok array, **and the ExtraDataList** are all sized, and the **`vsval` stack count** anchors the first
+> item — zero heuristics on the deterministic path (taken on all 30 saves, byte-identical to the prior decoder).
+> The only thing left is *breadth*: the ExtraDataList grammar is verified on these 30 vanilla saves, so an unseen
+> entry composition (a modded/VNV ExtraDataList) still falls back to the §4g scan. That's an RE-coverage question —
+> extend the typed-entry catalog as new shapes turn up — not a limitation of the format, which is fully structured.

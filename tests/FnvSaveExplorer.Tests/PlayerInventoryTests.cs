@@ -116,6 +116,34 @@ public class PlayerInventoryTests
 
     [Theory]
     [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_inventory_start_sizes_to_the_vsval_count_no_scan_needed(string path)
+    {
+        // The deterministic finish (ROADMAP §4i): the ExtraDataList sizes to the inventory's vsval stack count,
+        // so the first item is reached with no forward scan. The vsval is the engine's authoritative count and
+        // validates the start: the decoded chain yields it exactly (28/30 saves) or with a couple of extra
+        // interspersed non-item over-reads the name filter hides (the other two) — never fewer. That bound
+        // (0 <= decoded - vsval) is what makes the deterministic path accepted rather than falling back.
+        var save = FalloutSave.Load(path);
+        if (save.Inventory is not { } inv)
+            return;
+        var playerRef = save.FindIref(0x14);
+        FalloutSave.ChangeFormHeader? rec = null;
+        foreach (var c in save.EnumerateChangeForms())
+            if (c.Iref == playerRef + 1) { rec = c; break; }
+        if (rec is not { } cf || (cf.ChangeFlags & ReferenceChangeForm.ChangeRefrMove) == 0)
+            return;
+
+        var span = save.ReadAt(0, cf.DataOffset + cf.DataLength); // index == absolute file offset
+        var start = ReferenceChangeForm.InventorySearchStart(
+            save.ReadAt(cf.DataOffset, cf.DataLength), cf.DataOffset, cf.ChangeFlags);
+
+        Assert.True(ReferenceChangeForm.TryInventoryItemsStart(span, start, out _, out var stackCount));
+        Assert.True(stackCount > 0 && stackCount <= inv.Items.Count,
+            $"vsval count {stackCount} should be in (0, decoded {inv.Items.Count}]");
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
     public void Real_saves_decode_and_safely_edit_inventory(string path)
     {
         var save = FalloutSave.Load(path);

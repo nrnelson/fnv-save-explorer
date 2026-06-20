@@ -702,6 +702,12 @@ static void RefDump(FalloutSave s, string savePath, int? iref)
         Console.WriteLine($"  MOVE block @0x{cf.DataOffset:X}..0x{arrayStart:X}  fixed havok array @0x{arrayStart:X}..0x{arrayStart + ReferenceChangeForm.GatedArrayBlockLength:X} ({ReferenceChangeForm.GatedArraySlotCount} slots)");
     }
     Console.WriteLine($"  inventory search start (ExtraDataList, after MOVE + fixed array) @0x{searchStart:X}");
+    // Deterministic items start: size the ExtraDataList + read the vsval stack count (ROADMAP §4i). `data` is
+    // record-relative, so feed the relative ExtraDataList start and re-absolutise the result.
+    if (ReferenceChangeForm.TryInventoryItemsStart(data, searchStart - cf.DataOffset, out var relItems, out var stackCount))
+        Console.WriteLine($"  ExtraDataList sized -> first item @0x{cf.DataOffset + relItems:X}  vsval stackCount {stackCount}");
+    else
+        Console.WriteLine("  ExtraDataList not recognised -> falls back to the forward scan");
 
     var fields = ReferenceChangeForm.Tokenize(data, cf.DataOffset);
     Console.WriteLine($"\n0x7C field walk ({fields.Count} fields):");
