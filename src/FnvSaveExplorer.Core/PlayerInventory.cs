@@ -2,11 +2,11 @@ namespace FnvSaveExplorer.Core;
 
 /// <summary>
 /// One stack in the player's inventory, decoded from the inventory change form (see
-/// <see cref="PlayerInventory"/>). On disk an entry is <c>[itemIref:3 BE][0x7C][count:u32 LE][0x7C]</c>
-/// optionally followed by per-stack extra data (condition / equip state / etc., not yet decoded), but the
-/// <c>count</c> field "lags" its iref by one slot — the u32 stored after an iref is the <i>previous</i>
-/// item's count — so <see cref="Count"/> and <see cref="CountValueOffset"/> are taken from the following
-/// entry. <see cref="CountValueOffset"/> is the absolute file offset of that 4-byte little-endian count —
+/// <see cref="PlayerInventory"/>). On disk an entry is <c>[ref:3 BE][0x7C][count:u32 LE][0x7C]</c>
+/// optionally followed by per-stack extra data (condition / equip state / etc., not yet decoded). The
+/// 3-byte <c>ref</c> is the FormID-array index <b>plus one</b>, so <see cref="FormId"/> is
+/// <c>FormIdArray[ref - 1]</c> and <see cref="Iref"/> is that index; the <c>count</c> belongs to this
+/// entry. <see cref="CountValueOffset"/> is the absolute file offset of the 4-byte little-endian count —
 /// the editable field (editing it is a safe same-length splice).
 /// </summary>
 public sealed record InventoryItem(int Iref, uint FormId, uint Count, int CountValueOffset)
@@ -20,16 +20,16 @@ public sealed record InventoryItem(int Iref, uint FormId, uint Count, int CountV
 /// player's carried items live in a dedicated reference change form (type 0x41) — distinct from the
 /// PlayerRef (ACHR, 0x14) record, which holds actor state, not items. Inside that record's data, after
 /// a 3D/position preamble, the items are a run of entries:
-/// <code>[itemIref:3 BE][0x7C][count:u32 LE][0x7C] (extra-data…)</code>
-/// where the <c>count</c> u32 actually holds the <i>previous</i> item's stack count (it lags the iref by
-/// one slot — confirmed against real saves with known inventories), so each item's count is read from the
-/// following entry; the trailing stack falls back to its own slot.
+/// <code>[ref:3 BE][0x7C][count:u32 LE][0x7C] (extra-data…)</code>
+/// where <c>ref</c> is the FormID-array index <b>+ 1</b> (so the item is <c>FormIdArray[ref - 1]</c>) and
+/// <c>count</c> is the entry's own stack count.
 ///
-/// <para><b>Verified</b> by a controlled drop-1 diff: dropping one of a stacked item decremented exactly
-/// one entry's <c>count</c> (9 → 8) as a little-endian u32 — so editing a count is a safe same-length
-/// splice. Items are referenced by <i>iref</i> (an index into the FormID array); the tool surfaces the
-/// resolved FormID and its mod index, and display names are resolved separately from the game's ESM/ESP
-/// masters via <see cref="PluginDatabase"/>.</para>
+/// <para><b>Verified</b> by a controlled in-game diff: adding then consuming one Antivenom moved exactly
+/// one entry's <c>count</c> (1 → 2 → 1) as a little-endian u32, and the entry's <c>ref</c> resolved to
+/// Antivenom only via the <c>- 1</c> index — confirming both the <c>+ 1</c> reference encoding and that the
+/// count is same-length editable. Items are referenced by <i>iref</i> (the FormID-array index); the tool
+/// surfaces the resolved FormID and its mod index, and display names are resolved separately from the
+/// game's ESM/ESP masters via <see cref="PluginDatabase"/>.</para>
 /// </summary>
 public sealed class PlayerInventory
 {

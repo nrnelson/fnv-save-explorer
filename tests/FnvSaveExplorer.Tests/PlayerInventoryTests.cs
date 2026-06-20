@@ -12,12 +12,12 @@ public class PlayerInventoryTests
         var save = FalloutSave.Parse(InventorySave.Build());
 
         Assert.NotNull(save.Inventory);
-        Assert.Equal(4, save.Inventory!.Items.Count); // three real stacks + a trailing sentinel
+        Assert.Equal(3, save.Inventory!.Items.Count);
         var byForm = save.Inventory.Items.ToDictionary(i => i.FormId, i => i.Count);
         Assert.Equal(5u, byForm[0x00AAAA01]);
         Assert.Equal(9u, byForm[0x00AAAA02]);
         Assert.Equal(1u, byForm[0x00AAAA03]);
-        Assert.Equal(16, save.Inventory.TotalItems);
+        Assert.Equal(15, save.Inventory.TotalItems);
     }
 
     [Fact]
@@ -132,14 +132,12 @@ internal static class InventorySave
         void DU32(uint v) { var t = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(t, v); data.AddRange(t); }
         void Entry(int iref, uint count) { DIref3(iref); data.Add(0x7C); DU32(count); data.Add(0x7C); data.Add(0x00); data.Add(0x7C); }
         data.AddRange([0x00, 0x00, 0x00, 0x00, 0x7C, 0x00, 0x00, 0x00, 0x00, 0x7C]); // zeroed preamble (skipped by the locator)
-        // Stack counts "lag" the iref by one slot: the u32 stored in an entry holds the PREVIOUS item's
-        // count (verified on real saves). So to give iref 1/2/3 the counts 5/9/1, those values are written
-        // into the entries of iref 2/3/4; iref 1's own u32 is a leading throwaway and iref 4 is the trailing
-        // sentinel stack (its count falls back to its own u32).
-        Entry(1, 0);  // leading u32, discarded by the lag-shift
-        Entry(2, 5);  // -> stack count of iref 1 (0x00AAAA01)
-        Entry(3, 9);  // -> stack count of iref 2 (0x00AAAA02)
-        Entry(4, 1);  // -> stack count of iref 3 (0x00AAAA03); iref 4 (0x00000FFF) is the trailing sentinel
+        // Each entry references the FormID array by (index + 1) and carries its own count, so to give the
+        // forms at array index 1/2/3 the counts 5/9/1 the references are 2/3/4 (verified by a controlled
+        // in-game diff on a real save).
+        Entry(2, 5);  // ref 2 -> FormIdArray[1] = 0x00AAAA01, x5
+        Entry(3, 9);  // ref 3 -> FormIdArray[2] = 0x00AAAA02, x9
+        Entry(4, 1);  // ref 4 -> FormIdArray[3] = 0x00AAAA03, x1
 
         var rec = new List<byte>();
         rec.AddRange([0x00, 0x00, 0x06]);            // refID = iref 6

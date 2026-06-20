@@ -652,12 +652,12 @@ public sealed class FalloutSave
     private PlayerInventory ParseInventoryRun(ChangeFormHeader cf)
     {
         var end = cf.DataOffset + cf.DataLength;
-        var best = new List<(int Iref, uint FormId, int CountOffset)>();
-        var current = new List<(int Iref, uint FormId, int CountOffset)>();
+        var best = new List<InventoryItem>();
+        var current = new List<InventoryItem>();
         var lastEnd = int.MinValue;
         for (var p = cf.DataOffset; p + 9 <= end;)
         {
-            if (!TryReadInventoryEntry(p, out var iref, out var formId, out _))
+            if (!TryReadInventoryEntry(p, out var iref, out var formId, out var count))
             {
                 p++;
                 continue;
@@ -667,30 +667,20 @@ public sealed class FalloutSave
                 if (current.Count > best.Count) best = current;
                 current = [];
             }
-            current.Add((iref, formId, p + 4));
+            current.Add(new InventoryItem(iref, formId, count, p + 4));
             lastEnd = p + 9;
             p += 9; // skip the fixed entry; its extra data is re-scanned but won't validate as an entry
         }
         if (current.Count > best.Count) best = current;
-
-        // The u32 that follows an entry's iref holds the PREVIOUS item's stack count: the count "lags" the
-        // iref by one slot (verified against real saves with known inventories — e.g. the count shown beside
-        // an item is really the next item's). So each item's true count and edit offset come from the NEXT
-        // entry in file order. The trailing entry has no following slot, so it falls back to its own (in
-        // practice the last stack is a single unique/quest item; editing it is the one ambiguous case).
-        var items = new List<InventoryItem>(best.Count);
-        for (var i = 0; i < best.Count; i++)
-        {
-            var src = best[i + 1 < best.Count ? i + 1 : i];
-            items.Add(new InventoryItem(best[i].Iref, best[i].FormId, ReadUInt32At(src.CountOffset), src.CountOffset));
-        }
-        return new PlayerInventory(cf.DataOffset, items);
+        return new PlayerInventory(cf.DataOffset, best);
     }
 
     /// <summary>
-    /// Tries to read an inventory entry <c>[iref:3 BE][7C][count:u32 LE][7C]</c> at <paramref name="p"/>.
-    /// Requires both delimiters, an iref that resolves to a real FormID, a non-zero iref (rejects the
-    /// record's zeroed preamble, whose null iref also "resolves"), and a sane stack count.
+    /// Tries to read an inventory entry <c>[ref:3 BE][7C][count:u32 LE][7C]</c> at <paramref name="p"/>.
+    /// The 3-byte reference is the FormID-array index <b>plus one</b> (index 0 is reserved), so the item
+    /// is <c>FormIdArray[ref - 1]</c> and the count is the entry's own u32 — both confirmed by a controlled
+    /// in-game diff (adding/consuming one Antivenom moved exactly this u32: 1→2→1). Requires both
+    /// delimiters, a non-zero reference that resolves to a real FormID, and a sane stack count.
     /// </summary>
     private bool TryReadInventoryEntry(int p, out int iref, out uint formId, out uint count)
     {
@@ -699,9 +689,10 @@ public sealed class FalloutSave
             return false;
         if (_raw[p + 3] != Delimiter || _raw[p + 8] != Delimiter)
             return false;
-        iref = (_raw[p] << 16) | (_raw[p + 1] << 8) | _raw[p + 2];
-        if (iref == 0)
+        var refPlusOne = (_raw[p] << 16) | (_raw[p + 1] << 8) | _raw[p + 2];
+        if (refPlusOne == 0)
             return false;
+        iref = refPlusOne - 1; // the inventory reference is (FormID-array index + 1)
         formId = ResolveIref(iref);
         if (formId == 0)
             return false;
