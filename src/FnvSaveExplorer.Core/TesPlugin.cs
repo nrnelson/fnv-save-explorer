@@ -40,11 +40,13 @@ public sealed class TesPlugin
 
     /// <summary>
     /// Named item forms, keyed by <b>plugin-local</b> FormID (its high byte is an index into
-    /// <see cref="Masters"/>, or == <c>Masters.Count</c> for forms the plugin defines itself).
+    /// <see cref="Masters"/>, or == <c>Masters.Count</c> for forms the plugin defines itself). <c>Type</c>
+    /// is the record signature (<c>WEAP</c>/<c>ARMO</c>/<c>ALCH</c>/<c>AMMO</c>/<c>MISC</c>/…) — the basis
+    /// for the item's Pip-Boy tab (see <see cref="PluginDatabase.PipBoyTab"/>).
     /// </summary>
-    public IReadOnlyList<(uint LocalFormId, string Name)> Forms { get; }
+    public IReadOnlyList<(uint LocalFormId, string Name, string Type)> Forms { get; }
 
-    private TesPlugin(string fileName, IReadOnlyList<string> masters, IReadOnlyList<(uint, string)> forms)
+    private TesPlugin(string fileName, IReadOnlyList<string> masters, IReadOnlyList<(uint, string, string)> forms)
     {
         FileName = fileName;
         Masters = masters;
@@ -76,7 +78,7 @@ public sealed class TesPlugin
                 masters.Add(ZString(data));
 
         // ---- top-level groups ----
-        var forms = new List<(uint, string)>();
+        var forms = new List<(uint, string, string)>();
         while (true)
         {
             var gsig = ReadSignature(fs);
@@ -104,7 +106,7 @@ public sealed class TesPlugin
     }
 
     /// <summary>Reads the records (and defensively skips any nested groups) inside one top-level item group.</summary>
-    private static void ReadRecords(Stream fs, long contentSize, bool localized, List<(uint, string)> forms)
+    private static void ReadRecords(Stream fs, long contentSize, bool localized, List<(uint, string, string)> forms)
     {
         var end = fs.Position + contentSize;
         while (fs.Position < end)
@@ -135,7 +137,7 @@ public sealed class TesPlugin
             }
             var name = full ?? edid;
             if (!string.IsNullOrEmpty(name))
-                forms.Add((formId, name));
+                forms.Add((formId, name, sig)); // sig is the record type (WEAP/ARMO/ALCH/AMMO/MISC/…)
         }
     }
 

@@ -216,6 +216,16 @@ blocks, and a non-item run elsewhere in the record was longer) — fixed by the 
 run selection in §4g (that VNV Courier save went from 0/127 named stacks to 105/110: Lead, caps,
 reloading components, …).
 
+**Pip-Boy category (which tab an item appears under).** The tab is **not stored in the save** — it is a
+pure function of the base form's **record type**, which `TesPlugin` already reads (the GRUP signature) but
+used to discard. `PluginDatabase` now keeps the type per FormID and exposes `RecordType(formId)` +
+`Category(formId)` via `PipBoyTab(recordType)` (CLI `inventory` shows a `[Tab/TYPE]` column). Mapping,
+**verified in-game on a VNV save:** `WEAP`→Weapons, `ARMO`→Apparel, `AMMO`→Ammo; `ALCH` **and** `BOOK`→Aid
+(Aid = "single-use with an effect": food/chems/stimpaks + skill *magazines* (timed, `ALCH`) + skill *books*
+(permanent, `BOOK`, e.g. "Duck and Cover!")); `NOTE`→Pip-Boy *Data → Notes* (not an item tab, §6.5);
+everything else→Misc (`MISC`, `CMNY`, `CCRD`/`CDCK`, `CHIP`, `IMOD`, and **keys** `KEYM` — the Pip-Boy
+collapses all keys into one **"Keyring"** pseudo-row, a UI grouping not stored in the save).
+
 ### 4i. Per-stack extra data (condition / equipped / mods) — the deterministic inventory walk
 The inventory decoder is now **deterministic**: there is no 2048-byte scan window. Each stack is the fixed
 9-byte `[ref:3 BE][7C][count:u32 LE][7C]` entry followed by a per-stack **extra-data block** whose exact byte
@@ -269,6 +279,7 @@ for that follow-up.
 | Deterministic inventory walk + per-stack extra data (§4i) | ✅ 2048-byte window removed; extra-data catalog cracked by a controlled 3-save diff (31/32/33): `0x25`=condition float (**editable**, 52.5→67.5 on repair), `0x16`=equipped flag, `0x21`=ref (weapon mod). Save 31 = 36 stacks, VNV = 103 stacks/12,999 items; condition edit round-trips |
 | FormID → display name (§4h / §6.3) | ✅ custom TES4 reader over the ESM/ESP masters; 10/10 plugins of a real save parse, 3,985 named forms; DLC renumbering + compressed records handled; inventory CLI + GUI show names + source mod (friendly name) |
 | Mod Organizer 2 / modded saves (§4h) | ✅ auto-detects the MO2 `mods\` folder from an MO2 save path; a 43-plugin Viva New Vegas save resolves 43/43; large fragmented inventories reunited (a dropped 1,414-count stack recovered) |
+| Pip-Boy item category / tab (§4h) | ✅ from the base form's record type (read from the masters, not the save): `RecordType`/`Category`/`PipBoyTab`; verified in-game (WEAP/ARMO/AMMO; ALCH+BOOK→Aid; KEYM→Misc/"Keyring"; NOTE→Data) |
 | WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory edit) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion |
 | Tests | ✅ 214 xUnit, all green |
@@ -323,13 +334,24 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
    reference off-by-one, since fixed in §4g; the player inventory now resolves completely.)
 4. **Caps / karma / XP** — single values; controlled-diff to locate, then same-length edit. (Caps may
    simply be an inventory stack — check the inventory list first.)
-5. ~~**General change-form record header**~~ — ✅ **DONE** (§4f). Walker (`EnumerateChangeForms`) reproduces
+5. **Notes / message log (Pip-Boy "Data → Notes")** — the collected notes/holotapes shown under Pip-Boy
+   *Data → Notes* are **not inventory items**. The player's inventory change form (iref = PlayerRef+1)
+   holds at most a stray carried holotape: a 40 h VNV save (Save 335) decodes only **one** `NOTE` stack
+   while the Pip-Boy lists *many* (most marked viewed). So the notes log is a **separate, undecoded
+   structure** — a different change form or a global-data table, keyed by note FormID. **Findings so far:**
+   a known note is "Message: Khan Hospitality" (FormID `0x000CCFCB`, a `NOTE` record) present in Save 335;
+   each entry carries a **viewed/unviewed** flag (dimmed vs bold in-game). **Ready-made controlled pair**
+   for that toggle: in Save 335 "Message: Khan Hospitality" is *viewed* and the next entry "They Didn't
+   Shoot The Deputy" is *unviewed* — diff/inspect to pin the flag (same method as the equipped flag, §4i).
+   **Lead:** `find` a note's FormID/iref *outside* the inventory record to locate the structure. (Raised
+   out of scope; logged for future us.)
+6. ~~**General change-form record header**~~ — ✅ **DONE** (§4f). Walker (`EnumerateChangeForms`) reproduces
    all records exactly; CLI `walk` validates. Enables a future full change-form browser.
-6. **Length-changing edits** (arbitrary rename, add/remove plugins, add/remove items) — requires rewriting every
+7. **Length-changing edits** (arbitrary rename, add/remove plugins, add/remove items) — requires rewriting every
    absolute offset in the File Location Table (and any internal absolute offsets). Deferred.
-7. **Quick win (no new saves):** label the 43 Misc Stat indices by name (diff an early vs late save
+8. **Quick win (no new saves):** label the 43 Misc Stat indices by name (diff an early vs late save
    of the same character) so the GUI reads "Quests Completed: 4" instead of "[0]: 4".
-8. **GUI/UX polish:** screenshot export (PNG), a raw hex viewer tab, backup management.
+9. **GUI/UX polish:** screenshot export (PNG), a raw hex viewer tab, backup management.
 
 ---
 
@@ -375,6 +397,12 @@ modes: `diff a b cf` annotates each differing run with the change form that cont
 - The inventory walk is **deterministic** per-stack (exact extra-data lengths; no window — §4i), but the
   list *start* is still chosen as the most-distinct contiguous chain rather than by walking the record's
   gated 3D preamble. Making the start fully `changeFlags`-driven is the §4i ★ remaining follow-up.
+- The decoder returns the **single most-distinct contiguous chain**. A big record can contain a second
+  *non-item* cluster that pattern-matches (e.g. Save 335: a 367-row tail of ~7 unresolved FormIDs repeated
+  with random counts) — that noise is **correctly rejected** by distinct-ref selection. The latent risk is
+  the inverse: a *genuinely* fragmented real inventory (a real cluster separated by a gap the ≤512 B resync
+  can't bridge) would lose the smaller fragment. Not observed on tested saves, but the fully-deterministic
+  preamble walk (above) is the real fix.
 - The `0x21` extra-data type is decoded as a 3-byte ref (length is right) but its **semantics** aren't
   pinned — an attached weapon mod on weapons, but reused for other linked refs (a VNV "Bill of Sale"); a
   few structured/mod-added types (`0x0D`/`0x18`/`0x24`/`0x6E`) aren't sized, so the walk resyncs (≤512 B).

@@ -395,6 +395,7 @@ static void Inventory(FalloutSave s, string savePath, string? dataDir)
     foreach (var item in items.OrderByDescending(i => i.Count))
     {
         var name = db.Resolve(item.FormId) ?? "?";
+        var tab = db.Category(item.FormId) is { } t ? $"[{t}/{db.RecordType(item.FormId)}]" : "";
         var src = s.FriendlySourceForModIndex(item.ModIndex) ?? "?";
         var extra = "";
         if (item.Condition is { } c)
@@ -403,7 +404,7 @@ static void Inventory(FalloutSave s, string savePath, string? dataDir)
             extra += "  [equipped]";
         if (item.ExtraRefIds.Count > 0)
             extra += $"  0x21-ref: {string.Join(", ", item.ExtraRefIds.Select(r => db.Resolve(s.ResolveIref(r)) ?? $"0x{s.ResolveIref(r):X8}"))}";
-        Console.WriteLine($"  {name,-28}  0x{item.FormId:X8} (mod {item.ModIndex:X2})  {src,-22}  x{item.Count,-6} iref {item.Iref,-6} (edit 0x{item.CountValueOffset:X}){extra}");
+        Console.WriteLine($"  {name,-28}  {tab,-14} 0x{item.FormId:X8} (mod {item.ModIndex:X2})  {src,-22}  x{item.Count,-6} iref {item.Iref,-6} (edit 0x{item.CountValueOffset:X}){extra}");
     }
 }
 

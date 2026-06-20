@@ -126,10 +126,11 @@
                                   HeadersVisibility="Column" FontFamily="Consolas" Width="820" HorizontalAlignment="Left"
                                   MaxHeight="340" Margin="0,0,0,10">
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="Name" Binding="{Binding Name}" IsReadOnly="True" Width="180"/>
-                                <DataGridTextColumn Header="Item (FormID)" Binding="{Binding Item}" IsReadOnly="True" Width="200"/>
-                                <DataGridTextColumn Header="Source (mod)" Binding="{Binding Source}" IsReadOnly="True" Width="160"/>
-                                <DataGridTextColumn Header="Count" Binding="{Binding Count, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                                <DataGridTextColumn Header="Name" Binding="{Binding Name}" IsReadOnly="True" Width="170"/>
+                                <DataGridTextColumn Header="Tab (type)" Binding="{Binding Tab}" IsReadOnly="True" Width="120"/>
+                                <DataGridTextColumn Header="Item (FormID)" Binding="{Binding Item}" IsReadOnly="True" Width="150"/>
+                                <DataGridTextColumn Header="Source (mod)" Binding="{Binding Source}" IsReadOnly="True" Width="130"/>
+                                <DataGridTextColumn Header="Count" Binding="{Binding Count, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
                                 <DataGridCheckBoxColumn Header="Equipped" Binding="{Binding Equipped}" IsReadOnly="True" Width="70"/>
                                 <DataGridTextColumn Header="Condition" Binding="{Binding Condition, UpdateSourceTrigger=PropertyChanged}" Width="90"/>
                             </DataGrid.Columns>

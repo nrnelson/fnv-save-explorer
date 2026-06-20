@@ -60,6 +60,16 @@ public sealed class InventoryRow : INotifyPropertyChanged
     /// <summary>The plugin (ESM/ESP) the item's mod index points at — its source mod/DLC.</summary>
     public string Source { get; init; } = "";
 
+    /// <summary>The Pip-Boy tab the item appears under (Weapons / Apparel / Aid / Ammo / Misc / Notes),
+    /// derived from the base form's record type; empty when names aren't resolved.</summary>
+    public string Category { get; init; } = "";
+
+    /// <summary>The base-form record signature (WEAP/ARMO/ALCH/AMMO/MISC/…), or empty if unknown.</summary>
+    public string RecordType { get; init; } = "";
+
+    /// <summary>Tab + record type for display, e.g. "Aid (BOOK)".</summary>
+    public string Tab => string.IsNullOrEmpty(RecordType) ? Category : $"{Category} ({RecordType})";
+
     private string _name = "";
     /// <summary>Display name resolved from the game masters; empty until/unless a Data folder is found.</summary>
     public string Name
@@ -293,6 +303,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ModIndex = item.ModIndex,
                 Name = db.Resolve(item.FormId) ?? "",
                 Source = save.FriendlySourceForModIndex(item.ModIndex) ?? "",
+                Category = db.Category(item.FormId) ?? "",
+                RecordType = db.RecordType(item.FormId) ?? "",
                 Count = item.Count,
                 OriginalCount = item.Count,
                 Equipped = item.Equipped,
