@@ -43,6 +43,33 @@ public class PlayerInventoryTests
     }
 
     [Fact]
+    public void Synthetic_decodes_stack_condition_and_no_false_condition()
+    {
+        var save = FalloutSave.Parse(InventorySave.Build());
+
+        // The middle stack carries a 0x25 condition property (75); the other two carry none (00).
+        var withCondition = save.Inventory!.Items.Single(i => i.FormId == 0x00AAAA02);
+        Assert.Equal(75f, withCondition.Condition);
+        Assert.NotNull(withCondition.ConditionValueOffset);
+        Assert.Null(save.Inventory.Items.Single(i => i.FormId == 0x00AAAA01).Condition);
+    }
+
+    [Fact]
+    public void Synthetic_condition_edit_is_same_length_and_reparses()
+    {
+        var original = InventorySave.Build();
+        var save = FalloutSave.Parse(original);
+
+        Assert.True(save.TrySetItemCondition(0x00AAAA02, 100f));
+        var edited = save.ToBytes();
+
+        Assert.Equal(original.Length, edited.Length); // a float splice shifts nothing
+        Assert.Equal(100f, FalloutSave.Parse(edited).Inventory!.Items.Single(i => i.FormId == 0x00AAAA02).Condition);
+        // A stack with no condition extra-data can't be edited.
+        Assert.False(FalloutSave.Parse(original).TrySetItemCondition(0x00AAAA01, 100f));
+    }
+
+    [Fact]
     public void Inventory_save_round_trips_byte_identical_with_no_edits()
     {
         var original = InventorySave.Build();
@@ -81,6 +108,19 @@ public class PlayerInventoryTests
         var edited = save.ToBytes();
         Assert.Equal(save.FileLength, edited.Length);
         Assert.Equal(123u, FalloutSave.Parse(edited).Inventory!.Items.First(i => i.FormId == first.FormId).Count);
+
+        // Any decoded condition is a plausible health value, and a condition edit is a safe same-length splice.
+        Assert.All(inv.Items.Where(i => i.Condition is not null),
+            i => Assert.InRange(i.Condition!.Value, 0f, 1_000_000f));
+        if (inv.Items.FirstOrDefault(i => i.ConditionValueOffset is not null) is { } repairable)
+        {
+            var clean = FalloutSave.Load(path);
+            Assert.True(clean.TrySetItemCondition(repairable.FormId, 100f));
+            var repaired = clean.ToBytes();
+            Assert.Equal(clean.FileLength, repaired.Length);
+            Assert.Equal(100f, FalloutSave.Parse(repaired).Inventory!.Items
+                .First(i => i.FormId == repairable.FormId && i.ConditionValueOffset is not null).Condition);
+        }
     }
 }
 
@@ -141,17 +181,26 @@ internal static class InventorySave
         void DIref3(int iref) { data.Add((byte)(iref >> 16)); data.Add((byte)(iref >> 8)); data.Add((byte)iref); }
         void DU32(uint v) { var t = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(t, v); data.AddRange(t); }
         void Entry(int iref, uint count) { DIref3(iref); data.Add(0x7C); DU32(count); data.Add(0x7C); data.Add(0x00); data.Add(0x7C); }
+        // A condition-bearing stack: extra data 04 7C 04 7C 25 7C <float LE> 7C (one 0x25 property).
+        void EntryCond(int iref, uint count, float condition)
+        {
+            DIref3(iref); data.Add(0x7C); DU32(count); data.Add(0x7C);
+            data.AddRange([0x04, 0x7C, 0x04, 0x7C, 0x25, 0x7C]);
+            var f = new byte[4]; BinaryPrimitives.WriteSingleLittleEndian(f, condition); data.AddRange(f); data.Add(0x7C);
+        }
         data.AddRange([0x00, 0x00, 0x00, 0x00, 0x7C, 0x00, 0x00, 0x00, 0x00, 0x7C]); // zeroed preamble (skipped by the locator)
         // Each entry references the FormID array by (index + 1) and carries its own count, so to give the
         // forms at array index 1/2/3 the counts 5/9/1 the references are 2/3/4 (verified by a controlled
-        // in-game diff on a real save).
-        Entry(2, 5);  // ref 2 -> FormIdArray[1] = 0x00AAAA01, x5
-        Entry(3, 9);  // ref 3 -> FormIdArray[2] = 0x00AAAA02, x9
-        Entry(4, 1);  // ref 4 -> FormIdArray[3] = 0x00AAAA03, x1
-        // Past a run-break gap, a *longer* run that repeats a single reference (a misaligned read of a
-        // record's non-item data). The decoder must still pick the real list above — it has more distinct
-        // references — even though this run has more entries.
-        data.AddRange(Enumerable.Repeat((byte)0x00, 2200)); // gap > InventoryExtraWindow ends the real run
+        // in-game diff on a real save). The middle stack carries a condition (0x25) property — its exact
+        // length is what lets the deterministic walk reach the next stack without a scan window.
+        Entry(2, 5);            // ref 2 -> FormIdArray[1] = 0x00AAAA01, x5
+        EntryCond(3, 9, 75f);   // ref 3 -> FormIdArray[2] = 0x00AAAA02, x9, condition 75
+        Entry(4, 1);            // ref 4 -> FormIdArray[3] = 0x00AAAA03, x1
+        // Elsewhere in the record, a *longer* run that repeats a single reference (a misaligned read of a
+        // record's non-item data). The deterministic walk builds each contiguous chain by exact extra-data
+        // length, then picks the real list above — it has more distinct references — even though this run
+        // has more entries. The zero gap just separates the two chains (no run-merge window any more).
+        data.AddRange(Enumerable.Repeat((byte)0x00, 64));
         for (var i = 0; i < 12; i++) Entry(2, (uint)(50 - i));
 
         var rec = new List<byte>();

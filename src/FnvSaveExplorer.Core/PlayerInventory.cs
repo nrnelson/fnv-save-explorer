@@ -13,6 +13,22 @@ public sealed record InventoryItem(int Iref, uint FormId, uint Count, int CountV
 {
     /// <summary>The mod (plugin load-order) index of the item's FormID — its high byte.</summary>
     public int ModIndex => (int)(FormId >> 24);
+
+    /// <summary>The stack's condition/health (a weapon/armor's degradation float), or null if the stack
+    /// carries no condition extra-data (ammo, aid, misc, or undamaged-and-never-tracked items).</summary>
+    public float? Condition { get; init; }
+
+    /// <summary>Absolute file offset of the 4-byte little-endian <see cref="Condition"/> float — the
+    /// editable field (a safe same-length splice), or null when the stack has no condition.</summary>
+    public int? ConditionValueOffset { get; init; }
+
+    /// <summary>True when the stack is equipped/worn (the <c>0x16</c> extra-data flag is present).</summary>
+    public bool Equipped { get; init; }
+
+    /// <summary>FormID-array irefs carried by the stack's <c>0x21</c> extra-data properties — an attached
+    /// <b>weapon mod</b> when the stack is a weapon, though the type's full semantics aren't pinned (some
+    /// mods reuse the slot for other linked references, e.g. a "Bill of Sale" note on a consumable).</summary>
+    public IReadOnlyList<int> ExtraRefIds { get; init; } = [];
 }
 
 /// <summary>

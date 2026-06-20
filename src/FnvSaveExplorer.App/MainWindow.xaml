@@ -123,13 +123,15 @@
                     <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10" Text="{Binding InventoryInfo}"/>
                         <DataGrid ItemsSource="{Binding Inventory}" AutoGenerateColumns="False" CanUserAddRows="False"
-                                  HeadersVisibility="Column" FontFamily="Consolas" Width="700" HorizontalAlignment="Left"
+                                  HeadersVisibility="Column" FontFamily="Consolas" Width="820" HorizontalAlignment="Left"
                                   MaxHeight="340" Margin="0,0,0,10">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Name" Binding="{Binding Name}" IsReadOnly="True" Width="180"/>
-                                <DataGridTextColumn Header="Item (FormID)" Binding="{Binding Item}" IsReadOnly="True" Width="220"/>
+                                <DataGridTextColumn Header="Item (FormID)" Binding="{Binding Item}" IsReadOnly="True" Width="200"/>
                                 <DataGridTextColumn Header="Source (mod)" Binding="{Binding Source}" IsReadOnly="True" Width="160"/>
-                                <DataGridTextColumn Header="Count" Binding="{Binding Count, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+                                <DataGridTextColumn Header="Count" Binding="{Binding Count, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                                <DataGridCheckBoxColumn Header="Equipped" Binding="{Binding Equipped}" IsReadOnly="True" Width="70"/>
+                                <DataGridTextColumn Header="Condition" Binding="{Binding Condition, UpdateSourceTrigger=PropertyChanged}" Width="90"/>
                             </DataGrid.Columns>
                         </DataGrid>
                         <TextBlock Text="Game Data folder (base game + DLC)" Foreground="Gray"/>

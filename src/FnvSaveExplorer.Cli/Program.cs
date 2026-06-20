@@ -27,10 +27,13 @@ if (args.Length < 2)
                                               the game masters; dataDir overrides Data-folder auto-detect)
           fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
           fnvsave setcount <in.fos> <out.fos> <formId> <count>  Edit a stack count (writes a new file)
+          fnvsave setcondition <in.fos> <out.fos> <formId> <value>  Edit a stack's condition/health (new file)
           fnvsave diff <a.fos> <b.fos> [body|cf]   Byte-diff two saves (best on controlled pairs); 'body'
                                               hides header/screenshot churn, 'cf' restricts to change forms
                                               and names the containing record for each differing run
           fnvsave walk <save.fos>             Walk all change-form records (validates the header format; R&D)
+          fnvsave refdump <save.fos> [iref]  Decode a reference change form (default: the player inventory
+                                              record): changeFlags bits + 0x7C-field walk (R&D for §6 inventory)
         """);
     return 1;
 }
@@ -87,6 +90,9 @@ try
         case "walk":
             Walk(FalloutSave.Load(path));
             break;
+        case "refdump":
+            RefDump(FalloutSave.Load(path), path, args.Length > 2 ? (int)ParseOffset(args[2]) : (int?)null);
+            break;
         case "idiff":
             IDiff(path, args[2]);
             break;
@@ -114,6 +120,8 @@ try
             break;
         case "setcount":
             return SetCount(path, args[2], ParseOffset(args[3]), uint.Parse(args[4]));
+        case "setcondition":
+            return SetCondition(path, args[2], ParseOffset(args[3]), float.Parse(args[4]));
         default:
             Console.Error.WriteLine($"Unknown command: {command}");
             return 1;
@@ -388,7 +396,14 @@ static void Inventory(FalloutSave s, string savePath, string? dataDir)
     {
         var name = db.Resolve(item.FormId) ?? "?";
         var src = s.FriendlySourceForModIndex(item.ModIndex) ?? "?";
-        Console.WriteLine($"  {name,-28}  0x{item.FormId:X8} (mod {item.ModIndex:X2})  {src,-22}  x{item.Count,-6} iref {item.Iref,-6} (edit 0x{item.CountValueOffset:X})");
+        var extra = "";
+        if (item.Condition is { } c)
+            extra += $"  cond {c:0.#}";
+        if (item.Equipped)
+            extra += "  [equipped]";
+        if (item.ExtraRefIds.Count > 0)
+            extra += $"  0x21-ref: {string.Join(", ", item.ExtraRefIds.Select(r => db.Resolve(s.ResolveIref(r)) ?? $"0x{s.ResolveIref(r):X8}"))}";
+        Console.WriteLine($"  {name,-28}  0x{item.FormId:X8} (mod {item.ModIndex:X2})  {src,-22}  x{item.Count,-6} iref {item.Iref,-6} (edit 0x{item.CountValueOffset:X}){extra}");
     }
 }
 
@@ -430,6 +445,26 @@ static int SetCount(string inPath, string outPath, uint formId, uint count)
     Console.WriteLine($"0x{formId:X8}: {old} -> {now};  size {before.Length:N0} -> {after.Length:N0}");
     var ok = now == count && before.Length == after.Length;
     Console.WriteLine(ok ? "OK: count edit applied, size unchanged, re-parses." : "FAIL: did not verify.");
+    return ok ? 0 : 4;
+}
+
+static int SetCondition(string inPath, string outPath, uint formId, float value)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+    var old = save.Inventory?.Items.FirstOrDefault(i => i.FormId == formId && i.ConditionValueOffset is not null)?.Condition;
+    if (!save.TrySetItemCondition(formId, value))
+    {
+        Console.WriteLine($"FAIL: 0x{formId:X8} has no condition-bearing stack in this inventory (or inventory not located).");
+        return 4;
+    }
+    save.Save(outPath, backup: false);
+
+    var after = File.ReadAllBytes(outPath);
+    var now = FalloutSave.Parse(after).Inventory?.Items.FirstOrDefault(i => i.FormId == formId && i.ConditionValueOffset is not null)?.Condition;
+    Console.WriteLine($"0x{formId:X8}: condition {old} -> {now};  size {before.Length:N0} -> {after.Length:N0}");
+    var ok = now == value && before.Length == after.Length;
+    Console.WriteLine(ok ? "OK: condition edit applied, size unchanged, re-parses." : "FAIL: did not verify.");
     return ok ? 0 : 4;
 }
 
@@ -623,6 +658,87 @@ static void Walk(FalloutSave s)
     Console.WriteLine("\n12 largest change forms:");
     foreach (var cf in s.EnumerateChangeForms().OrderByDescending(c => c.DataLength).Take(12))
         Console.WriteLine($"   @0x{cf.Offset:X}  iref {cf.Iref,6} -> 0x{cf.FormId:X8}  type 0x{cf.TypeByte:X2}  flags 0x{cf.ChangeFlags:X8}  len {cf.DataLength,7:N0}");
+}
+
+static void RefDump(FalloutSave s, string savePath, int? iref)
+{
+    // R&D microscope for ROADMAP §6 ★: decode a reference change form (REFR/ACHR/container) into its
+    // changeFlags bits + a 0x7C-delimited field walk, so the inventory list and per-stack extra data can
+    // be cracked into a deterministic parse. Default target: the player inventory record (PlayerRef iref+1).
+    FnvSaveExplorer.Core.FalloutSave.ChangeFormHeader? target = null;
+    if (iref is { } want)
+    {
+        foreach (var c in s.EnumerateChangeForms())
+            if (c.Iref == want) { target = c; break; }
+        if (target is null) { Console.WriteLine($"No change form with iref {want}."); return; }
+    }
+    else
+    {
+        var playerRef = s.FindIref(0x14);
+        if (playerRef < 0) { Console.WriteLine("PlayerRef (0x14) not in FormID array."); return; }
+        foreach (var c in s.EnumerateChangeForms())
+            if (c.Iref == playerRef + 1) { target = c; break; }
+        if (target is null) { Console.WriteLine($"Player inventory record (iref {playerRef + 1}) not found."); return; }
+    }
+    var cf = target.Value;
+    var db = PluginDatabase.ForSave(s, null, GameDataLocator.FindMo2Mods(savePath));
+
+    Console.WriteLine($"Reference change form @0x{cf.Offset:X}");
+    Console.WriteLine($"  iref {cf.Iref} -> 0x{cf.FormId:X8} {db.Resolve(cf.FormId) ?? ""}");
+    Console.WriteLine($"  typeByte 0x{cf.TypeByte:X2} (formType 0x{cf.FormType:X2})  version 0x{cf.Version:X2}  data @0x{cf.DataOffset:X} len {cf.DataLength}");
+    Console.WriteLine($"  changeFlags 0x{cf.ChangeFlags:X8} = {ReferenceChangeForm.DescribeFlags(cf.ChangeFlags)}");
+
+    var data = s.ReadAt(cf.DataOffset, cf.DataLength);
+    var fields = ReferenceChangeForm.Tokenize(data, cf.DataOffset);
+    Console.WriteLine($"\n0x7C field walk ({fields.Count} fields):");
+
+    var zeroRun = 0;
+    var zeroRunStart = 0;
+    void FlushZeroRun()
+    {
+        if (zeroRun == 0) return;
+        Console.WriteLine($"  @0x{zeroRunStart:X}  [x{zeroRun}] zero u32 fields (00 00 00 00)");
+        zeroRun = 0;
+    }
+
+    for (var i = 0; i < fields.Count; i++)
+    {
+        var f = fields[i];
+        // Collapse the long runs of zeroed u32 arrays so real structure stands out.
+        if (f.Length == 4 && f.AsUInt32 == 0)
+        {
+            if (zeroRun++ == 0) zeroRunStart = f.Offset;
+            continue;
+        }
+        FlushZeroRun();
+
+        var hex = string.Join(' ', f.Bytes.Take(16).Select(b => b.ToString("X2")));
+        if (f.Length > 16) hex += " …";
+        var note = "";
+        if (f.AsRefId is { } refId)
+        {
+            // An item entry is a 3-byte ref field immediately followed by a 4-byte count field; the ref is
+            // the FormID-array index + 1 (§4g). Flag those, plus any bare iref that resolves.
+            var item = refId > 0 ? s.ResolveIref(refId - 1) : 0;
+            var nextIsCount = i + 1 < fields.Count && fields[i + 1].Length == 4;
+            if (item != 0 && nextIsCount)
+                note = $"  <- ITEM  0x{item:X8} {db.Resolve(item) ?? "?"}  x{fields[i + 1].AsUInt32}";
+            else if (refId > 0 && s.ResolveIref(refId) is var bare && bare != 0)
+                note = $"  refId {refId} -> 0x{bare:X8} {db.Resolve(bare) ?? ""}";
+        }
+        else if (f.Length == 4)
+            note = $"  u32 {f.AsUInt32}  f32 {f.AsSingle:0.###}";
+        else if (f.Length == 1)
+            note = $"  u8 0x{f.Bytes[0]:X2} ({f.Bytes[0]})";
+        else if (f.Length == 0)
+            note = "  (empty)";
+
+        Console.WriteLine($"  [{i,4}] @0x{f.Offset:X} len {f.Length,2}: {hex,-32}{note}");
+    }
+    FlushZeroRun();
+
+    var end = fields.Count > 0 ? fields[^1].Offset + fields[^1].Length : cf.DataOffset;
+    Console.WriteLine($"\nlast field ends @0x{end:X}; record data ends @0x{cf.DataOffset + cf.DataLength:X} (delta {cf.DataOffset + cf.DataLength - end}).");
 }
 
 static void IrefScan(FalloutSave s, uint offset, int len)

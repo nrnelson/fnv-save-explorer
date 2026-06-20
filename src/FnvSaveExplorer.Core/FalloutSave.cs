@@ -637,11 +637,12 @@ public sealed class FalloutSave
         }
     }
 
-    private const int InventoryMinEntries = 3;    // enough to distinguish a real item list from coincidence
-    private const int InventoryExtraWindow = 2048; // max bytes between consecutive stacks before a run breaks. A
-                                                   // modded item's extra data (condition + weapon mods) can split the
-                                                   // list by hundreds of bytes; this keeps those fragments in one run
-                                                   // while staying far below the gap to unrelated data later in the record.
+    private const int InventoryMinEntries = 3;     // enough to distinguish a real item list from coincidence
+    private const int InventoryResyncWindow = 512; // bounded forward resync used ONLY when a stack carries an
+                                                   // extra-data property type we can't yet size (rare, modded
+                                                   // weapons). Replaces the old 2048-byte scan window — the walk
+                                                   // is otherwise exact (each stack's length comes from its decoded
+                                                   // extra data), so there is no run-merging or distinct-ref scoring.
 
     /// <summary>
     /// Locates the player's inventory change form and decodes its item stacks. The player's inventory
@@ -658,55 +659,101 @@ public sealed class FalloutSave
         {
             if (cf.Iref != playerRefIref + 1)
                 continue;
-            var inv = ParseInventoryRun(cf);
-            return inv.Items.Count >= InventoryMinEntries ? inv : null;
+            var inv = WalkInventory(cf);
+            return inv is { } v && v.Items.Count >= InventoryMinEntries ? v : null;
         }
         return null;
     }
 
     /// <summary>
-    /// Parses the longest contiguous run of inventory stacks out of a record's data. Entries are scanned
-    /// across the whole record and grouped into runs; a gap larger than <see cref="InventoryExtraWindow"/>
-    /// bytes (more than a stack's variable extra data — condition / equip state) breaks the run. The
-    /// longest run is the item list, which excludes the record's leading 3D/position preamble and any
-    /// unrelated binary data later in the record.
+    /// Deterministically walks the inventory list in a reference change form. Each stack is the fixed
+    /// 9-byte <c>[ref:3][7C][count:u32][7C]</c> entry followed by a per-stack extra-data block whose exact
+    /// byte length is computed from its decoded properties (condition / equipped / weapon mods; see
+    /// <see cref="ReferenceChangeForm.TryReadStackExtra"/>), so we advance to the next stack precisely — no
+    /// 2048-byte window, no most-distinct-run scoring. The item list is the longest contiguous chain of
+    /// validated stacks: the record's gated 3D preamble and its own extra-data list form at most short
+    /// coincidental chains (their pseudo-refs carry a <c>0x7C</c> inside the count field and reject), while
+    /// the real inventory is one long run. Among the chains found, the item list is the one with the most
+    /// <em>distinct</em> references: a misaligned read of non-item data forms a chain that repeats a handful
+    /// of refs, so it scores far below the genuine list even if it happens to have more entries. Returns
+    /// null if no item list is found.
     /// </summary>
-    private PlayerInventory ParseInventoryRun(ChangeFormHeader cf)
+    private PlayerInventory? WalkInventory(ChangeFormHeader cf)
     {
         var end = cf.DataOffset + cf.DataLength;
-        var best = new List<InventoryItem>();
+        List<InventoryItem>? best = null;
         var bestScore = 0;
-        var current = new List<InventoryItem>();
-        var lastEnd = int.MinValue;
         for (var p = cf.DataOffset; p + 9 <= end;)
         {
-            if (!TryReadInventoryEntry(p, out var iref, out var formId, out var count))
+            if (!TryReadInventoryEntry(p, out _, out _, out _))
             {
                 p++;
                 continue;
             }
-            if (current.Count > 0 && p - lastEnd > InventoryExtraWindow)
+            var chain = BuildChain(p, end, out var chainEnd);
+            var score = chain.Select(i => i.Iref).Distinct().Count();
+            if (score > bestScore)
             {
-                Consider(current, ref best, ref bestScore);
-                current = [];
+                best = chain;
+                bestScore = score;
             }
-            current.Add(new InventoryItem(iref, formId, count, p + 4));
-            lastEnd = p + 9;
-            p += 9; // skip the fixed entry; its extra data is re-scanned but won't validate as an entry
+            p = chainEnd > p ? chainEnd : p + 1; // skip past this chain (chains can't overlap)
         }
-        Consider(current, ref best, ref bestScore);
-        return new PlayerInventory(cf.DataOffset, best);
+        return best is { Count: >= InventoryMinEntries } ? new PlayerInventory(cf.DataOffset, best) : null;
+    }
 
-        // Pick the run with the most *distinct* item references, not the most entries: a misaligned read
-        // of non-item data (a record's 3D/script region) forms a long run that repeats a handful of refs,
-        // so it scores far lower than the genuine item list even when it has more raw entries.
-        static void Consider(List<InventoryItem> run, ref List<InventoryItem> best, ref int bestScore)
+    /// <summary>Walks one contiguous chain of inventory stacks from <paramref name="start"/>, decoding each
+    /// stack's extra data. Outputs <paramref name="chainEnd"/> (the offset where the chain stopped).</summary>
+    private List<InventoryItem> BuildChain(int start, int end, out int chainEnd)
+    {
+        var items = new List<InventoryItem>();
+        var p = start;
+        while (p + 9 <= end && TryReadInventoryEntry(p, out var iref, out var formId, out var count))
         {
-            if (run.Count == 0) return;
-            var distinct = new HashSet<int>(run.Count);
-            foreach (var i in run) distinct.Add(i.Iref);
-            if (distinct.Count > bestScore) { best = run; bestScore = distinct.Count; }
+            var after = AdvancePastStack(p, end, out var extra);
+            items.Add(new InventoryItem(iref, formId, count, p + 4)
+            {
+                Condition = extra.Condition,
+                ConditionValueOffset = extra.ConditionOffset,
+                Equipped = extra.Equipped,
+                ExtraRefIds = extra.ModRefIds,
+            });
+            if (after <= p)
+            {
+                p = after <= p ? p + 9 : after; // chain ends; still account for this stack's bytes
+                break;
+            }
+            p = after;
         }
+        chainEnd = p;
+        return items;
+    }
+
+    /// <summary>
+    /// Returns the offset just past the stack at <paramref name="p"/> — its fixed 9-byte entry plus the
+    /// per-stack extra-data block — and outputs the decoded <paramref name="extra"/>. When the extra data
+    /// uses a property type we can't yet size (structured/mod-added), it resyncs to the next structurally
+    /// valid stack within <see cref="InventoryResyncWindow"/> bytes (any condition/equip we did decode is
+    /// still returned). Returns -1 if it can't advance.
+    /// </summary>
+    private int AdvancePastStack(int p, int end, out ReferenceChangeForm.StackExtra extra)
+    {
+        extra = ReferenceChangeForm.StackExtra.None;
+        var exStart = p + 9;
+        if (exStart > end)
+            return -1;
+        var data = _raw.AsSpan(0, end); // index == absolute file offset
+        if (ReferenceChangeForm.TryReadStackExtra(data, exStart, 0, out var ex))
+        {
+            extra = ex;
+            if (ex.FullyDecoded)
+                return exStart + ex.ByteLength;
+        }
+        // Unknown/structured extra-data type: fall back to a bounded forward resync to the next valid stack.
+        for (var r = exStart + 1; r <= Math.Min(end - 9, exStart + InventoryResyncWindow); r++)
+            if (TryReadInventoryEntry(r, out _, out _, out _))
+                return r;
+        return -1;
     }
 
     /// <summary>
@@ -751,6 +798,23 @@ public sealed class FalloutSave
         if (item is null)
             return false;
         StageUInt32(item.CountValueOffset, count);
+        return true;
+    }
+
+    /// <summary>
+    /// Stages a same-length edit to a stored item's condition/health (the <c>0x25</c> extra-data float —
+    /// e.g. repair-to-full). Safe: the condition is a fixed-width little-endian float. Returns false if the
+    /// inventory wasn't located, no stack of <paramref name="formId"/> is present, or that stack carries no
+    /// condition extra-data (ammo/aid/misc, or an item the engine never tracked condition for).
+    /// </summary>
+    public bool TrySetItemCondition(uint formId, float condition)
+    {
+        if (Inventory is not { } inv)
+            return false;
+        var item = inv.Items.FirstOrDefault(i => i.FormId == formId && i.ConditionValueOffset is not null);
+        if (item?.ConditionValueOffset is not { } offset)
+            return false;
+        StageSingle(offset, condition);
         return true;
     }
 

@@ -20,9 +20,10 @@ a CLI — and validated against real saves.
 | **Player SPECIAL** (S P E C I A L) | ✅ decoded **and safely editable** — verified on all 16 saves (each sums to 40) |
 | **Player skills** (actor-value block in the PlayerRef change form) | ✅ decoded **and safely editable** — format + 13-skill index map verified; storage is sparse (modified-only) |
 | **Change-form record header / walker** | ✅ decoded — walks to exactly `ChangeFormCount` records, lands on `GlobalData3Offset` (both characters, fresh→4 h) |
-| **Player inventory** (item stacks in the player's inventory change form) | ✅ decoded **and safely editable** — `[ref][7C][u32 count][7C]` entries (`ref` = FormID-array index + 1); confirmed by a controlled diff (Antivenom 1→2→1) — every stack resolves with correct counts |
+| **Player inventory** (item stacks in the player's inventory change form) | ✅ **deterministic** decode **and safely editable** — `[ref][7C][u32 count][7C]` + per-stack extra data (`ref` = index + 1); confirmed by controlled diffs (Antivenom 1→2→1) — every stack resolves with correct counts, no scan window |
+| **Item condition / equipped / mods** (per-stack extra data) | ✅ cracked by a controlled 3-save diff — condition (`0x25` float, **editable**), equipped (`0x16`), weapon-mod ref (`0x21`); surfaced in CLI + GUI |
 | **FormID → display name** (item names from the game's ESM/ESP masters) | ✅ custom TES4 reader resolves inventory/FormID names (Stimpak, Vault 21 Jumpsuit…); all 10 base+DLC plugins parse, DLC renumbering + compressed records handled |
-| **Change forms** (per-stack extra data, perks, per-actor state) | 🔬 walker + inventory + skills decoded; remaining per-record internals **next** |
+| **Change forms** (perks, per-actor state, deterministic list start) | 🔬 walker + inventory + skills + per-stack extra data decoded; remaining per-record internals **next** |
 
 ## The `.fos` format (validated against real New Vegas saves)
 
@@ -106,11 +107,14 @@ decoding any per-record state.
 
 **Player inventory.** Items are **not** in the PlayerRef ACHR record (that's actor state) but in a
 dedicated reference change form (iref = PlayerRef + 1). Its entries are
-`[ref:3 BE][7C][count:u32 LE][7C]` (plus per-stack extra data — condition/equip — not yet decoded),
-where `ref` is the **FormID-array index + 1** (the item is `FormIdArray[ref - 1]`) and `count` is the
-entry's own stack count. A controlled in-game diff (add then consume one Antivenom) pinned the count
-moving **1 → 2 → 1**, confirming both the `+ 1` encoding and that counts are **safely editable** in
-place. Every stack resolves to its **display name** (see below).
+`[ref:3 BE][7C][count:u32 LE][7C]` followed by a per-stack **extra-data block**, where `ref` is the
+**FormID-array index + 1** (the item is `FormIdArray[ref - 1]`) and `count` is the entry's own stack
+count. A controlled in-game diff (add then consume one Antivenom) pinned the count moving **1 → 2 → 1**,
+confirming both the `+ 1` encoding and that counts are **safely editable** in place. The decoder is
+**deterministic** — the extra-data block's exact length is decoded, so the walk advances stack-to-stack
+without a scan window. The extra data was cracked by a controlled 3-save diff (equip a 9mm pistol, then
+repair it): **condition/health** (`0x25`, a float — **editable**, e.g. repair-to-full), the **equipped**
+flag (`0x16`), and a weapon-mod ref (`0x21`). Every stack resolves to its **display name** (see below).
 
 **FormID → display name.** A small custom **TES4 plugin reader** (`Core/TesPlugin.cs`) reads the
 game's ESM/ESP masters and builds a `FormID → FULL/EDID` index, so inventory (and any FormID the tool
@@ -122,9 +126,11 @@ handles **DLC renumbering**; **compressed records** (zlib) and `GRUP`-skipping o
 `Data` folder is auto-detected (with an override); when it isn't found, FormIDs fall back to hex.
 A runtime-created `0xFF…` FormID shows `(created)`; a form not found in the masters shows `?`.
 
-**Still next:** per-stack extra data, perks, and other per-record internals — reachable now that the
-walker enumerates records. This needs controlled in-game diffs (change one thing, save, byte-diff) —
-the tooling (`walk`, `find`, `diff … cf`, `idiff`, `probe`, `hex`, `playerdump`) is in place to support it.
+**Still next:** perks and other per-record internals — and making the inventory list *start* fully
+`changeFlags`-driven (the per-stack walk is already exact; the start still uses chain selection). Reachable
+now that the walker enumerates records. This needs controlled in-game diffs (change one thing, save,
+byte-diff) — the tooling (`walk`, `refdump`, `find`, `diff … cf`, `idiff`, `probe`, `hex`, `playerdump`) is
+in place to support it.
 
 ## Architecture — the "retention model"
 
@@ -139,7 +145,7 @@ even though the body isn't fully understood.
 - `src/FnvSaveExplorer.Core` — UI-agnostic parser/writer (`FalloutSave`, `ByteReader`, `SaveScreenshot`)
   plus the FormID-name resolver (`TesPlugin`, `PluginDatabase`, `GameDataLocator`).
 - `src/FnvSaveExplorer.App` — WPF GUI: screenshot, character panel, plugins, File Location Table, SPECIAL/skills/safe edits, named inventory.
-- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`, `special`, `skills`, `setskill`, `inventory`, `setcount`, `names`, `walk`, `find`, `diff`/`idiff`, `playerdump`, … (run with no args to list all).
+- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`, `special`, `skills`, `setskill`, `inventory`, `setcount`, `setcondition`, `names`, `walk`, `refdump`, `find`, `diff`/`idiff`, `playerdump`, … (run with no args to list all).
 - `tests/FnvSaveExplorer.Tests` — synthetic-save unit tests + a theory that round-trips every real `.fos` it finds.
 
 ## Usage
@@ -177,10 +183,12 @@ offset. The recipe to locate any value (a skill, caps, a perk):
 ## Next: decoding the body (R&D)
 
 The header, File Location Table, global-data tables, Misc Stats, the FormID array, the change-form
-record header/walker, SPECIAL, skills, inventory item stacks, and FormID→display-name resolution are
-decoded. Remaining:
+record header/walker, SPECIAL, skills, inventory item stacks **and their per-stack extra data**
+(condition / equipped / mods), and FormID→display-name resolution are decoded. Remaining:
 
-1. **Per-stack inventory extra data** — condition / equip state / weapon mods attached to each stack.
+1. **Deterministic inventory list start** — the per-stack walk is exact (no window); the list *start* is
+   still chosen by chain selection. Decode the record's `changeFlags` sections + gated 3D preamble to find
+   it with no scoring (`refdump` is the microscope for this).
 2. **Caps / karma / XP** — caps may simply be an inventory stack; karma/XP via controlled diffs.
 3. **Other per-record state** (perks, quest/script data) — now enumerable record-by-record via the
    walker; crack each with a controlled in-game change → `idiff`, cross-referencing FormIDs in FNVEdit.

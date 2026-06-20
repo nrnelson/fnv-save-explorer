@@ -75,6 +75,21 @@ public sealed class InventoryRow : INotifyPropertyChanged
         set { if (_count != value) { _count = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Count))); } }
     }
 
+    /// <summary>True when the stack is equipped/worn (read-only display).</summary>
+    public bool Equipped { get; init; }
+
+    /// <summary>The stack's condition when loaded, or null if it carries no condition extra-data.</summary>
+    public float? OriginalCondition { get; init; }
+
+    private float? _condition;
+    /// <summary>The stack's editable condition/health (a same-length float splice), or null for stacks
+    /// (ammo/aid/misc) that carry none — those reject edits.</summary>
+    public float? Condition
+    {
+        get => _condition;
+        set { if (!Nullable.Equals(_condition, value)) { _condition = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Condition))); } }
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 }
 
@@ -280,6 +295,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 Source = save.FriendlySourceForModIndex(item.ModIndex) ?? "",
                 Count = item.Count,
                 OriginalCount = item.Count,
+                Equipped = item.Equipped,
+                Condition = item.Condition,
+                OriginalCondition = item.Condition,
             });
         InventoryInfo = DescribeInventory(Inventory.Count, db);
     }
@@ -287,10 +305,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private static string DescribeInventory(int stacks, PluginDatabase db) =>
         db.Count > 0
             ? $"Player inventory ({stacks} stacks). Names resolved from the game masters in {db.DataFolder}. " +
-              "Stack counts edit in place (same-length); edit a Count and Apply, then Save As."
+              "Count and Condition (weapon/armor health) edit in place (same-length); edit a value and Apply, then Save As."
             : $"Player inventory ({stacks} stacks). Item names need the game's Data folder (FalloutNV.esm) — " +
-              "not found automatically. Set the Data folder below and click Resolve names. Stack counts edit " +
-              "in place (same-length); edit a Count and Apply, then Save As.";
+              "not found automatically. Set the Data folder below and click Resolve names. Count and Condition " +
+              "edit in place (same-length); edit a value and Apply, then Save As.";
 
     /// <summary>Stages the edit-tab values onto the loaded save (same-length / fixed-width only).</summary>
     public void ApplyEdits()
@@ -332,8 +350,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         // Only stage stacks whose count actually changed (editing by FormID targets the first matching
         // stack, so applying unchanged rows would be needless and could disturb duplicate-FormID stacks).
         foreach (var row in Inventory)
+        {
             if (row.Count != row.OriginalCount && !_save.TrySetItemCount(row.FormId, row.Count))
                 messages.Add($"could not apply count for 0x{row.FormId:X8}");
+            if (row.Condition is { } c && !Nullable.Equals(row.Condition, row.OriginalCondition)
+                && !_save.TrySetItemCondition(row.FormId, c))
+                messages.Add($"could not apply condition for 0x{row.FormId:X8}");
+        }
 
         Status = messages.Count == 0
             ? "Edits staged. Use \"Save As…\" to write a new .fos."

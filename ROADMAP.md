@@ -36,7 +36,8 @@ quicksave). The test theory auto-discovers them (and a local `samples/`) and ski
 
 CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setstat`, `formids`,
 `findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `inventory`, `setcount`,
-`names`, `setlevel`, `diff`, plus R&D helpers `walk`, `idiff`, `find`, `irefscan`. Run with no args to list them.
+`setcondition`, `names`, `setlevel`, `diff`, plus R&D helpers `walk`, `refdump`, `idiff`, `find`, `irefscan`.
+Run with no args to list them.
 
 ---
 
@@ -46,6 +47,7 @@ CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setst
   - `FalloutSave.cs` — parser, retention writer, all decoders + same-length editors, change-form walker.
   - `ByteReader.cs` — little-endian cursor; throws `SaveFormatException` with the failing offset.
   - `FileLocationTable.cs`, `GlobalData.cs`, `MiscStats.cs`, `PlayerSpecial.cs`, `PlayerSkills.cs`, `PlayerInventory.cs`, `SaveScreenshot.cs`.
+  - `ReferenceChangeForm.cs` — reference (REFR/ACHR) change-form helpers: the `0x7C` field tokenizer, `changeFlags` describer, and the per-stack extra-data catalog/decoder (`TryReadStackExtra`) behind the deterministic inventory walk (§4i).
   - `TesPlugin.cs`, `PluginDatabase.cs`, `GameDataLocator.cs` — FormID → display-name resolution from the game's ESM/ESP masters (§4h / §6.3).
 - **`src/FnvSaveExplorer.App`** (`net10.0-windows`, WPF MVVM) — `MainViewModel.cs`, `MainWindow.xaml`
   (+ code-behind for file dialogs). Tabs: Plugins, File Location Table, Edit (name/level/save#/SPECIAL),
@@ -167,6 +169,11 @@ inventory (Lead, caps, reloading components), and a 193 KB record's split item l
 1,414-count ammo stack that was dropped now appears. Editing a count is a **safe same-length splice**.
 Names resolve via §4h.
 
+> **Superseded:** the 2048-byte window above is gone — the per-stack extra data is now decoded, so each stack's
+> exact length is known and the walk is deterministic. See **§4i** for the current decoder + the extra-data catalog
+> (condition / equipped / mods). The list start is still chosen as the most-distinct contiguous chain, but those
+> chains are now exact, not gap-merged.
+
 ### 4h. FormID → display name — reading the game's ESM/ESP masters
 Every FormID the tool surfaces (inventory above all) is resolved to a human name by a small custom
 **TES4 plugin reader** (`TesPlugin`) over the game masters. FNV stores the `FULL` (display) name
@@ -209,6 +216,39 @@ blocks, and a non-item run elsewhere in the record was longer) — fixed by the 
 run selection in §4g (that VNV Courier save went from 0/127 named stacks to 105/110: Lead, caps,
 reloading components, …).
 
+### 4i. Per-stack extra data (condition / equipped / mods) — the deterministic inventory walk
+The inventory decoder is now **deterministic**: there is no 2048-byte scan window. Each stack is the fixed
+9-byte `[ref:3 BE][7C][count:u32 LE][7C]` entry followed by a per-stack **extra-data block** whose exact byte
+length is computed from its decoded properties, so the walk advances to the next stack precisely. Layout:
+```
+[a:u8][7C]                          a == 0x00  -> no extra data (block is 2 bytes)
+[a=04:u8][7C][b:u8][7C] props…      a == 0x04  -> b/4 typed properties follow
+property = [type:u8][7C] [payload][7C]   (the trailing [7C] only when the payload is non-empty)
+```
+Property type → payload catalog (**confirmed by a controlled 3-save diff** — vanilla Saves 31/32/33: equip a
+9mm pistol then repair it with a Weapon Repair Kit):
+- `0x25` **ExtraCondition** — 4-byte LE float (weapon/armor health). The repair moved exactly this float
+  `52.5 → 67.5`; it appears only on degradable gear. **Editable** as a same-length splice (`TrySetItemCondition`).
+- `0x16` **ExtraEquipped** — 0-byte flag; its presence means the stack is equipped/worn. It *appeared* on the
+  pistol when equipped (Save 31→32), and is present on the always-worn Pip-Boy / worn armor.
+- `0x21` — a 3-byte BE refID. On a weapon this is an attached **weapon mod**; the type is reused for other
+  linked refs (a VNV "Bill of Sale" note appears on a consumable), so the general semantics aren't pinned.
+- `0x0D` / `0x18` / `0x24` / `0x6E` — longer/structured or mod-added; payload length not yet pinned. When the
+  walk hits an un-sized type it falls back to a **bounded 512-byte resync** to the next valid stack (rare;
+  modded weapons only) — far tighter than the old window, and the list stays contiguous.
+
+The list **start** is still located by picking the chain with the most *distinct* references (the genuine list
+dominates the record's 3D-preamble pseudo-refs, which reject because a `0x7C` falls inside their count field),
+but it now scores **exact** contiguous chains rather than gap-merged runs. **Verified:** vanilla Save 31 reads
+36 stacks (the old window had absorbed one isolated count-0 straggler 0x700 bytes past the list — now correctly
+excluded; carried-item total 272 unchanged), and a 64 KB VNV record reads 103 stacks / 12,999 items with the
+previously-fragmented large stacks intact (Lead ×4240, Powder ×1967, …), conditions and equipped flags decoded.
+Tooling: `Core` `ReferenceChangeForm` (the `0x7C` tokenizer, `changeFlags` describer, and `TryReadStackExtra`
+catalog) + CLI `refdump` (decode a reference change form field-by-field; the microscope used to crack this).
+**Still deferred:** the full `changeFlags` bit→section map and a deterministic decode of the record's gated 3D
+preamble + its own extra-data list (so the list start would need no chain-scoring at all). `refdump` is in place
+for that follow-up.
+
 ---
 
 ## 5. Completed (with verification)
@@ -226,48 +266,36 @@ reloading components, …).
 | Player skills decode + edit (ACHR actor-value block, §4e) | ✅ format + index map verified; same-length float edit round-trips; sparse (modified-only) |
 | Change-form record header / walker (§4f) | ✅ exact: walks to `ChangeFormCount` records, lands on `GlobalData3Offset` (both characters, fresh→4 h) |
 | Player inventory decode + edit (§4g) | ✅ located via PlayerRef iref+1; `[ref][7C][u32 count][7C]` entries with **ref = array index + 1**; same-length count edit round-trips; confirmed by a controlled diff (Saves 28/29/30: Antivenom 1→2→1) — every stack resolves, no spurious rows |
+| Deterministic inventory walk + per-stack extra data (§4i) | ✅ 2048-byte window removed; extra-data catalog cracked by a controlled 3-save diff (31/32/33): `0x25`=condition float (**editable**, 52.5→67.5 on repair), `0x16`=equipped flag, `0x21`=ref (weapon mod). Save 31 = 36 stacks, VNV = 103 stacks/12,999 items; condition edit round-trips |
 | FormID → display name (§4h / §6.3) | ✅ custom TES4 reader over the ESM/ESP masters; 10/10 plugins of a real save parse, 3,985 named forms; DLC renumbering + compressed records handled; inventory CLI + GUI show names + source mod (friendly name) |
 | Mod Organizer 2 / modded saves (§4h) | ✅ auto-detects the MO2 `mods\` folder from an MO2 save path; a 43-plugin Viva New Vegas save resolves 43/43; large fragmented inventories reunited (a dropped 1,414-count stack recovered) |
 | WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory edit) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion |
-| Tests | ✅ 200 xUnit, all green |
+| Tests | ✅ 214 xUnit, all green |
+| Deterministic inventory decoder + condition edit (§4i) | ✅ window removed; condition (`0x25`) editable + equipped/`0x21` surfaced in CLI + GUI; condition edit round-trips |
 
 **Editable today:** level, save number, name (same-length), Misc Stats, full SPECIAL, stored skill
-modifications (§4e), inventory stack counts (§4g) — all safe same-length splices.
+modifications (§4e), inventory stack counts (§4g), **item condition/health (§4i)** — all safe same-length splices.
 
 ---
 
 ## 6. Next steps (in priority order)
 
-> ### ★ ACTIVE NEXT TASK — replace the heuristic inventory decoder with a deterministic `changeFlags`-driven one
+> ### ✅ DONE (was ★ ACTIVE) — deterministic inventory decoder + per-stack extra data (§4i)
 >
-> The inventory **reads correctly today**, but via a heuristic in `FalloutSave.ParseInventoryRun`
-> (`src/FnvSaveExplorer.Core/FalloutSave.cs`): scan the player's inventory change form (iref =
-> PlayerRef + 1, type `0x41`) for `[ref:3 BE][7C][count:u32 LE][7C]` entries (`ref` = FormID-array index
-> + 1, §4g), group entries into runs that break on a **> 2048-byte gap**, keep the run with the most
-> **distinct** refs, and — in the CLI/GUI — hide entries that don't resolve to a named item. **The
-> 2048-byte window is a hack:** it exists only because the per-stack extra data isn't decoded, so we can't
-> compute the exact distance to the next item.
+> The 2048-byte scan window is **gone**. The per-stack extra-data block is decoded, so each stack's exact
+> length is known and the walk advances deterministically (`FalloutSave.WalkInventory`/`AdvancePastStack` +
+> `ReferenceChangeForm.TryReadStackExtra`). The extra-data **type→length catalog** was cracked by a controlled
+> 3-save diff (vanilla 31/32/33: equip a 9mm pistol, then repair it): `0x25` = condition float (**editable**,
+> 52.5→67.5), `0x16` = equipped flag, `0x21` = a ref (weapon mod on weapons); structured/mod-added types fall
+> back to a bounded 512-byte resync. Surfaced + editable in CLI (`inventory`, `setcondition`) and GUI. New
+> R&D microscope: CLI `refdump`.
 >
-> **Goal — parse the reference change record deterministically (no scan, no window).** The record's
-> `changeFlags` (a u32 bitmask, already exposed on `ChangeFormHeader.ChangeFlags`) declares **which
-> sub-sections are present and their fixed order**; the change-form header `length` (`DataLength`) bounds
-> the record exactly. Walk each present sub-section by its own size to land on the inventory list, then
-> read its item **count** and each item **plus its extra data by length**.
->
-> **What's known.** A type-`0x41` record's data starts with 3D **position + rotation** (gated by the
-> move flags), then `7C`-delimited zeroed arrays, then the inventory list. An item entry is
-> `[ref:3][7C][count:u32][7C]` followed by per-stack extra data: `00 7C` (none) or
-> `04 7C 04 7C [type:u8] 7C [typedata] 7C` (seen: type `0x25` = a condition/health float; type `0x16` =
-> a longer block). **Missing pieces:** the `changeFlags` bit→section map + each section's format, the
-> inventory list's count header, and the extra-data **type→length catalog**.
->
-> **How.** Decode the `changeFlags` sections from UESP "Skyrim Save File Format" (ChangeForm /
-> `CHANGE_REFR_*`; FO3/FNV mirror it — see §8), and crack the extra-data types with controlled diffs
-> (§7): repair one weapon's condition → save → `diff`; add/remove a weapon mod → `diff`; equip/unequip →
-> `diff`. Then replace `ParseInventoryRun`'s scan+window with the deterministic walk (keep the
-> resolver-filter only as a safety net). Tools ready: `EnumerateChangeForms()`/`ChangeFormHeader`
-> (`ChangeFlags`/`DataOffset`/`DataLength`), CLI `walk`/`hex`/`diff`/`idiff`/`find`.
+> **★ Remaining (the deterministic *start*):** the list start is still picked as the most-distinct contiguous
+> chain rather than by walking the record's gated 3D preamble + its own extra-data list. To make the start
+> fully `changeFlags`-driven, decode the `changeFlags` bit→section map and the pre-inventory sections (MOVE
+> cell+pos+rot is known: 27 B; then `7C`-delimited zeroed arrays + the reference's own ExtraDataList). Tools
+> ready: `refdump` (decodes a reference record field-by-field + `changeFlags` bits), `walk`/`hex`/`diff`/`idiff`.
 
 1. ~~**Skills**~~ — ✅ **DONE** (§4e). Located via the controlled-diff method: skills are floats in
    the PlayerRef (`0x14`) actor-value modification block, not an inline structure. Decoder + index map
@@ -280,10 +308,10 @@ modifications (§4e), inventory stack counts (§4g) — all safe same-length spl
    same-length. Decoder + `TrySetItemCount` + CLI `inventory`/`setcount` + GUI Inventory tab shipped.
    Entry references are **array index + 1** (§4g) — fixed via a controlled diff (Saves 28/29/30), which
    made the whole list correct: every stack resolves, no spurious rows, and previously-missing items
-   (Antivenom, caps, Pip-Boy 3000, …) appear. Remaining nuance: the decoder is **heuristic** (scan +
-   distinct-run + window) — the ★ active task above replaces it with a deterministic `changeFlags` walk;
-   per-stack **extra data** (condition / equip / mods) isn't decoded yet, and editing targets the first
-   stack of a given FormID (duplicate-FormID stacks are ambiguous by FormID alone).
+   (Antivenom, caps, Pip-Boy 3000, …) appear. The decoder is now **deterministic** (§4i): the 2048-byte window
+   is gone, the per-stack **extra data** (condition / equipped / `0x21` ref) is decoded, and **condition is
+   editable**. Remaining nuance: editing targets the first stack of a given FormID (duplicate-FormID stacks are
+   ambiguous by FormID alone), and the list *start* still uses most-distinct-chain selection (§4i ★ remaining).
 3. ~~**Item / form name resolution (FormID → display name)**~~ — ✅ **DONE** (§4h). Small custom TES4
    reader (`TesPlugin`/`PluginDatabase`/`GameDataLocator`) over the ESM/ESP masters builds a
    `FormID → FULL/EDID` index in the save's FormID space; wired into CLI `inventory`/`formids`/`names`
@@ -340,12 +368,16 @@ modes: `diff a b cf` annotates each differing run with the change form that cont
 ---
 
 ## 9. Known limitations / risks
-- Change-form **internals**: skills (§4e) and inventory item stacks (§4g) are decoded; per-stack extra
-  data (condition/equip/mods), perks, and most other per-record state are not yet decoded — needs more
-  controlled diffs. The walker (§4f) makes these reachable record-by-record.
-- The inventory decoder is **heuristic** (scan for entries + merge runs within a 2048-byte window + keep
-  the most-distinct run + hide non-resolving entries), not a deterministic parse. It reads real saves
-  correctly, but the window is a stopgap until the `changeFlags`-driven decoder (§6 ★ active task) lands.
+- Change-form **internals**: skills (§4e), inventory item stacks (§4g), and per-stack extra data —
+  condition (`0x25`, editable), equipped (`0x16`), and the `0x21` ref (§4i) — are decoded; perks and most
+  other per-record state are not yet decoded — needs more controlled diffs. The walker (§4f) makes these
+  reachable record-by-record.
+- The inventory walk is **deterministic** per-stack (exact extra-data lengths; no window — §4i), but the
+  list *start* is still chosen as the most-distinct contiguous chain rather than by walking the record's
+  gated 3D preamble. Making the start fully `changeFlags`-driven is the §4i ★ remaining follow-up.
+- The `0x21` extra-data type is decoded as a 3-byte ref (length is right) but its **semantics** aren't
+  pinned — an attached weapon mod on weapons, but reused for other linked refs (a VNV "Bill of Sale"); a
+  few structured/mod-added types (`0x0D`/`0x18`/`0x24`/`0x6E`) aren't sized, so the walk resyncs (≤512 B).
 - Inventory editing targets the **first** stack of a given FormID; duplicate-FormID stacks (same item,
   different extra data) can't be disambiguated by FormID alone yet.
 - SPECIAL locator relies on the player-name field appearing in the player base record (held on all 16
