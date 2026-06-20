@@ -690,10 +690,18 @@ static void RefDump(FalloutSave s, string savePath, int? iref)
     Console.WriteLine($"  changeFlags 0x{cf.ChangeFlags:X8} = {ReferenceChangeForm.DescribeFlags(cf.ChangeFlags)}");
 
     var data = s.ReadAt(cf.DataOffset, cf.DataLength);
-    // The deterministic inventory start: skip the MOVE-gated preamble, then the first valid stack chain is
-    // the item list (ROADMAP §4i). Printed so the computed anchor can be eyeballed against the field walk.
+    // The deterministic inventory start: skip the MOVE block + the fixed 1160-byte havok/float array
+    // (ROADMAP §4i), landing on the reference ExtraDataList; the first valid stack chain after it is the
+    // item list. Printed (with the array span) so the anchor can be eyeballed against the field walk and the
+    // remaining ExtraDataList RE has its exact bounds.
     var searchStart = ReferenceChangeForm.InventorySearchStart(data, cf.DataOffset, cf.ChangeFlags);
-    Console.WriteLine($"  inventory search start (after MOVE-gated preamble) @0x{searchStart:X}");
+    if ((cf.ChangeFlags & ReferenceChangeForm.ChangeRefrMove) != 0 && ReferenceChangeForm.MoveBlockLength < data.Length
+        && data[ReferenceChangeForm.MoveBlockLength] == ReferenceChangeForm.Delimiter)
+    {
+        var arrayStart = cf.DataOffset + ReferenceChangeForm.MoveBlockLength + 1;
+        Console.WriteLine($"  MOVE block @0x{cf.DataOffset:X}..0x{arrayStart:X}  fixed havok array @0x{arrayStart:X}..0x{arrayStart + ReferenceChangeForm.GatedArrayBlockLength:X} ({ReferenceChangeForm.GatedArraySlotCount} slots)");
+    }
+    Console.WriteLine($"  inventory search start (ExtraDataList, after MOVE + fixed array) @0x{searchStart:X}");
 
     var fields = ReferenceChangeForm.Tokenize(data, cf.DataOffset);
     Console.WriteLine($"\n0x7C field walk ({fields.Count} fields):");

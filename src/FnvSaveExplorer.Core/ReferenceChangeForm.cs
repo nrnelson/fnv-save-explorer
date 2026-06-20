@@ -49,6 +49,28 @@ public static class ReferenceChangeForm
     /// followed by a single <c>0x7C</c> delimiter. Verified across every player inventory record.</summary>
     public const int MoveBlockLength = 27;
 
+    // ---- The fixed gated array between MOVE and the ExtraDataList ----------------------------------
+    // Immediately after the MOVE block, an inventory reference carries a run of fixed-width slots — the
+    // reference's zeroed havok/animation float arrays — before its ExtraDataList (which in turn precedes
+    // the item list). Each slot is a 4-byte value followed by a single 0x7C delimiter (5 bytes/slot).
+    //
+    // EMPIRICAL INVARIANT (all 30 real saves: both characters, fresh→4 h): this run is *always* exactly
+    // 232 slots / 1160 bytes — the boundary to the ExtraDataList sits at (afterMove + 1160) on every save,
+    // whether or not bit22 is set (flags 0xB0400832 vs 0xB0000832 land identically). So the block is a
+    // DETERMINISTIC skip, not a scan. We deliberately do not attribute the 1160 to individual changeFlags
+    // bits: bits 4 and 11 are set on every inventory record (so neither can be isolated), and bit22 is
+    // shown not to change this block — per the repo's "label, don't guess" rule the per-bit decomposition
+    // stays open while the block's total size is pinned. See ROADMAP §4i / §10.
+
+    /// <summary>Slots in the fixed havok/float array that follows the MOVE block (see above).</summary>
+    public const int GatedArraySlotCount = 232;
+
+    /// <summary>Bytes per gated-array slot: a 4-byte value + its single <c>0x7C</c> delimiter.</summary>
+    public const int GatedArraySlotStride = 5;
+
+    /// <summary>Total byte length of the fixed gated array (1160 = 232 × 5).</summary>
+    public const int GatedArrayBlockLength = GatedArraySlotCount * GatedArraySlotStride;
+
     /// <summary>
     /// Splits a record's payload into <c>0x7C</c>-delimited fields. <paramref name="data"/> is the payload
     /// bytes; <paramref name="dataOffset"/> is its absolute file offset (so each field carries its real
@@ -90,22 +112,46 @@ public static class ReferenceChangeForm
 
     /// <summary>
     /// The absolute offset at which to begin scanning for the inventory item list, by skipping the
-    /// changeFlags-gated fixed-size preamble that always precedes it. Currently that is the 27-byte MOVE
-    /// block (cell + position + rotation) when <see cref="ChangeRefrMove"/> is set. The variable-length
-    /// sections that follow (zeroed havok arrays + the reference's own ExtraDataList) aren't sized yet and
-    /// can yield short coincidental chains, so the caller advances from here to the first chain with enough
-    /// distinct references (the genuine list). <paramref name="data"/> is the record payload and
-    /// <paramref name="dataOffset"/> its absolute file offset. Falls back to <paramref name="dataOffset"/>
-    /// if the MOVE flag is clear or the block's trailing delimiter isn't where it's expected (a float
-    /// coordinate is never the start of the list, so the forward scan still lands correctly).
+    /// changeFlags-gated fixed-size preamble that precedes it: the 27-byte MOVE block (cell + position +
+    /// rotation, when <see cref="ChangeRefrMove"/> is set) <em>and</em> the fixed
+    /// <see cref="GatedArrayBlockLength"/>-byte havok/float array that follows it. Both are deterministic,
+    /// so this lands on the reference's ExtraDataList — the one remaining, still-undecoded section right
+    /// before the items — which the caller forward-scans to the first genuine stack chain.
+    /// <para><paramref name="data"/> is the record payload and <paramref name="dataOffset"/> its absolute
+    /// file offset. Each skip is structurally validated and degrades safely:</para>
+    /// <list type="bullet">
+    /// <item>MOVE flag clear or the block's trailing delimiter absent (a 0x7C fell inside a float
+    /// coordinate) → return <paramref name="dataOffset"/> (scan from the record start).</item>
+    /// <item>MOVE present but the fixed array isn't exactly <see cref="GatedArraySlotCount"/> delimited
+    /// slots (a synthetic or atypical record) → return just past MOVE, never mis-skipping.</item>
+    /// </list>
     /// </summary>
     public static int InventorySearchStart(ReadOnlySpan<byte> data, int dataOffset, uint changeFlags)
     {
-        if ((changeFlags & ChangeRefrMove) != 0
-            && MoveBlockLength < data.Length
-            && data[MoveBlockLength] == Delimiter)
-            return dataOffset + MoveBlockLength + 1; // 27-byte MOVE block + its 0x7C delimiter
-        return dataOffset;
+        // MOVE block (bit1): 27 bytes + a 0x7C delimiter. Without it we can't anchor — scan from the start.
+        if ((changeFlags & ChangeRefrMove) == 0 || MoveBlockLength >= data.Length || data[MoveBlockLength] != Delimiter)
+            return dataOffset;
+        var afterMove = MoveBlockLength + 1;
+
+        // Fixed havok/float array: GatedArraySlotCount delimited 4-byte slots. Skip it only when that exact
+        // structure is present (true on every real inventory record) so the result lands on the ExtraDataList;
+        // otherwise fall back to just-past-MOVE and let the forward scan handle the rest.
+        if (IsDelimitedSlotRun(data, afterMove, GatedArraySlotCount))
+            return dataOffset + afterMove + GatedArrayBlockLength;
+        return dataOffset + afterMove;
+    }
+
+    /// <summary>True when <paramref name="data"/> from <paramref name="start"/> holds <paramref name="slots"/>
+    /// consecutive <c>[4-byte value][0x7C]</c> slots — i.e. a delimiter at every <see cref="GatedArraySlotStride"/>th
+    /// byte. (A value's own bytes may include <c>0x7C</c>; only the fixed delimiter position is checked.)</summary>
+    static bool IsDelimitedSlotRun(ReadOnlySpan<byte> data, int start, int slots)
+    {
+        if (start < 0 || (long)start + (long)slots * GatedArraySlotStride > data.Length)
+            return false;
+        for (var i = 0; i < slots; i++)
+            if (data[start + i * GatedArraySlotStride + 4] != Delimiter)
+                return false;
+        return true;
     }
 
     /// <summary>Human description of the set bits in a reference record's <c>changeFlags</c> — labelled

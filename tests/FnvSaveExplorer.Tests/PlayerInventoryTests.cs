@@ -88,6 +88,34 @@ public class PlayerInventoryTests
 
     [Theory]
     [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_inventory_start_is_deterministic_past_the_fixed_havok_array(string path)
+    {
+        // Locks the structural finding (ROADMAP §4i): on every real inventory record the gated preamble is
+        // the 27-byte MOVE block + a *fixed* 1160-byte havok/float array, so the deterministic search start
+        // lands exactly at (dataOffset + MOVE + 1 + 1160) — no scan needed to clear it. Verified invariant
+        // across both characters, fresh→4 h, and whether or not bit22 is set.
+        var save = FalloutSave.Load(path);
+        var playerRef = save.FindIref(0x14);
+        if (playerRef < 0)
+            return;
+        FalloutSave.ChangeFormHeader? inv = null;
+        foreach (var c in save.EnumerateChangeForms())
+            if (c.Iref == playerRef + 1) { inv = c; break; }
+        if (inv is not { } cf || (cf.ChangeFlags & ReferenceChangeForm.ChangeRefrMove) == 0)
+            return; // not located, or no MOVE-gated preamble to measure
+
+        var data = save.ReadAt(cf.DataOffset, cf.DataLength);
+        var start = ReferenceChangeForm.InventorySearchStart(data, cf.DataOffset, cf.ChangeFlags);
+
+        var expected = cf.DataOffset + ReferenceChangeForm.MoveBlockLength + 1 + ReferenceChangeForm.GatedArrayBlockLength;
+        Assert.Equal(expected, start);
+        // And that offset really is the ExtraDataList (its leading 00 7C ... 00 00 80 3F float-1.0 signature),
+        // not mid-array: the last array slot's delimiter sits just before it.
+        Assert.Equal(ReferenceChangeForm.Delimiter, save.ReadAt(start - 1, 1)[0]);
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
     public void Real_saves_decode_and_safely_edit_inventory(string path)
     {
         var save = FalloutSave.Load(path);

@@ -20,7 +20,7 @@ a CLI — and validated against real saves.
 | **Player SPECIAL** (S P E C I A L) | ✅ decoded **and safely editable** — verified on all 16 saves (each sums to 40) |
 | **Player skills** (actor-value block in the PlayerRef change form) | ✅ decoded **and safely editable** — format + 13-skill index map verified; storage is sparse (modified-only) |
 | **Change-form record header / walker** | ✅ decoded — walks to exactly `ChangeFormCount` records, lands on `GlobalData3Offset` (both characters, fresh→4 h) |
-| **Player inventory** (item stacks in the player's inventory change form) | ✅ **deterministic** decode **and safely editable** — `[ref][7C][u32 count][7C]` + per-stack extra data (`ref` = index + 1); confirmed by controlled diffs (Antivenom 1→2→1) — every stack resolves with correct counts, no scan window; list start is `changeFlags`-anchored (MOVE skip + first ≥3-distinct chain), byte-identical on all 30 saves |
+| **Player inventory** (item stacks in the player's inventory change form) | ✅ **deterministic** decode **and safely editable** — `[ref][7C][u32 count][7C]` + per-stack extra data (`ref` = index + 1); confirmed by controlled diffs (Antivenom 1→2→1) — every stack resolves with correct counts, no scan window; list start skips the MOVE block + a **fixed 1160-byte havok array** (sized, invariant across all 30 saves) then takes the first ≥3-distinct chain in the short ExtraDataList, byte-identical on all 30 saves |
 | **Item condition / equipped / mods** (per-stack extra data) | ✅ cracked by a controlled 3-save diff — condition (`0x25` float, **editable**), equipped (`0x16`), weapon-mod ref (`0x21`); surfaced in CLI + GUI |
 | **FormID → display name** (item names from the game's ESM/ESP masters) | ✅ custom TES4 reader resolves inventory/FormID names (Stimpak, Vault 21 Jumpsuit…); all 10 base+DLC plugins parse, DLC renumbering + compressed records handled |
 | **Change forms** (perks, per-actor state, deterministic list start) | 🔬 walker + inventory + skills + per-stack extra data decoded; remaining per-record internals **next** |
@@ -115,9 +115,12 @@ confirming both the `+ 1` encoding and that counts are **safely editable** in pl
 without a scan window. The extra data was cracked by a controlled 3-save diff (equip a 9mm pistol, then
 repair it): **condition/health** (`0x25`, a float — **editable**, e.g. repair-to-full), the **equipped**
 flag (`0x16`), and a weapon-mod ref (`0x21`). Every stack resolves to its **display name** (see below).
-The list **start** is `changeFlags`-anchored: the walk skips the 27-byte MOVE block (`CHANGE_REFR_MOVE`)
-then takes the first stack chain with ≥3 distinct refs — replacing the old whole-record most-distinct
-ranking (verified byte-identical across all 30 real saves).
+The list **start** is `changeFlags`-anchored and mostly structural: the walk skips the 27-byte MOVE block
+(`CHANGE_REFR_MOVE`) **and the fixed 1160-byte havok/float array** after it (exactly 232 `[u32][7C]` slots —
+an empirical invariant across all 30 saves, independent of bit22; the skip is shape-validated and falls back
+safely), landing on the reference's ExtraDataList, then takes the first stack chain with ≥3 distinct refs —
+replacing the old whole-record most-distinct ranking (verified byte-identical across all 30 real saves, with a
+test pinning the start at `MOVE+1+1160`).
 
 **FormID → display name.** A small custom **TES4 plugin reader** (`Core/TesPlugin.cs`) reads the
 game's ESM/ESP masters and builds a `FormID → FULL/EDID` index, so inventory (and any FormID the tool
@@ -130,11 +133,12 @@ handles **DLC renumbering**; **compressed records** (zlib) and `GRUP`-skipping o
 A runtime-created `0xFF…` FormID shows `(created)`; a form not found in the masters shows `?`.
 
 **Still next:** perks and other per-record internals — and making the inventory list *start* fully
-`changeFlags`-driven. The start is already MOVE-anchored, but the variable gated sections between MOVE and
-the items (havok/float arrays + the reference's own ExtraDataList) aren't sized yet, so the walk still
-forward-scans for the first ≥3-distinct chain. Reachable now that the walker enumerates records. This needs
-controlled in-game diffs (change one thing, save, byte-diff) — the tooling (`walk`, `refdump`, `find`,
-`diff … cf`, `idiff`, `probe`, `hex`, `playerdump`) is in place to support it.
+`changeFlags`-driven. The start now skips the MOVE block **and the fixed 1160-byte havok array** structurally,
+so only the reference's own **ExtraDataList** (the short typed section right before the items) is still
+unsized — the walk forward-scans just that to find the first ≥3-distinct chain. Reachable now that the walker
+enumerates records and `refdump` prints the ExtraDataList bounds. This needs controlled in-game diffs (change
+one thing, save, byte-diff) — the tooling (`walk`, `refdump`, `find`, `diff … cf`, `idiff`, `probe`, `hex`,
+`playerdump`) is in place to support it.
 
 ## Architecture — the "retention model"
 
@@ -190,11 +194,12 @@ The header, File Location Table, global-data tables, Misc Stats, the FormID arra
 record header/walker, SPECIAL, skills, inventory item stacks **and their per-stack extra data**
 (condition / equipped / mods), and FormID→display-name resolution are decoded. Remaining:
 
-1. **Fully deterministic inventory list start** — the start is now `changeFlags`-anchored (MOVE skip +
-   first ≥3-distinct chain), replacing the whole-record most-distinct ranking; verified byte-identical on
-   all 30 saves. Remaining: size the variable gated sections between MOVE and the items (havok/float arrays
-   + the reference's own ExtraDataList) so it lands on the first item with no forward scan at all (`refdump`
-   prints the labelled `changeFlags` bits + computed search start for this).
+1. **Fully deterministic inventory list start** — the start now skips the MOVE block **and the fixed
+   1160-byte havok array** structurally (invariant across all 30 saves), then takes the first ≥3-distinct
+   chain in the short ExtraDataList, replacing the whole-record most-distinct ranking; verified byte-identical
+   on all 30 saves. Remaining: size the one leftover section — the reference's own ExtraDataList — so it lands
+   on the first item with no forward scan at all (`refdump` prints the `changeFlags` bits, the MOVE +
+   fixed-array spans, and the ExtraDataList start for this).
 2. **Caps / karma / XP** — caps may simply be an inventory stack; karma/XP via controlled diffs.
 3. **Other per-record state** (perks, quest/script data) — now enumerable record-by-record via the
    walker; crack each with a controlled in-game change → `idiff`, cross-referencing FormIDs in FNVEdit.

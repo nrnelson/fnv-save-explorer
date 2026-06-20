@@ -666,20 +666,20 @@ public sealed class FalloutSave
     }
 
     /// <summary>
-    /// Locates and walks the inventory list in a reference change form. The list <em>start</em> is
-    /// anchored by changeFlags, not by ranking every run in the record: skip the gated 27-byte MOVE block
-    /// (<see cref="ReferenceChangeForm.InventorySearchStart"/>), then take the <em>first</em> contiguous
-    /// stack chain with at least <see cref="InventoryMinEntries"/> <em>distinct</em> references. The genuine
-    /// list references distinct items, whereas the variable gated sections between MOVE and the items (the
-    /// zeroed havok arrays + the reference's own ExtraDataList) yield only short coincidental chains — their
-    /// pseudo-refs mostly carry a <c>0x7C</c> inside the would-be count and reject, and the few that pass
-    /// repeat a ref or read a count-0 phantom (e.g. a <c>2.0</c> float's bytes read as ref 63), so they never
-    /// reach the distinct-ref bar. Each stack is the fixed 9-byte <c>[ref:3][7C][count:u32][7C]</c> entry
-    /// followed by a per-stack extra-data block whose exact byte length is computed from its decoded
-    /// properties (condition / equipped / weapon mods; see
-    /// <see cref="ReferenceChangeForm.TryReadStackExtra"/>), so <see cref="BuildChain"/> advances to the next
-    /// stack precisely. Returns null when the record carries no inventory (CHANGE_REFR_INVENTORY clear) or no
-    /// qualifying chain is found.
+    /// Locates and walks the inventory list in a reference change form. The list <em>start</em> is anchored
+    /// by changeFlags, not by ranking every run in the record: <see cref="ReferenceChangeForm.InventorySearchStart"/>
+    /// deterministically skips the gated 27-byte MOVE block <em>and</em> the fixed 1160-byte havok/float array
+    /// that follows it (both invariant across every real save — ROADMAP §4i), landing on the reference's
+    /// ExtraDataList. From there the walk takes the <em>first</em> contiguous stack chain with at least
+    /// <see cref="InventoryMinEntries"/> <em>distinct</em> references — a short forward scan over only the
+    /// still-undecoded ExtraDataList rather than the whole preamble. The genuine list references distinct items,
+    /// whereas the ExtraDataList yields at most short coincidental chains (a pseudo-ref carries a <c>0x7C</c>
+    /// inside the would-be count and rejects, or repeats a ref / reads a count-0 phantom), so they never reach
+    /// the distinct-ref bar. Each stack is the fixed 9-byte <c>[ref:3][7C][count:u32][7C]</c> entry followed by
+    /// a per-stack extra-data block whose exact byte length is computed from its decoded properties (condition /
+    /// equipped / weapon mods; see <see cref="ReferenceChangeForm.TryReadStackExtra"/>), so
+    /// <see cref="BuildChain"/> advances to the next stack precisely. Returns null when the record carries no
+    /// inventory (CHANGE_REFR_INVENTORY clear) or no qualifying chain is found.
     /// </summary>
     private PlayerInventory? WalkInventory(ChangeFormHeader cf)
     {
@@ -689,6 +689,17 @@ public sealed class FalloutSave
         var end = cf.DataOffset + cf.DataLength;
         var start = ReferenceChangeForm.InventorySearchStart(
             _raw.AsSpan(cf.DataOffset, cf.DataLength), cf.DataOffset, cf.ChangeFlags);
+        // Try the deterministic start (ExtraDataList). The fallback from the record start is dormant on all 30
+        // real saves — it only guards an atypical record where the fixed-array skip couldn't be validated.
+        return ScanForInventory(cf, start, end)
+            ?? (start != cf.DataOffset ? ScanForInventory(cf, cf.DataOffset, end) : null);
+    }
+
+    /// <summary>Forward-scans <c>[start, end)</c> for the first contiguous stack chain with at least
+    /// <see cref="InventoryMinEntries"/> distinct references — the §4g/§9 distinct-ref acceptance test that
+    /// distinguishes the genuine item list from a coincidental chain. Returns null if none qualifies.</summary>
+    private PlayerInventory? ScanForInventory(ChangeFormHeader cf, int start, int end)
+    {
         for (var p = start; p + 9 <= end;)
         {
             if (!TryReadInventoryEntry(p, out _, out _, out _))
@@ -697,10 +708,6 @@ public sealed class FalloutSave
                 continue;
             }
             var chain = BuildChain(p, end, out var chainEnd);
-            // The item list's stacks reference distinct items; a coincidental chain in the gated havok/float
-            // arrays repeats a ref or two (e.g. a float byte run reads as ref 63 + count-0 phantoms). So the
-            // list is the first chain with >= InventoryMinEntries *distinct* references — the §4g/§9 discriminator
-            // applied as a forward-scan acceptance test (no global ranking of every run in the record).
             if (chain.Select(i => i.Iref).Distinct().Count() >= InventoryMinEntries)
                 return new PlayerInventory(cf.DataOffset, chain);
             p = chainEnd > p ? chainEnd : p + 1; // not the list — skip past this coincidental chain and keep scanning

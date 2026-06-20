@@ -18,6 +18,37 @@ public class ReferenceChangeFormTests
     }
 
     [Fact]
+    public void InventorySearchStart_skips_the_fixed_havok_array_after_the_move_block()
+    {
+        // After the 27-byte MOVE block (+ delimiter), an inventory reference carries a fixed run of
+        // GatedArraySlotCount [4-byte][0x7C] slots before its ExtraDataList. When that exact structure is
+        // present the start lands past it — invariant at 1160 bytes on every real save (ROADMAP §4i).
+        var afterMove = ReferenceChangeForm.MoveBlockLength + 1;
+        var data = new byte[afterMove + ReferenceChangeForm.GatedArrayBlockLength + 8];
+        data[ReferenceChangeForm.MoveBlockLength] = ReferenceChangeForm.Delimiter; // MOVE trailing delimiter
+        for (var i = 0; i < ReferenceChangeForm.GatedArraySlotCount; i++)
+            data[afterMove + i * ReferenceChangeForm.GatedArraySlotStride + 4] = ReferenceChangeForm.Delimiter;
+
+        var start = ReferenceChangeForm.InventorySearchStart(data, dataOffset: 0x2000, ReferenceChangeForm.ChangeRefrMove);
+
+        Assert.Equal(0x2000 + afterMove + ReferenceChangeForm.GatedArrayBlockLength, start);
+        Assert.Equal(1160, ReferenceChangeForm.GatedArrayBlockLength); // the pinned size, guarded against drift
+    }
+
+    [Fact]
+    public void InventorySearchStart_skips_only_the_move_block_when_the_fixed_array_is_absent()
+    {
+        // MOVE present but the fixed 232-slot array isn't there (a short/synthetic record) -> stop just past
+        // MOVE rather than mis-skipping 1160 bytes; the forward scan then locates the list from there.
+        var data = new byte[40];
+        data[ReferenceChangeForm.MoveBlockLength] = ReferenceChangeForm.Delimiter;
+
+        var start = ReferenceChangeForm.InventorySearchStart(data, dataOffset: 0x1000, ReferenceChangeForm.ChangeRefrMove);
+
+        Assert.Equal(0x1000 + ReferenceChangeForm.MoveBlockLength + 1, start);
+    }
+
+    [Fact]
     public void InventorySearchStart_does_not_skip_when_the_move_flag_is_clear()
     {
         var data = new byte[40];
