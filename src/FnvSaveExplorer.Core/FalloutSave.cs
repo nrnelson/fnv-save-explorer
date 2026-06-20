@@ -289,6 +289,25 @@ public sealed class FalloutSave
         iref >= 0 && iref < FormIdArray.Count ? FormIdArray[iref] : 0u;
 
     /// <summary>
+    /// The plugin (ESM/ESP) that a FormID's <paramref name="modIndex"/> (high byte) refers to — its entry in
+    /// the save's load order (<see cref="Plugins"/>). Returns null for a runtime-created <c>0xFF</c> index or
+    /// any value past the load order. The mod index is just the FormID's top byte, so this is the canonical
+    /// "which mod is this item from" lookup (no ESM read needed).
+    /// </summary>
+    public string? PluginForModIndex(int modIndex) =>
+        modIndex >= 0 && modIndex < Plugins.Count ? Plugins[modIndex] : null;
+
+    /// <summary>
+    /// The human-friendly source for a FormID's <paramref name="modIndex"/>: the owning plugin's display
+    /// name (see <see cref="PluginNames"/>), <c>"(created)"</c> for a runtime <c>0xFF</c> index, or null if
+    /// the index is past the load order.
+    /// </summary>
+    public string? FriendlySourceForModIndex(int modIndex) =>
+        modIndex == 0xFF ? "(created)"
+        : PluginForModIndex(modIndex) is { } plugin ? PluginNames.Friendly(plugin)
+        : null;
+
+    /// <summary>
     /// Finds offsets in the change-forms region where <paramref name="iref"/> appears as a 3-byte
     /// big-endian refID — i.e. candidate change-form record starts for that form. (A raw byte scan;
     /// for distinctive irefs like the player's it returns the single real record.)

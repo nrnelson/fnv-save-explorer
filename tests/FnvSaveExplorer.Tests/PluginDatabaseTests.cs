@@ -75,6 +75,17 @@ public class PluginDatabaseTests
         Assert.Null(PluginDatabase.Empty.Resolve(0x00012345));
     }
 
+    [Theory]
+    [InlineData("FalloutNV.esm", "Fallout: New Vegas")]      // official table
+    [InlineData("GunRunnersArsenal.esm", "Gun Runners' Arsenal")]
+    [InlineData("MercenaryPack.esm", "Mercenary Pack")]
+    [InlineData("falloutnv.ESM", "Fallout: New Vegas")]      // case-insensitive
+    [InlineData("WeaponModsExpanded.esp", "Weapon Mods Expanded")] // PascalCase fallback
+    [InlineData("NVInteriors.esm", "NV Interiors")]          // acronym boundary
+    [InlineData("FOOK.esm", "FOOK")]                          // all-caps stays whole
+    public void PluginNames_maps_official_and_prettifies_others(string file, string expected)
+        => Assert.Equal(expected, PluginNames.Friendly(file));
+
     /// <summary>
     /// When the game is installed, the real <c>FalloutNV.esm</c> must parse and yield item names (e.g. Stimpak).
     /// Skips quietly on machines without the game so the suite stays green.

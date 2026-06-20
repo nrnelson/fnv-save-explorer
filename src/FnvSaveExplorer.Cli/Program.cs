@@ -384,7 +384,8 @@ static void Inventory(FalloutSave s, string? dataDir)
     foreach (var item in inv.Items.OrderByDescending(i => i.Count))
     {
         var name = db.Resolve(item.FormId) ?? "?";
-        Console.WriteLine($"  {name,-28}  0x{item.FormId:X8} (mod {item.ModIndex:X2})  x{item.Count,-6}  iref {item.Iref,-6}  (edit offset 0x{item.CountValueOffset:X})");
+        var src = s.FriendlySourceForModIndex(item.ModIndex) ?? "?";
+        Console.WriteLine($"  {name,-28}  0x{item.FormId:X8} (mod {item.ModIndex:X2})  {src,-22}  x{item.Count,-6} iref {item.Iref,-6} (edit 0x{item.CountValueOffset:X})");
     }
 }
 

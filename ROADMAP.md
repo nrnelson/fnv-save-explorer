@@ -181,6 +181,15 @@ resolves fully (Stimpak / Vault 21 Jumpsuit / Weapon Repair Kit / …). Where th
 FormIDs (e.g. `formids`), a runtime-created `0xFF…` FormID shows `(created)` and a form not in the
 masters shows `?`.
 
+**Source mod (which DLC/mod an item is from).** A FormID's high byte (mod index) indexes the save's load
+order (`Plugins`), so the owning plugin is `Plugins[modIndex]` (`FalloutSave.PluginForModIndex`); the
+inventory surfaces it as a friendly name (`PluginNames.Friendly` → `FriendlySourceForModIndex`). FO3/FNV
+plugins have **no content-name field** — the TES4 header is only author/masters/overrides, and the DLC
+names survive merely incidentally in gameplay `MESG` records (no consistent EDID/FormID), so the in-game
+"Downloadable Content" menu uses the engine's built-in known-content list. We mirror that: a small table
+maps the 10 official files to their exact menu names (Fallout: New Vegas, Dead Money, Gun Runners'
+Arsenal, …), with a PascalCase-split fallback for any other mod.
+
 ---
 
 ## 5. Completed (with verification)

@@ -57,6 +57,9 @@ public sealed class InventoryRow : INotifyPropertyChanged
     public uint OriginalCount { get; init; }
     public string Item => $"0x{FormId:X8} (mod {ModIndex:X2})";
 
+    /// <summary>The plugin (ESM/ESP) the item's mod index points at — its source mod/DLC.</summary>
+    public string Source { get; init; } = "";
+
     private string _name = "";
     /// <summary>Display name resolved from the game masters; empty until/unless a Data folder is found.</summary>
     public string Name
@@ -212,6 +215,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         FormId = item.FormId,
                         ModIndex = item.ModIndex,
                         Name = db.Resolve(item.FormId) ?? "",
+                        Source = save.FriendlySourceForModIndex(item.ModIndex) ?? "",
                         Count = item.Count,
                         OriginalCount = item.Count,
                     });

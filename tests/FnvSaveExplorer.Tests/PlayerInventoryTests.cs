@@ -49,6 +49,16 @@ public class PlayerInventoryTests
         Assert.Equal(original, FalloutSave.Parse(original).ToBytes());
     }
 
+    [Fact]
+    public void PluginForModIndex_maps_to_the_load_order()
+    {
+        var save = FalloutSave.Parse(InventorySave.Build()); // one plugin, "A.esm", at load-order index 0
+
+        Assert.Equal("A.esm", save.PluginForModIndex(0));
+        Assert.Null(save.PluginForModIndex(1));    // past the load order
+        Assert.Null(save.PluginForModIndex(0xFF)); // runtime-created
+    }
+
     [Theory]
     [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
     public void Real_saves_decode_and_safely_edit_inventory(string path)
