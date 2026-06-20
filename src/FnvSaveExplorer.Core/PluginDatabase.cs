@@ -12,18 +12,25 @@ namespace FnvSaveExplorer.Core;
 /// re-keyed into save space. Plugins are processed in load order, so a later plugin's override of a name
 /// wins — matching how the game resolves it.</para>
 ///
-/// <para>Building is opt-in: callers auto-detect or pass the Data folder (see
-/// <see cref="GameDataLocator"/>). With no masters available the database is simply empty and FormIDs keep
-/// displaying as hex.</para>
+/// <para><b>Plugin discovery.</b> Plugins are located by file name. The game <c>Data</c> folder supplies the
+/// base game + DLC; a <b>Mod Organizer 2</b> <c>mods\</c> folder (which keeps each mod's files in
+/// <c>mods\&lt;Mod&gt;\</c> and only merges them into <c>Data</c> via a virtual filesystem at launch) supplies
+/// the rest — each active plugin lives at the root of its mod folder. With no folders available the database
+/// is simply empty and FormIDs keep displaying as hex.</para>
 /// </summary>
 public sealed class PluginDatabase
 {
+    private static readonly string[] PluginExtensions = [".esm", ".esp", ".esl"];
+
     private readonly Dictionary<uint, string> _names;
 
-    /// <summary>The Data folder the names came from, or <c>null</c> when none was found.</summary>
+    /// <summary>The game <c>Data</c> folder the base/DLC names came from, or <c>null</c> when none was found.</summary>
     public string? DataFolder { get; }
 
-    /// <summary>The load-order plugins that were found on disk and successfully parsed.</summary>
+    /// <summary>The MO2 <c>mods\</c> folder used for mod plugins, or <c>null</c> when none was used.</summary>
+    public string? ModsFolder { get; }
+
+    /// <summary>The load-order plugins that were found and successfully parsed.</summary>
     public IReadOnlyList<string> ResolvedPlugins { get; }
 
     /// <summary>FormID → display name, in the save's FormID space.</summary>
@@ -31,25 +38,38 @@ public sealed class PluginDatabase
 
     public int Count => _names.Count;
 
-    private PluginDatabase(Dictionary<uint, string> names, string? dataFolder, IReadOnlyList<string> resolved)
+    private PluginDatabase(Dictionary<uint, string> names, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved)
     {
         _names = names;
         DataFolder = dataFolder;
+        ModsFolder = modsFolder;
         ResolvedPlugins = resolved;
     }
 
-    /// <summary>An empty database (no Data folder); every <see cref="Resolve"/> returns <c>null</c>.</summary>
-    public static readonly PluginDatabase Empty = new([], null, []);
+    /// <summary>An empty database; every <see cref="Resolve"/> returns <c>null</c>.</summary>
+    public static readonly PluginDatabase Empty = new([], null, null, []);
 
-    /// <summary>Builds a database for <paramref name="save"/>, auto-detecting the Data folder (or using an override).</summary>
-    public static PluginDatabase ForSave(FalloutSave save, string? dataFolderOverride = null)
+    /// <summary>
+    /// Builds a database for <paramref name="save"/>, auto-detecting the game <c>Data</c> folder (or using an
+    /// override) and, when given, an MO2 <paramref name="modsFolder"/> for mod plugins.
+    /// </summary>
+    public static PluginDatabase ForSave(FalloutSave save, string? dataFolderOverride = null, string? modsFolder = null)
     {
         var folder = GameDataLocator.FindDataFolder(dataFolderOverride);
-        return folder is null ? Empty : Build(save.Plugins, folder);
+        var paths = CollectPlugins(folder, modsFolder);
+        return paths.Count == 0 ? Empty : Build(save.Plugins, paths, folder, modsFolder);
     }
 
-    /// <summary>Builds a database from a load order and an explicit Data folder.</summary>
+    /// <summary>Builds a database from a load order and an explicit game <c>Data</c> folder.</summary>
     public static PluginDatabase Build(IReadOnlyList<string> loadOrder, string dataFolder)
+        => Build(loadOrder, CollectPlugins(dataFolder, null), dataFolder, null);
+
+    /// <summary>Builds a database from a load order and a plugin-name → file-path map (used in tests).</summary>
+    public static PluginDatabase Build(IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths)
+        => Build(loadOrder, pluginPaths, null, null);
+
+    private static PluginDatabase Build(
+        IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, string? dataFolder, string? modsFolder)
     {
         var names = new Dictionary<uint, string>();
         var resolved = new List<string>();
@@ -61,9 +81,8 @@ public sealed class PluginDatabase
 
         for (var i = 0; i < loadOrder.Count; i++)
         {
-            var file = Path.Combine(dataFolder, loadOrder[i]);
-            if (!File.Exists(file))
-                continue;
+            if (!pluginPaths.TryGetValue(loadOrder[i], out var file))
+                continue; // plugin not found in the Data folder or the mods tree
 
             TesPlugin plugin;
             try
@@ -95,8 +114,30 @@ public sealed class PluginDatabase
             resolved.Add(loadOrder[i]);
         }
 
-        return new PluginDatabase(names, dataFolder, resolved);
+        return new PluginDatabase(names, dataFolder, modsFolder, resolved);
     }
+
+    /// <summary>
+    /// Builds a plugin-name → file-path map from the game <c>Data</c> folder (top-level) and, when given, an
+    /// MO2 <c>mods\</c> folder (each mod's root). The Data folder wins, so the real base game / DLC files are
+    /// preferred over any copy bundled inside a mod.
+    /// </summary>
+    public static Dictionary<string, string> CollectPlugins(string? dataFolder, string? modsFolder)
+    {
+        var paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (dataFolder is not null && Directory.Exists(dataFolder))
+            foreach (var f in EnumeratePlugins(dataFolder))
+                paths.TryAdd(Path.GetFileName(f), f);
+        if (modsFolder is not null && Directory.Exists(modsFolder))
+            foreach (var mod in Directory.EnumerateDirectories(modsFolder))
+                foreach (var f in EnumeratePlugins(mod)) // MO2 maps each mod's root into Data, so plugins sit here
+                    paths.TryAdd(Path.GetFileName(f), f);
+        return paths;
+    }
+
+    private static IEnumerable<string> EnumeratePlugins(string folder) =>
+        Directory.EnumerateFiles(folder)
+            .Where(f => PluginExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase));
 
     /// <summary>The display name for a save FormID, <c>"(created)"</c> for runtime forms, or <c>null</c> if unknown.</summary>
     public string? Resolve(uint formId)

@@ -20,6 +20,44 @@ public static class GameDataLocator
         return null;
     }
 
+    /// <summary>
+    /// Locates a Mod Organizer 2 <c>mods\</c> folder for a save loaded from an MO2 profile. MO2 stores saves
+    /// at <c>&lt;root&gt;\profiles\&lt;profile&gt;\saves\</c> and mods at <c>&lt;root&gt;\mods\</c>, so the mods folder
+    /// is derived from the save's path. An explicit override (the mods folder, or the MO2 root) is honored
+    /// first. Returns <c>null</c> when the save isn't inside an MO2 profile and no valid override is given.
+    /// </summary>
+    public static string? FindMo2Mods(string? savePath, string? overridePath = null)
+    {
+        if (!string.IsNullOrWhiteSpace(overridePath))
+        {
+            if (Directory.Exists(Path.Combine(overridePath, "mods")))
+                return Path.Combine(overridePath, "mods"); // pointed at the MO2 root
+            return Directory.Exists(overridePath) ? overridePath : null; // pointed at the mods folder itself
+        }
+
+        if (string.IsNullOrWhiteSpace(savePath))
+            return null;
+        try
+        {
+            // <root>\profiles\<profile>\saves\<save>.fos  ->  <root>\mods
+            var savesDir = Path.GetDirectoryName(Path.GetFullPath(savePath));
+            if (savesDir is null || !Eq(Path.GetFileName(savesDir), "saves"))
+                return null;
+            var profilesDir = Path.GetDirectoryName(Path.GetDirectoryName(savesDir));
+            if (profilesDir is null || !Eq(Path.GetFileName(profilesDir), "profiles"))
+                return null;
+            var root = Path.GetDirectoryName(profilesDir);
+            var mods = root is null ? null : Path.Combine(root, "mods");
+            return mods is not null && Directory.Exists(mods) ? mods : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool Eq(string? a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
     private static bool HasMaster(string folder) =>
         !string.IsNullOrWhiteSpace(folder) && File.Exists(Path.Combine(folder, MasterEsm));
 

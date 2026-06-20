@@ -69,6 +69,36 @@ public class PluginDatabaseTests
     }
 
     [Fact]
+    public void Build_finds_plugins_in_an_mo2_mods_tree()
+    {
+        using var dir = new TempDataFolder();
+        dir.Write("FalloutNV.esm", EsmBuilder.Plugin([], new TestRecord("WEAP", 0x00000ABC, Edid: "BaseRifle", Full: "Base Rifle")));
+        // A mod plugin lives at mods\<ModName>\<plugin> (MO2 maps each mod's root into Data).
+        var modDir = Path.Combine(dir.Path, "mods", "Cool Mod");
+        Directory.CreateDirectory(modDir);
+        File.WriteAllBytes(Path.Combine(modDir, "Cool.esp"),
+            EsmBuilder.Plugin(["FalloutNV.esm"], new TestRecord("ALCH", 0x01000111, Edid: "CoolPotion", Full: "Cool Potion")));
+
+        var paths = PluginDatabase.CollectPlugins(dir.Path, Path.Combine(dir.Path, "mods"));
+        var db = PluginDatabase.Build(["FalloutNV.esm", "Cool.esp"], paths);
+
+        Assert.Equal("Base Rifle", db.Resolve(0x00000ABC));   // from the Data folder
+        Assert.Equal("Cool Potion", db.Resolve(0x01000111));  // from mods\Cool Mod\Cool.esp
+    }
+
+    [Fact]
+    public void FindMo2Mods_derives_mods_folder_from_an_mo2_save_path()
+    {
+        using var dir = new TempDataFolder();
+        var saveDir = Path.Combine(dir.Path, "profiles", "Default", "saves");
+        Directory.CreateDirectory(saveDir);
+        Directory.CreateDirectory(Path.Combine(dir.Path, "mods"));
+
+        Assert.Equal(Path.Combine(dir.Path, "mods"), GameDataLocator.FindMo2Mods(Path.Combine(saveDir, "x.fos")));
+        Assert.Null(GameDataLocator.FindMo2Mods(Path.Combine(dir.Path, "x.fos"))); // not an MO2 saves layout
+    }
+
+    [Fact]
     public void Resolve_handles_runtime_and_unknown_forms()
     {
         Assert.Equal("(created)", PluginDatabase.Empty.Resolve(0xFF001234));

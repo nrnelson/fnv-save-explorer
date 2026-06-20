@@ -150,6 +150,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>Optional override for the game Data folder used to resolve item names.</summary>
     public string EditDataFolder { get => _editDataFolder; set => Set(ref _editDataFolder, value); }
 
+    private string _editModsFolder = "";
+    /// <summary>Optional Mod Organizer 2 <c>mods\</c> folder (or MO2 root) for resolving mod item names.</summary>
+    public string EditModsFolder { get => _editModsFolder; set => Set(ref _editModsFolder, value); }
+
     // ---- Operations --------------------------------------------------------
     public void Load(string path)
     {
@@ -206,9 +210,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Inventory.Clear();
             if (save.Inventory is { } inv)
             {
-                var db = PluginDatabase.ForSave(save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder);
+                var mods = GameDataLocator.FindMo2Mods(path, string.IsNullOrWhiteSpace(EditModsFolder) ? null : EditModsFolder);
+                var db = PluginDatabase.ForSave(save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder, mods);
                 if (db.DataFolder is not null && string.IsNullOrWhiteSpace(EditDataFolder))
                     EditDataFolder = db.DataFolder;
+                if (db.ModsFolder is not null && string.IsNullOrWhiteSpace(EditModsFolder))
+                    EditModsFolder = db.ModsFolder;
                 foreach (var item in inv.Items.OrderByDescending(i => i.Count))
                     Inventory.Add(new InventoryRow
                     {
@@ -259,9 +266,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (_save is null)
             return;
-        var db = PluginDatabase.ForSave(_save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder);
+        var mods = GameDataLocator.FindMo2Mods(_loadedPath, string.IsNullOrWhiteSpace(EditModsFolder) ? null : EditModsFolder);
+        var db = PluginDatabase.ForSave(_save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder, mods);
         if (db.DataFolder is not null)
             EditDataFolder = db.DataFolder;
+        if (db.ModsFolder is not null)
+            EditModsFolder = db.ModsFolder;
         foreach (var row in Inventory)
             row.Name = db.Resolve(row.FormId) ?? "";
         InventoryInfo = DescribeInventory(Inventory.Count, db);

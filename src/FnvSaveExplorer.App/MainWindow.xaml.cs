@@ -55,6 +55,20 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnBrowseModsFolderClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "Select the Mod Organizer 2 'mods' folder (or the MO2 root)",
+            InitialDirectory = Directory.Exists(_vm.EditModsFolder) ? _vm.EditModsFolder : DefaultSaveDirectory,
+        };
+        if (dialog.ShowDialog(this) == true)
+        {
+            _vm.EditModsFolder = dialog.FolderName;
+            _vm.ReresolveNames();
+        }
+    }
+
     private void OnSaveAsClick(object sender, RoutedEventArgs e)
     {
         var suggested = _vm.SuggestedSavePath;

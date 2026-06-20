@@ -132,11 +132,16 @@
                                 <DataGridTextColumn Header="Count" Binding="{Binding Count, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
                             </DataGrid.Columns>
                         </DataGrid>
-                        <TextBlock Text="Game Data folder (for item names)" Foreground="Gray"/>
-                        <DockPanel Width="540" HorizontalAlignment="Left" Margin="0,2,0,10">
-                            <Button DockPanel.Dock="Right" Content="Resolve names" Padding="10,3" Margin="6,0,0,0" Click="OnResolveNamesClick"/>
+                        <TextBlock Text="Game Data folder (base game + DLC)" Foreground="Gray"/>
+                        <DockPanel Width="700" HorizontalAlignment="Left" Margin="0,2,0,6">
                             <Button DockPanel.Dock="Right" Content="Browse…" Padding="10,3" Margin="6,0,0,0" Click="OnBrowseDataFolderClick"/>
                             <TextBox Text="{Binding EditDataFolder, UpdateSourceTrigger=PropertyChanged}" VerticalContentAlignment="Center"/>
+                        </DockPanel>
+                        <TextBlock Text="Mod Organizer 2 mods folder (optional — for modded saves; auto-filled from an MO2 save)" Foreground="Gray"/>
+                        <DockPanel Width="700" HorizontalAlignment="Left" Margin="0,2,0,10">
+                            <Button DockPanel.Dock="Right" Content="Resolve names" Padding="10,3" Margin="6,0,0,0" Click="OnResolveNamesClick"/>
+                            <Button DockPanel.Dock="Right" Content="Browse…" Padding="10,3" Margin="6,0,0,0" Click="OnBrowseModsFolderClick"/>
+                            <TextBox Text="{Binding EditModsFolder, UpdateSourceTrigger=PropertyChanged}" VerticalContentAlignment="Center"/>
                         </DockPanel>
                         <Button Content="Apply staged edits" Padding="10,3" HorizontalAlignment="Left" Click="OnApplyClick"/>
                     </StackPanel>

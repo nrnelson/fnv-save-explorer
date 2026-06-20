@@ -107,10 +107,10 @@ try
         case "setskill":
             return SetSkill(path, args[2], args[3], float.Parse(args[4]));
         case "inventory":
-            Inventory(FalloutSave.Load(path), args.Length > 2 ? args[2] : null);
+            Inventory(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
             break;
         case "names":
-            Names(FalloutSave.Load(path), args.Length > 2 ? args[2] : null);
+            Names(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
             break;
         case "setcount":
             return SetCount(path, args[2], ParseOffset(args[3]), uint.Parse(args[4]));
@@ -369,7 +369,7 @@ static int SetSkill(string inPath, string outPath, string skill, float value)
     return ok ? 0 : 4;
 }
 
-static void Inventory(FalloutSave s, string? dataDir)
+static void Inventory(FalloutSave s, string savePath, string? dataDir)
 {
     var inv = s.Inventory;
     if (inv is null)
@@ -377,7 +377,7 @@ static void Inventory(FalloutSave s, string? dataDir)
         Console.WriteLine("Inventory not located (no change form parsed as a recognisable item list).");
         return;
     }
-    var db = PluginDatabase.ForSave(s, dataDir);
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
     Console.WriteLine($"Player inventory @ 0x{inv.Offset:X}  ({inv.Items.Count} stacks, {inv.TotalItems:N0} items):");
     if (db.Count == 0)
         Console.WriteLine("  (item names unavailable — game Data folder not found; pass it as the 2nd argument)");
@@ -389,18 +389,20 @@ static void Inventory(FalloutSave s, string? dataDir)
     }
 }
 
-static void Names(FalloutSave s, string? dataDir)
+static void Names(FalloutSave s, string savePath, string? dataDir)
 {
-    var folder = GameDataLocator.FindDataFolder(dataDir);
-    if (folder is null)
+    var mods = GameDataLocator.FindMo2Mods(savePath);
+    var db = PluginDatabase.ForSave(s, dataDir, mods);
+    if (db.Count == 0 && db.DataFolder is null)
     {
         Console.WriteLine("Game Data folder not found. Pass it explicitly, e.g.:");
         Console.WriteLine("  fnvsave names <save.fos> \"C:\\...\\Fallout New Vegas\\Data\"");
         Console.WriteLine($"Save load order ({s.Plugins.Count} plugins): {string.Join(", ", s.Plugins)}");
         return;
     }
-    var db = PluginDatabase.Build(s.Plugins, folder);
-    Console.WriteLine($"Data folder : {folder}");
+    Console.WriteLine($"Data folder : {db.DataFolder ?? "(not found)"}");
+    if (db.ModsFolder is not null)
+        Console.WriteLine($"MO2 mods    : {db.ModsFolder}");
     Console.WriteLine($"Resolved {db.ResolvedPlugins.Count}/{s.Plugins.Count} plugins; {db.Count:N0} named forms indexed.");
     var resolvedSet = db.ResolvedPlugins.ToHashSet(StringComparer.OrdinalIgnoreCase);
     foreach (var p in s.Plugins)

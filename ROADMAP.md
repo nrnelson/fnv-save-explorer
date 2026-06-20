@@ -190,6 +190,16 @@ names survive merely incidentally in gameplay `MESG` records (no consistent EDID
 maps the 10 official files to their exact menu names (Fallout: New Vegas, Dead Money, Gun Runners'
 Arsenal, …), with a PascalCase-split fallback for any other mod.
 
+**Mod Organizer 2 saves.** Modded setups (e.g. Viva New Vegas) run under MO2, which keeps each mod's
+files in `<root>\mods\<Mod>\` and only merges them into `Data` via a virtual filesystem *at launch* — so
+the mod plugins aren't physically in the game `Data` folder and their item names won't resolve. When a
+save is loaded from an MO2 profile (`<root>\profiles\<profile>\saves\`), `GameDataLocator.FindMo2Mods`
+derives `<root>\mods` from the path, and `PluginDatabase.CollectPlugins` indexes both the `Data` folder
+(base/DLC, authoritative) and each `mods\<Mod>\` root (one VNV save went from 10/43 → 43/43 plugins
+resolved). **Caveat:** the inventory *decoder* still mis-aligns on large inventories with lots of per-stack
+extra data (the longest-run heuristic can latch onto a non-item run), so high-level/modded saves can still
+show wrong stacks even once names resolve — that's the §6.1 per-stack extra-data work, not a name gap.
+
 ---
 
 ## 5. Completed (with verification)
