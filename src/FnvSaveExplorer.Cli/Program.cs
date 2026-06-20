@@ -378,10 +378,13 @@ static void Inventory(FalloutSave s, string savePath, string? dataDir)
         return;
     }
     var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
-    Console.WriteLine($"Player inventory @ 0x{inv.Offset:X}  ({inv.Items.Count} stacks, {inv.TotalItems:N0} items):");
+    // With names available, hide entries that don't resolve to an item: on large records the decoder's
+    // run can absorb a few non-item bytes that validate structurally but aren't real stacks.
+    var items = db.Count > 0 ? inv.Items.Where(i => db.Resolve(i.FormId) is not null).ToList() : inv.Items;
+    Console.WriteLine($"Player inventory @ 0x{inv.Offset:X}  ({items.Count} stacks, {items.Sum(i => (long)i.Count):N0} items):");
     if (db.Count == 0)
         Console.WriteLine("  (item names unavailable — game Data folder not found; pass it as the 2nd argument)");
-    foreach (var item in inv.Items.OrderByDescending(i => i.Count))
+    foreach (var item in items.OrderByDescending(i => i.Count))
     {
         var name = db.Resolve(item.FormId) ?? "?";
         var src = s.FriendlySourceForModIndex(item.ModIndex) ?? "?";

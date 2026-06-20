@@ -151,7 +151,7 @@ internal static class InventorySave
         // Past a run-break gap, a *longer* run that repeats a single reference (a misaligned read of a
         // record's non-item data). The decoder must still pick the real list above — it has more distinct
         // references — even though this run has more entries.
-        data.AddRange(Enumerable.Repeat((byte)0x00, 300)); // gap > InventoryExtraWindow ends the real run
+        data.AddRange(Enumerable.Repeat((byte)0x00, 2200)); // gap > InventoryExtraWindow ends the real run
         for (var i = 0; i < 12; i++) Entry(2, (uint)(50 - i));
 
         var rec = new List<byte>();

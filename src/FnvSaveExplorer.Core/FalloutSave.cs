@@ -637,9 +637,11 @@ public sealed class FalloutSave
         }
     }
 
-    private const int InventoryMinEntries = 3;   // enough to distinguish a real item list from coincidence
-    private const int InventoryExtraWindow = 256; // max extra-data bytes between consecutive stacks before a run breaks
-                                                  // (a modded weapon's condition + mods can exceed the vanilla ~96)
+    private const int InventoryMinEntries = 3;    // enough to distinguish a real item list from coincidence
+    private const int InventoryExtraWindow = 2048; // max bytes between consecutive stacks before a run breaks. A
+                                                   // modded item's extra data (condition + weapon mods) can split the
+                                                   // list by hundreds of bytes; this keeps those fragments in one run
+                                                   // while staying far below the gap to unrelated data later in the record.
 
     /// <summary>
     /// Locates the player's inventory change form and decodes its item stacks. The player's inventory

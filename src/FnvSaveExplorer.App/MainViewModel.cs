@@ -207,31 +207,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                              "setav, an implant, or certain effects), of which this save has fewer than two.";
             }
 
-            Inventory.Clear();
-            if (save.Inventory is { } inv)
-            {
-                var mods = GameDataLocator.FindMo2Mods(path, string.IsNullOrWhiteSpace(EditModsFolder) ? null : EditModsFolder);
-                var db = PluginDatabase.ForSave(save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder, mods);
-                if (db.DataFolder is not null && string.IsNullOrWhiteSpace(EditDataFolder))
-                    EditDataFolder = db.DataFolder;
-                if (db.ModsFolder is not null && string.IsNullOrWhiteSpace(EditModsFolder))
-                    EditModsFolder = db.ModsFolder;
-                foreach (var item in inv.Items.OrderByDescending(i => i.Count))
-                    Inventory.Add(new InventoryRow
-                    {
-                        FormId = item.FormId,
-                        ModIndex = item.ModIndex,
-                        Name = db.Resolve(item.FormId) ?? "",
-                        Source = save.FriendlySourceForModIndex(item.ModIndex) ?? "",
-                        Count = item.Count,
-                        OriginalCount = item.Count,
-                    });
-                InventoryInfo = DescribeInventory(inv.Items.Count, db);
-            }
-            else
-            {
-                InventoryInfo = "Inventory not located in this save (no change form parsed as a recognisable item list).";
-            }
+            var mods = GameDataLocator.FindMo2Mods(path, string.IsNullOrWhiteSpace(EditModsFolder) ? null : EditModsFolder);
+            var invDb = PluginDatabase.ForSave(save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder, mods);
+            if (invDb.DataFolder is not null && string.IsNullOrWhiteSpace(EditDataFolder))
+                EditDataFolder = invDb.DataFolder;
+            if (invDb.ModsFolder is not null && string.IsNullOrWhiteSpace(EditModsFolder))
+                EditModsFolder = invDb.ModsFolder;
+            PopulateInventory(save, invDb);
 
             MiscStats.Clear();
             if (save.MiscStats is { } ms)
@@ -272,8 +254,33 @@ public sealed class MainViewModel : INotifyPropertyChanged
             EditDataFolder = db.DataFolder;
         if (db.ModsFolder is not null)
             EditModsFolder = db.ModsFolder;
-        foreach (var row in Inventory)
-            row.Name = db.Resolve(row.FormId) ?? "";
+        PopulateInventory(_save, db);
+    }
+
+    /// <summary>
+    /// Fills the inventory grid from the save. When item names are available, entries that don't resolve to
+    /// an item are hidden — on large records the decoder's run can absorb a few non-item bytes that validate
+    /// structurally but aren't real stacks; offline (no names), everything is shown so nothing is lost.
+    /// </summary>
+    private void PopulateInventory(FalloutSave save, PluginDatabase db)
+    {
+        Inventory.Clear();
+        if (save.Inventory is not { } inv)
+        {
+            InventoryInfo = "Inventory not located in this save (no change form parsed as a recognisable item list).";
+            return;
+        }
+        var items = db.Count > 0 ? inv.Items.Where(i => db.Resolve(i.FormId) is not null) : inv.Items;
+        foreach (var item in items.OrderByDescending(i => i.Count))
+            Inventory.Add(new InventoryRow
+            {
+                FormId = item.FormId,
+                ModIndex = item.ModIndex,
+                Name = db.Resolve(item.FormId) ?? "",
+                Source = save.FriendlySourceForModIndex(item.ModIndex) ?? "",
+                Count = item.Count,
+                OriginalCount = item.Count,
+            });
         InventoryInfo = DescribeInventory(Inventory.Count, db);
     }
 
