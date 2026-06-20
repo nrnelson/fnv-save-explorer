@@ -176,10 +176,10 @@ field   [type:4][size:u16][data]               # EDID = editor id, FULL = displa
   remaps every plugin's local high byte onto the save's load order (master-name match; a form's own
   high byte == the plugin's master count). Plugins are indexed in load order so overrides win.
 - The `Data` folder is auto-detected (`GameDataLocator`, with an override); absent → FormIDs stay hex.
-**Verified** on a real save: all 10 plugins parse, 3,985 named forms indexed, inventory shows Stimpak /
-Vault 21 Jumpsuit / Weapon Repair Kit / … Forms that resolve to placed references (ACHR/ACRE/REFR — not
-item templates, surfaced by the inventory decoder's known imprecision) or `0xFF…` runtime FormIDs show
-`?` / `(created)`.
+**Verified** on a real save: all 10 plugins parse, 3,985 named forms indexed, and the player inventory
+resolves fully (Stimpak / Vault 21 Jumpsuit / Weapon Repair Kit / …). Where the tool surfaces other
+FormIDs (e.g. `formids`), a runtime-created `0xFF…` FormID shows `(created)` and a form not in the
+masters shows `?`.
 
 ---
 
@@ -231,10 +231,8 @@ modifications (§4e), inventory stack counts (§4g) — all safe same-length spl
    zlib-compressed records, and `GRUP`-skipping over the 245 MB `FalloutNV.esm` are handled; `0xFF…`
    runtime forms → `(created)`. Verified on a real save (10/10 plugins, 3,985 named forms; Stimpak /
    Vault 21 Jumpsuit / … resolve). No off-the-shelf C# lib covers FNV (Mutagen is Skyrim/FO4/Starfield).
-   **Remaining nuance:** a few inventory stacks resolve to placed references (ACHR/ACRE/REFR), not item
-   templates, so they show `?` — these are spurious reads from the inventory decoder's per-stack
-   imprecision (§6.1 territory), not a name-resolution gap; the resolver could in future *reject* such
-   non-item FormIDs to tighten inventory decoding.
+   (Note: early on a few inventory stacks showed `?` as placed references — that was the inventory
+   reference off-by-one, since fixed in §4g; the player inventory now resolves completely.)
 4. **Caps / karma / XP** — single values; controlled-diff to locate, then same-length edit. (Caps may
    simply be an inventory stack — check the inventory list first.)
 5. ~~**General change-form record header**~~ — ✅ **DONE** (§4f). Walker (`EnumerateChangeForms`) reproduces

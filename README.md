@@ -20,7 +20,7 @@ a CLI — and validated against real saves.
 | **Player SPECIAL** (S P E C I A L) | ✅ decoded **and safely editable** — verified on all 16 saves (each sums to 40) |
 | **Player skills** (actor-value block in the PlayerRef change form) | ✅ decoded **and safely editable** — format + 13-skill index map verified; storage is sparse (modified-only) |
 | **Change-form record header / walker** | ✅ decoded — walks to exactly `ChangeFormCount` records, lands on `GlobalData3Offset` (both characters, fresh→4 h) |
-| **Player inventory** (item stacks in the player's inventory change form) | ✅ decoded **and safely editable** — `[iref][7C][u32 count][7C]` entries; a controlled drop-1 diff confirms the count (9→8) |
+| **Player inventory** (item stacks in the player's inventory change form) | ✅ decoded **and safely editable** — `[ref][7C][u32 count][7C]` entries (`ref` = FormID-array index + 1); confirmed by a controlled diff (Antivenom 1→2→1) — every stack resolves with correct counts |
 | **FormID → display name** (item names from the game's ESM/ESP masters) | ✅ custom TES4 reader resolves inventory/FormID names (Stimpak, Vault 21 Jumpsuit…); all 10 base+DLC plugins parse, DLC renumbering + compressed records handled |
 | **Change forms** (per-stack extra data, perks, per-actor state) | 🔬 walker + inventory + skills decoded; remaining per-record internals **next** |
 
@@ -106,10 +106,11 @@ decoding any per-record state.
 
 **Player inventory.** Items are **not** in the PlayerRef ACHR record (that's actor state) but in a
 dedicated reference change form (iref = PlayerRef + 1). Its entries are
-`[itemIref:3 BE][7C][count:u32 LE][7C]` (plus per-stack extra data — condition/equip — not yet
-decoded). A controlled drop-1 diff confirmed the format: dropping one of a stacked item decremented
-exactly one `count` from 9 → 8, so counts are **safely editable** in place. Items now show their
-**display name** (see below).
+`[ref:3 BE][7C][count:u32 LE][7C]` (plus per-stack extra data — condition/equip — not yet decoded),
+where `ref` is the **FormID-array index + 1** (the item is `FormIdArray[ref - 1]`) and `count` is the
+entry's own stack count. A controlled in-game diff (add then consume one Antivenom) pinned the count
+moving **1 → 2 → 1**, confirming both the `+ 1` encoding and that counts are **safely editable** in
+place. Every stack resolves to its **display name** (see below).
 
 **FormID → display name.** A small custom **TES4 plugin reader** (`Core/TesPlugin.cs`) reads the
 game's ESM/ESP masters and builds a `FormID → FULL/EDID` index, so inventory (and any FormID the tool
@@ -119,8 +120,7 @@ directly. Each plugin's forms are remapped into the save's FormID space via its 
 handles **DLC renumbering**; **compressed records** (zlib) and `GRUP`-skipping over the 245 MB
 `FalloutNV.esm` are handled too (all 10 base+DLC plugins of a real save parse in ~2 s). The game's
 `Data` folder is auto-detected (with an override); when it isn't found, FormIDs fall back to hex.
-Forms that resolve to placed references (ACHR/REFR — not item templates) or runtime-created `0xFF…`
-FormIDs show `?` / `(created)`.
+A runtime-created `0xFF…` FormID shows `(created)`; a form not found in the masters shows `?`.
 
 **Still next:** per-stack extra data, perks, and other per-record internals — reachable now that the
 walker enumerates records. This needs controlled in-game diffs (change one thing, save, byte-diff) —
