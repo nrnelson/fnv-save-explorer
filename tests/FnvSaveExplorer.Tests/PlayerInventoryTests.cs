@@ -126,9 +126,10 @@ public class PlayerInventoryTests
 
 /// <summary>
 /// Builds a minimal New Vegas <c>.fos</c> whose body carries a File Location Table, a FormID array, and a
-/// single change form (the player's inventory record at iref = PlayerRef iref + 1). Its data is a short
-/// zeroed preamble followed by inventory stacks <c>[itemIref:3 BE][7C][count:u32 LE][7C][extra:00][7C]</c>,
-/// letting the inventory locator/decoder/editor be exercised deterministically without a real save.
+/// single change form (the player's inventory record at iref = PlayerRef iref + 1). Its data is the
+/// changeFlags-gated preamble (a 27-byte MOVE block + a zeroed array) followed by inventory stacks
+/// <c>[itemIref:3 BE][7C][count:u32 LE][7C][extra:00][7C]</c>, letting the inventory locator/decoder/editor
+/// be exercised deterministically without a real save.
 /// </summary>
 internal static class InventorySave
 {
@@ -188,7 +189,10 @@ internal static class InventorySave
             data.AddRange([0x04, 0x7C, 0x04, 0x7C, 0x25, 0x7C]);
             var f = new byte[4]; BinaryPrimitives.WriteSingleLittleEndian(f, condition); data.AddRange(f); data.Add(0x7C);
         }
-        data.AddRange([0x00, 0x00, 0x00, 0x00, 0x7C, 0x00, 0x00, 0x00, 0x00, 0x7C]); // zeroed preamble (skipped by the locator)
+        // 27-byte MOVE block (cell ref + position + rotation) + its 0x7C delimiter — the changeFlags-gated
+        // preamble the deterministic walk skips (CHANGE_REFR_MOVE, set below). Then a short zeroed array.
+        data.AddRange(Enumerable.Range(0, 27).Select(i => (byte)(i + 1))); data.Add(0x7C);
+        data.AddRange([0x00, 0x00, 0x00, 0x00, 0x7C, 0x00, 0x00, 0x00, 0x00, 0x7C]); // zeroed array (skipped: refs are 0)
         // Each entry references the FormID array by (index + 1) and carries its own count, so to give the
         // forms at array index 1/2/3 the counts 5/9/1 the references are 2/3/4 (verified by a controlled
         // in-game diff on a real save). The middle stack carries a condition (0x25) property — its exact
@@ -197,15 +201,15 @@ internal static class InventorySave
         EntryCond(3, 9, 75f);   // ref 3 -> FormIdArray[2] = 0x00AAAA02, x9, condition 75
         Entry(4, 1);            // ref 4 -> FormIdArray[3] = 0x00AAAA03, x1
         // Elsewhere in the record, a *longer* run that repeats a single reference (a misaligned read of a
-        // record's non-item data). The deterministic walk builds each contiguous chain by exact extra-data
-        // length, then picks the real list above — it has more distinct references — even though this run
-        // has more entries. The zero gap just separates the two chains (no run-merge window any more).
+        // record's non-item data, like the float-byte junk chains in real records). The deterministic walk
+        // returns the first chain after the MOVE skip with >= 3 *distinct* references — the real list above —
+        // and never reaches this run; even if it did, the run's single distinct ref (1 < 3) rejects it.
         data.AddRange(Enumerable.Repeat((byte)0x00, 64));
         for (var i = 0; i < 12; i++) Entry(2, (uint)(50 - i));
 
         var rec = new List<byte>();
         rec.AddRange([0x00, 0x00, 0x06]);            // refID = iref 6
-        rec.AddRange([0x00, 0x00, 0x04, 0x00]);      // changeFlags
+        rec.AddRange([0x22, 0x00, 0x00, 0x00]);      // changeFlags = CHANGE_REFR_MOVE (0x2) | CHANGE_REFR_INVENTORY (0x20)
         rec.Add(0x40);                               // type: low 6 bits = form 0x00, high 2 bits = 01 -> u16 length
         rec.Add(0x1B);                               // version
         var lenBytes = new byte[2]; BinaryPrimitives.WriteUInt16LittleEndian(lenBytes, (ushort)data.Count); rec.AddRange(lenBytes);

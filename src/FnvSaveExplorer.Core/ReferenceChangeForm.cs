@@ -33,6 +33,22 @@ public static class ReferenceChangeForm
 {
     public const byte Delimiter = 0x7C;
 
+    // ---- changeFlags bits that gate a reference record's sections (CHANGE_REFR_*) ------------------
+    // Only the bits we have confirmed are named; the rest stay null (see FlagBitLabels). MOVE and
+    // INVENTORY are confirmed both empirically (the 27-byte MOVE block appears iff CHANGE_REFR_MOVE is
+    // set; CHANGE_REFR_INVENTORY is set on every record that carries an item list) and against the
+    // documented Gamebryo/TES change-flag values (MOVE = 0x2, INVENTORY = 0x20).
+
+    /// <summary>CHANGE_REFR_MOVE (bit 1): a 27-byte MOVE block (cell ref + position + rotation) leads the data.</summary>
+    public const uint ChangeRefrMove = 0x00000002;
+
+    /// <summary>CHANGE_REFR_INVENTORY (bit 5): the reference carries an inventory item list.</summary>
+    public const uint ChangeRefrInventory = 0x00000020;
+
+    /// <summary>Byte length of the MOVE block (cell ref 3 + position 3×f32 + rotation 3×f32 = 27),
+    /// followed by a single <c>0x7C</c> delimiter. Verified across every player inventory record.</summary>
+    public const int MoveBlockLength = 27;
+
     /// <summary>
     /// Splits a record's payload into <c>0x7C</c>-delimited fields. <paramref name="data"/> is the payload
     /// bytes; <paramref name="dataOffset"/> is its absolute file offset (so each field carries its real
@@ -57,10 +73,40 @@ public static class ReferenceChangeForm
     }
 
     /// <summary>
-    /// changeFlags bit → section label for reference records (null = not yet decoded). Populated during
-    /// Phase B from UESP <c>CHANGE_REFR_*</c> + controlled diffs; drives the deterministic section walk.
+    /// changeFlags bit → section label for reference records (null = not yet identified). Only bits we
+    /// have confirmed are named — <see cref="ChangeRefrMove"/> (bit 1) and <see cref="ChangeRefrInventory"/>
+    /// (bit 5); the remaining set bits observed on real inventory records (4, 11, 22, 28, 29, 31) are not
+    /// yet pinned to a section and stay null per the repo's "label, don't guess" convention.
     /// </summary>
-    public static readonly string?[] FlagBitLabels = new string?[32];
+    public static readonly string?[] FlagBitLabels = BuildFlagLabels();
+
+    static string?[] BuildFlagLabels()
+    {
+        var labels = new string?[32];
+        labels[1] = "MOVE";      // CHANGE_REFR_MOVE: 27-byte cell+pos+rot block follows
+        labels[5] = "INVENTORY"; // CHANGE_REFR_INVENTORY: the reference carries an item list
+        return labels;
+    }
+
+    /// <summary>
+    /// The absolute offset at which to begin scanning for the inventory item list, by skipping the
+    /// changeFlags-gated fixed-size preamble that always precedes it. Currently that is the 27-byte MOVE
+    /// block (cell + position + rotation) when <see cref="ChangeRefrMove"/> is set. The variable-length
+    /// sections that follow (zeroed havok arrays + the reference's own ExtraDataList) aren't sized yet and
+    /// can yield short coincidental chains, so the caller advances from here to the first chain with enough
+    /// distinct references (the genuine list). <paramref name="data"/> is the record payload and
+    /// <paramref name="dataOffset"/> its absolute file offset. Falls back to <paramref name="dataOffset"/>
+    /// if the MOVE flag is clear or the block's trailing delimiter isn't where it's expected (a float
+    /// coordinate is never the start of the list, so the forward scan still lands correctly).
+    /// </summary>
+    public static int InventorySearchStart(ReadOnlySpan<byte> data, int dataOffset, uint changeFlags)
+    {
+        if ((changeFlags & ChangeRefrMove) != 0
+            && MoveBlockLength < data.Length
+            && data[MoveBlockLength] == Delimiter)
+            return dataOffset + MoveBlockLength + 1; // 27-byte MOVE block + its 0x7C delimiter
+        return dataOffset;
+    }
 
     /// <summary>Human description of the set bits in a reference record's <c>changeFlags</c> — labelled
     /// where known (<see cref="FlagBitLabels"/>), otherwise <c>bitN</c>.</summary>

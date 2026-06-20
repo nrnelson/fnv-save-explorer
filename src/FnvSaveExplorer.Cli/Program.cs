@@ -690,6 +690,11 @@ static void RefDump(FalloutSave s, string savePath, int? iref)
     Console.WriteLine($"  changeFlags 0x{cf.ChangeFlags:X8} = {ReferenceChangeForm.DescribeFlags(cf.ChangeFlags)}");
 
     var data = s.ReadAt(cf.DataOffset, cf.DataLength);
+    // The deterministic inventory start: skip the MOVE-gated preamble, then the first valid stack chain is
+    // the item list (ROADMAP §4i). Printed so the computed anchor can be eyeballed against the field walk.
+    var searchStart = ReferenceChangeForm.InventorySearchStart(data, cf.DataOffset, cf.ChangeFlags);
+    Console.WriteLine($"  inventory search start (after MOVE-gated preamble) @0x{searchStart:X}");
+
     var fields = ReferenceChangeForm.Tokenize(data, cf.DataOffset);
     Console.WriteLine($"\n0x7C field walk ({fields.Count} fields):");
 
