@@ -144,6 +144,40 @@ public class PlayerInventoryTests
 
     [Theory]
     [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_typed_entry_walk_agrees_with_the_fixed_vanilla_parse(string path)
+    {
+        // The generalised typed-entry ExtraDataList walk (ROADMAP §4i ◑ — the modded-grammar inspection
+        // helper, measured fully-explained on 30 vanilla + 366/479 Viva New Vegas Extended saves) must be a
+        // faithful SUPERSET of the proven fixed vanilla parse: wherever TryInventoryItemsStart sizes the list,
+        // WalkExtraDataList must also fully explain it and agree on the vsval + first item. (The theory only
+        // discovers vanilla saves here; the modded corpus lives outside the test roots — see `edlscan`.)
+        var save = FalloutSave.Load(path);
+        if (save.Inventory is not { FirstStackOffset: { } firstItem } inv)
+            return;
+        var playerRef = save.FindIref(0x14);
+        FalloutSave.ChangeFormHeader? rec = null;
+        foreach (var c in save.EnumerateChangeForms())
+            if (c.Iref == playerRef + 1) { rec = c; break; }
+        if (rec is not { } cf)
+            return;
+
+        var span = save.ReadAt(0, cf.DataOffset + cf.DataLength); // index == absolute file offset
+        var start = ReferenceChangeForm.InventorySearchStart(
+            save.ReadAt(cf.DataOffset, cf.DataLength), cf.DataOffset, cf.ChangeFlags);
+
+        // Only assert agreement where the fixed parse applies (the vanilla deterministic path).
+        if (!ReferenceChangeForm.TryInventoryItemsStart(span, start, out var fixedItems, out var fixedCount))
+            return;
+
+        var walk = ReferenceChangeForm.WalkExtraDataList(span, start, firstItem);
+        Assert.True(walk.FullyExplained, $"typed-entry walk should fully explain a fixed-parse save ({Path.GetFileName(path)})");
+        Assert.Equal(fixedItems, firstItem);        // the located first item == the fixed parse's items offset
+        Assert.Equal(fixedCount, (int)walk.Vsval);  // and the same vsval stack count
+        Assert.True(walk.Vsval <= inv.Items.Count); // the engine count never exceeds the decoded chain (no under-read)
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
     public void Real_saves_decode_and_safely_edit_inventory(string path)
     {
         var save = FalloutSave.Load(path);

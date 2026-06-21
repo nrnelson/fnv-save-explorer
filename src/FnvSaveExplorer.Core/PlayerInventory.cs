@@ -29,6 +29,11 @@ public sealed record InventoryItem(int Iref, uint FormId, uint Count, int CountV
     /// <b>weapon mod</b> when the stack is a weapon, though the type's full semantics aren't pinned (some
     /// mods reuse the slot for other linked references, e.g. a "Bill of Sale" note on a consumable).</summary>
     public IReadOnlyList<int> ExtraRefIds { get; init; } = [];
+
+    /// <summary>The first per-stack extra-data property type the decoder couldn't size (so it resynced),
+    /// or null when the stack's extra data fully decoded. Surfaced for reverse-engineering histograms of
+    /// the still-unpinned modded property types (ROADMAP §4i) — not used by editing.</summary>
+    public byte? UnknownExtraType { get; init; }
 }
 
 /// <summary>
@@ -63,6 +68,12 @@ public sealed class PlayerInventory
 
     /// <summary>The total number of individual items across all stacks.</summary>
     public long TotalItems => Items.Sum(i => (long)i.Count);
+
+    /// <summary>Absolute file offset of the first item stack's 3-byte ref (the start of the item list,
+    /// i.e. just past the reference's ExtraDataList + vsval count), or null if the inventory is empty. The
+    /// count field sits 4 bytes in, so this is <c>Items[0].CountValueOffset - 4</c>. Used as the bound for
+    /// the ExtraDataList RE walk (ROADMAP §4i).</summary>
+    public int? FirstStackOffset => Items.Count > 0 ? Items[0].CountValueOffset - 4 : null;
 
     public override string ToString() =>
         $"{Items.Count} stacks, {TotalItems} items";

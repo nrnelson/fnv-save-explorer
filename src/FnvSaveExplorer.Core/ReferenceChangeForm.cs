@@ -171,11 +171,13 @@ public static class ReferenceChangeForm
     // so the walk lands on the first item with **no scan** and self-validates against the decoded count.
     // Verified across all 30 saves (e.g. Save 31 → 0x90 → 36 stacks; quicksave → 0x0181 → 96). See ROADMAP §4i.
 
-    const byte RefListType = 0x5E;     // ExtraDataList ref-list entry
+    const byte RefListType = 0x5E;     // ExtraDataList ref-list entry: [5E][7C][N*4][7C] then N×(ref:3 7C flag:1 7C)
     const byte FixedBlockType = 0x18;  // 24-byte ref + position + rotation block
     const int FixedBlockLength = 24;
     const byte LinkedRefType = 0x74;   // a linked-ref entry just before the count
     const byte U32EntryType = 0x60;    // optional u32 entry on large inventories
+    const byte SubRefListType = 0x1D;  // modded-only sub ref-list: [1D][7C][b][7C] then (ref:3 7C)×(b/4) — §4i
+    const byte TwoRefType = 0x75;      // modded-only 2-ref entry: [75][7C][ref:3][7C][ref:3][7C][flag:1][7C] = 12 bytes
 
     /// <summary>The header (flags + scale) preceding the ExtraDataList: <c>[00][7C][f32][7C]</c> = 7 bytes.</summary>
     public const int RefExtraHeaderLength = 7;
@@ -249,6 +251,124 @@ public static class ReferenceChangeForm
 
     static bool Within(ReadOnlySpan<byte> data, int start, int length) => start >= 0 && (long)start + length <= data.Length;
 
+    // ---- Generalised typed-entry ExtraDataList walk (RE inspection — ROADMAP §4i ◑, measure-first) -----
+    //
+    // INSPECTION-ONLY this iteration: TryInventoryItemsStart (above, the live decoder) is the vanilla
+    // FIXED-sequence parse. Modded ExtraDataLists REORDER the entries and add new types, so the fixed parse
+    // bails and the caller falls back to the §4g scan. To pin the modded grammar we walk the list as a
+    // general TYPED-ENTRY sequence (any order) against a size catalog, bounded by a known first-item offset
+    // (the §4g fallback already locates it correctly), and report how far the catalog gets + the first
+    // unrecognised type. As types are pinned by aligning the corpus the catalog grows until every save is
+    // "fully explained" — at which point the follow-up iteration swaps this in for the fixed parse.
+    //
+    // Grammar (consistent with the vanilla parse, which glued the lead pair to its first 0x5E entry):
+    //   [00][7C][scale:f32][7C]   reference header (7 bytes)
+    //   [xx][7C]                  ExtraDataList lead byte (a flag/count — meaning unpinned; 2 bytes)
+    //   ( [type:u8][7C][payload] )*   typed entries, VARIABLE ORDER (catalog: ExtraEntryLength)
+    //   [vsval][7C]               inventory stack count, then the item stacks
+
+    /// <summary>One ExtraDataList typed entry: its offset (in the walk's span base), type byte, and total
+    /// byte length including the <c>[type][7C]</c> framing.</summary>
+    public readonly record struct ExtraEntry(int Offset, byte Type, int Length);
+
+    /// <summary>The result of <see cref="WalkExtraDataList"/>. <see cref="FullyExplained"/> is true when the
+    /// catalog consumed the header + lead + every entry and the trailing <c>vsval</c> lands exactly on
+    /// <c>stopOffset</c> (the known first item). Otherwise <see cref="UnknownType"/> is the first
+    /// unrecognised entry type (or null if the header/lead framing itself failed) and
+    /// <see cref="UnexplainedBytes"/> is how many bytes between the stop point and the first item were not
+    /// accounted for — the signal for pinning a type's size by alignment.</summary>
+    public readonly record struct ExtraDataListWalk(
+        bool HeaderOk, byte LeadByte, IReadOnlyList<ExtraEntry> Entries, int StopOffset,
+        long Vsval, int VsvalOffset, bool FullyExplained, byte? UnknownType, int UnexplainedBytes);
+
+    /// <summary>
+    /// Total byte length of the ExtraDataList typed entry at <paramref name="p"/> (an entry is
+    /// <c>[type:u8][7C][payload]</c>), or -1 if the type isn't in the catalog or the entry would run past
+    /// <paramref name="data"/>. Sizes are pinned by aligning real saves (ROADMAP §4i); <c>0x1D</c> is a
+    /// hypothesis under measurement. Offsets are relative to <paramref name="data"/>'s base.
+    /// </summary>
+    public static int ExtraEntryLength(ReadOnlySpan<byte> data, int p)
+    {
+        if (p < 0 || p + 2 > data.Length || data[p + 1] != Delimiter)
+            return -1;
+        switch (data[p])
+        {
+            case FixedBlockType: return Within(data, p, FixedBlockLength) ? FixedBlockLength : -1; // 0x18
+            case LinkedRefType: return Within(data, p, 6) ? 6 : -1;                                // 0x74
+            case U32EntryType: return Within(data, p, 7) ? 7 : -1;                                 // 0x60
+            case TwoRefType: return Within(data, p, 12) ? 12 : -1;                                 // 0x75
+            case RefListType:                                                                      // 0x5E: 4 + 6N
+            {
+                if (p + 4 > data.Length || data[p + 3] != Delimiter) return -1;
+                var len = 4 + 6 * (data[p + 2] / 4);
+                return Within(data, p, len) ? len : -1;
+            }
+            case SubRefListType:                                                                   // 0x1D: 4 + 4N (hyp.)
+            {
+                if (p + 4 > data.Length || data[p + 3] != Delimiter) return -1;
+                var len = 4 + 4 * (data[p + 2] / 4);
+                return Within(data, p, len) ? len : -1;
+            }
+            default: return -1;
+        }
+    }
+
+    /// <summary>
+    /// Walks the reference ExtraDataList from <paramref name="start"/> (<see cref="InventorySearchStart"/>)
+    /// as a general typed-entry sequence, stopping at the known first-item offset <paramref name="stopOffset"/>.
+    /// Inspection aid for pinning the modded grammar — it does not gate the live decoder. Offsets are relative
+    /// to <paramref name="data"/>'s base (pass a record-relative span + record-relative offsets, or an
+    /// absolute span + absolute offsets, consistently).
+    /// </summary>
+    public static ExtraDataListWalk WalkExtraDataList(ReadOnlySpan<byte> data, int start, int stopOffset)
+    {
+        var entries = new List<ExtraEntry>();
+        var p = start;
+
+        var headerOk = Within(data, p, RefExtraHeaderLength) && data[p + 1] == Delimiter && data[p + 6] == Delimiter;
+        if (!headerOk)
+            return new ExtraDataListWalk(false, 0, entries, p, -1, -1, false, null, Math.Max(0, stopOffset - p));
+        p += RefExtraHeaderLength;
+
+        // Lead pair [xx][7C] (a flag/count; unpinned). Required framing — a missing delimiter means the
+        // structure isn't what we think, so bail rather than mis-walk.
+        if (!Within(data, p, 2) || data[p + 1] != Delimiter)
+            return new ExtraDataListWalk(true, 0, entries, p, -1, -1, false, null, Math.Max(0, stopOffset - p));
+        var leadByte = data[p];
+        p += 2;
+
+        byte? unknown = null;
+        long vsval = -1;
+        var vsvalOffset = -1;
+        while (p < stopOffset)
+        {
+            // The list terminates with the inventory's vsval stack count, whose value + its 0x7C lands
+            // exactly on the first item. Check that first — otherwise the loop would try (and fail) to parse
+            // the vsval byte as an entry type.
+            var v = ReadVsval(data, p, out var vlen);
+            if (v >= 0 && p + vlen + 1 == stopOffset && data[p + vlen] == Delimiter)
+            {
+                vsval = v;
+                vsvalOffset = p;
+                break;
+            }
+
+            var len = ExtraEntryLength(data, p);
+            if (len <= 0)
+            {
+                // Report the offending type only when its [type][7C] framing is intact (else it's noise).
+                unknown = p + 2 <= data.Length && data[p + 1] == Delimiter ? data[p] : (byte?)null;
+                break;
+            }
+            entries.Add(new ExtraEntry(p, data[p], len));
+            p += len;
+        }
+
+        var fully = vsvalOffset >= 0;
+        return new ExtraDataListWalk(true, leadByte, entries, p, vsval, vsvalOffset, fully,
+            fully ? null : unknown, fully ? 0 : Math.Max(0, stopOffset - p));
+    }
+
     /// <summary>Human description of the set bits in a reference record's <c>changeFlags</c> — labelled
     /// where known (<see cref="FlagBitLabels"/>), otherwise <c>bitN</c>.</summary>
     public static string DescribeFlags(uint flags)
@@ -293,11 +413,13 @@ public static class ReferenceChangeForm
 
     /// <summary>Decoded per-stack extra data plus the block's byte length. <see cref="FullyDecoded"/> is
     /// false when an unknown/variable property type was hit, in which case <see cref="ByteLength"/> only
-    /// covers the decoded prefix and the caller must resynchronise to the next item.</summary>
+    /// covers the decoded prefix and the caller must resynchronise to the next item; <see cref="UnknownType"/>
+    /// is that first unsized property type (for RE histograms — ROADMAP §4i), or null when fully decoded or
+    /// stopped by truncation rather than an unknown type.</summary>
     public readonly record struct StackExtra(
-        int ByteLength, float? Condition, int? ConditionOffset, bool Equipped, IReadOnlyList<int> ModRefIds, bool FullyDecoded)
+        int ByteLength, float? Condition, int? ConditionOffset, bool Equipped, IReadOnlyList<int> ModRefIds, bool FullyDecoded, byte? UnknownType)
     {
-        public static readonly StackExtra None = new(2, null, null, false, [], true);
+        public static readonly StackExtra None = new(2, null, null, false, [], true, null);
     }
 
     /// <summary>
@@ -323,7 +445,7 @@ public static class ReferenceChangeForm
         var propCount = data[p + 2] / 4;
         var cur = p + 4;
         float? condition = null; int? conditionOffset = null; var equipped = false; List<int>? mods = null;
-        var fully = true;
+        var fully = true; byte? unknownType = null;
         for (var i = 0; i < propCount; i++)
         {
             if (cur + 2 > data.Length || data[cur + 1] != Delimiter)
@@ -337,6 +459,7 @@ public static class ReferenceChangeForm
             if (plen < 0)
             {
                 fully = false; // structured/unknown — can't size the rest deterministically
+                unknownType = type;
                 break;
             }
             if (payloadStart + plen > data.Length)
@@ -360,7 +483,7 @@ public static class ReferenceChangeForm
             // type(1) + delimiter(1), then payload + its delimiter only when the payload is non-empty.
             cur = payloadStart + (plen > 0 ? plen + 1 : 0);
         }
-        extra = new StackExtra(cur - p, condition, conditionOffset, equipped, (IReadOnlyList<int>?)mods ?? [], fully);
+        extra = new StackExtra(cur - p, condition, conditionOffset, equipped, (IReadOnlyList<int>?)mods ?? [], fully, unknownType);
         return true;
     }
 }

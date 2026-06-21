@@ -33,7 +33,10 @@ if (args.Length < 2)
                                               and names the containing record for each differing run
           fnvsave walk <save.fos>             Walk all change-form records (validates the header format; R&D)
           fnvsave refdump <save.fos> [iref]  Decode a reference change form (default: the player inventory
-                                              record): changeFlags bits + 0x7C-field walk (R&D for §6 inventory)
+                                              record): changeFlags bits + the typed-entry ExtraDataList walk
+                                              (bounded by the located first item) + 0x7C-field walk (R&D §4i)
+          fnvsave edlscan <dir>              Walk every .fos in a folder and aggregate the ExtraDataList
+                                              typed-entry grammar + per-stack extra-data types (R&D §4i ◑)
         """);
     return 1;
 }
@@ -41,7 +44,16 @@ if (args.Length < 2)
 var command = args[0];
 var path = args[1];
 
-if (!File.Exists(path))
+// Most commands take a save file; `edlscan` takes a folder of saves.
+if (command == "edlscan")
+{
+    if (!Directory.Exists(path))
+    {
+        Console.Error.WriteLine($"Directory not found: {path}");
+        return 1;
+    }
+}
+else if (!File.Exists(path))
 {
     Console.Error.WriteLine($"File not found: {path}");
     return 1;
@@ -92,6 +104,9 @@ try
             break;
         case "refdump":
             RefDump(FalloutSave.Load(path), path, args.Length > 2 ? (int)ParseOffset(args[2]) : (int?)null);
+            break;
+        case "edlscan":
+            EdlScan(path);
             break;
         case "idiff":
             IDiff(path, args[2]);
@@ -705,9 +720,29 @@ static void RefDump(FalloutSave s, string savePath, int? iref)
     // Deterministic items start: size the ExtraDataList + read the vsval stack count (ROADMAP §4i). `data` is
     // record-relative, so feed the relative ExtraDataList start and re-absolutise the result.
     if (ReferenceChangeForm.TryInventoryItemsStart(data, searchStart - cf.DataOffset, out var relItems, out var stackCount))
-        Console.WriteLine($"  ExtraDataList sized -> first item @0x{cf.DataOffset + relItems:X}  vsval stackCount {stackCount}");
+        Console.WriteLine($"  ExtraDataList sized -> first item @0x{cf.DataOffset + relItems:X}  vsval stackCount {stackCount} (deterministic vanilla path)");
     else
-        Console.WriteLine("  ExtraDataList not recognised -> falls back to the forward scan");
+        Console.WriteLine("  ExtraDataList not recognised by the fixed vanilla parse -> live decoder falls back to the forward scan");
+
+    // Generalised typed-entry ExtraDataList walk (ROADMAP §4i ◑): bound it by the first item the working
+    // decoder located (the §4g fallback is correct on modded saves), then report how far the typed-entry
+    // catalog gets — the lens for pinning the modded grammar. Only meaningful for the player inventory record.
+    var playerRefIref = s.FindIref(0x14);
+    if (playerRefIref >= 0 && cf.Iref == playerRefIref + 1 && s.Inventory?.FirstStackOffset is { } firstItemAbs)
+    {
+        var walk = ReferenceChangeForm.WalkExtraDataList(data, searchStart - cf.DataOffset, firstItemAbs - cf.DataOffset);
+        Console.WriteLine($"\n  typed-entry ExtraDataList walk (bound: first item @0x{firstItemAbs:X}):");
+        Console.WriteLine($"    header {(walk.HeaderOk ? "ok" : "MISSING")}  lead 0x{walk.LeadByte:X2}  entries {walk.Entries.Count}");
+        foreach (var e in walk.Entries)
+            Console.WriteLine($"      @0x{cf.DataOffset + e.Offset:X}  type 0x{e.Type:X2}  len {e.Length}");
+        if (walk.FullyExplained)
+            Console.WriteLine($"    FULLY EXPLAINED -> vsval {walk.Vsval} @0x{cf.DataOffset + walk.VsvalOffset:X} lands exactly on the first item");
+        else if (walk.UnknownType is { } ut)
+            Console.WriteLine($"    UNKNOWN type 0x{ut:X2} @0x{cf.DataOffset + walk.StopOffset:X}; {walk.UnexplainedBytes} bytes to the first item unaccounted -> "
+                + string.Join(' ', s.ReadAt(cf.DataOffset + walk.StopOffset, Math.Min(32, walk.UnexplainedBytes)).Select(b => b.ToString("X2"))));
+        else
+            Console.WriteLine($"    NOT EXPLAINED (no unknown type framing); {walk.UnexplainedBytes} bytes to the first item @0x{cf.DataOffset + walk.StopOffset:X}");
+    }
 
     var fields = ReferenceChangeForm.Tokenize(data, cf.DataOffset);
     Console.WriteLine($"\n0x7C field walk ({fields.Count} fields):");
@@ -759,6 +794,115 @@ static void RefDump(FalloutSave s, string savePath, int? iref)
 
     var end = fields.Count > 0 ? fields[^1].Offset + fields[^1].Length : cf.DataOffset;
     Console.WriteLine($"\nlast field ends @0x{end:X}; record data ends @0x{cf.DataOffset + cf.DataLength:X} (delta {cf.DataOffset + cf.DataLength - end}).");
+}
+
+static void EdlScan(string dir)
+{
+    // R&D aggregate for ROADMAP §4i ◑: across every .fos in `dir`, walk the player inventory's
+    // ExtraDataList as a GENERAL typed-entry sequence (ReferenceChangeForm.WalkExtraDataList), bounded by
+    // the first item the working decoder located (the §4g fallback is correct on modded saves). Aggregates
+    // the modded grammar — which entry-type orderings occur, which types are still unsized (ExtraDataList
+    // AND per-stack), and whether the typed walk reaches the vsval cleanly. No name resolution (masters)
+    // needed, so it stays fast. Read-only: nothing is written.
+    var files = Directory.EnumerateFiles(dir, "*.fos").OrderBy(f => f).ToList();
+    Console.WriteLine($"Scanning {files.Count} .fos in {dir}\n");
+
+    int scanned = 0, parseFail = 0, noInv = 0, fully = 0, unknownEdl = 0, headerMissing = 0, otherFail = 0;
+    int vsvalOver = 0, vsvalUnder = 0; // decoded stack count vs the engine's vsval (over = benign §9 over-read; under = lost items)
+    var orderings = new Dictionary<string, int>();
+    var edlTypeCounts = new SortedDictionary<byte, int>();
+    var unknownEdlCount = new SortedDictionary<byte, int>();
+    var unknownEdlEx = new SortedDictionary<byte, List<string>>();
+    var perStackCount = new SortedDictionary<byte, int>();
+    var perStackEx = new SortedDictionary<byte, List<string>>();
+
+    static void Example(SortedDictionary<byte, List<string>> ex, byte key, string line)
+    {
+        if (!ex.TryGetValue(key, out var list)) ex[key] = list = new List<string>();
+        if (list.Count < 5) list.Add(line);
+    }
+
+    foreach (var file in files)
+    {
+        FalloutSave s;
+        try { s = FalloutSave.Load(file); }
+        catch { parseFail++; continue; }
+        scanned++;
+        var name = Path.GetFileName(file);
+
+        var playerRef = s.FindIref(0x14);
+        FnvSaveExplorer.Core.FalloutSave.ChangeFormHeader? rec = null;
+        if (playerRef >= 0)
+            foreach (var c in s.EnumerateChangeForms())
+                if (c.Iref == playerRef + 1) { rec = c; break; }
+
+        if (rec is null || s.Inventory?.FirstStackOffset is not { } firstAbs) { noInv++; continue; }
+        var cf = rec.Value;
+        var data = s.ReadAt(cf.DataOffset, cf.DataLength);
+        var searchStart = ReferenceChangeForm.InventorySearchStart(data, cf.DataOffset, cf.ChangeFlags);
+        var walk = ReferenceChangeForm.WalkExtraDataList(data, searchStart - cf.DataOffset, firstAbs - cf.DataOffset);
+
+        foreach (var e in walk.Entries)
+            edlTypeCounts[e.Type] = edlTypeCounts.GetValueOrDefault(e.Type) + 1;
+        var order = string.Join(",", walk.Entries.Select(e => e.Type.ToString("X2")));
+        orderings[order] = orderings.GetValueOrDefault(order) + 1;
+
+        if (walk.FullyExplained)
+        {
+            fully++;
+            var decoded = s.Inventory!.Items.Count;
+            if (decoded > walk.Vsval) vsvalOver++;
+            else if (decoded < walk.Vsval) vsvalUnder++;
+        }
+        else if (walk.UnknownType is { } ut)
+        {
+            unknownEdl++;
+            unknownEdlCount[ut] = unknownEdlCount.GetValueOrDefault(ut) + 1;
+            var win = s.ReadAt(cf.DataOffset + walk.StopOffset, Math.Min(24, Math.Max(0, walk.UnexplainedBytes)));
+            Example(unknownEdlEx, ut, $"{name} +{walk.UnexplainedBytes}B: {string.Join(' ', win.Select(b => b.ToString("X2")))}");
+        }
+        else if (!walk.HeaderOk) headerMissing++; // search start mis-landed: variable havok-array size (§4i)
+        else otherFail++;                          // header ok but no entry/vsval framing (lead or post-entry shape)
+
+        foreach (var it in s.Inventory!.Items)
+            if (it.UnknownExtraType is { } pt)
+            {
+                perStackCount[pt] = perStackCount.GetValueOrDefault(pt) + 1;
+                Example(perStackEx, pt, $"{name} item 0x{it.FormId:X8}");
+            }
+    }
+
+    Console.WriteLine($"parsed {scanned} (failed {parseFail}); no inventory located: {noInv}");
+    Console.WriteLine($"ExtraDataList typed-walk: fully explained {fully}, first-unknown-type {unknownEdl}, "
+        + $"header mis-landed (variable havok array) {headerMissing}, other {otherFail}");
+    Console.WriteLine($"of the fully-explained, decoded stacks vs engine vsval: over-read {vsvalOver}, under-read {vsvalUnder} (rest exact)\n");
+
+    Console.WriteLine("ExtraDataList entry types seen (type x total occurrences across saves):");
+    foreach (var (t, c) in edlTypeCounts) Console.WriteLine($"  0x{t:X2}  {c}");
+
+    Console.WriteLine("\nExtraDataList entry-type orderings (sequence x saves):");
+    foreach (var (o, c) in orderings.OrderByDescending(kv => kv.Value))
+        Console.WriteLine($"  [{c,4}]  {(o.Length == 0 ? "(none)" : o)}");
+
+    if (unknownEdlCount.Count > 0)
+    {
+        Console.WriteLine("\nUNKNOWN ExtraDataList types (first hit), with raw context to the first item:");
+        foreach (var (t, c) in unknownEdlCount)
+        {
+            Console.WriteLine($"  0x{t:X2}  x{c}");
+            foreach (var e in unknownEdlEx[t]) Console.WriteLine($"      {e}");
+        }
+    }
+
+    if (perStackCount.Count > 0)
+    {
+        Console.WriteLine("\nUNSIZED per-stack extra-data types (0x25/0x16/0x21 already sized, so excluded):");
+        foreach (var (t, c) in perStackCount)
+        {
+            Console.WriteLine($"  0x{t:X2}  x{c}");
+            foreach (var e in perStackEx[t]) Console.WriteLine($"      {e}");
+        }
+    }
 }
 
 static void IrefScan(FalloutSave s, uint offset, int len)
