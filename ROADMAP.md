@@ -171,8 +171,9 @@ Names resolve via §4h.
 
 > **Superseded:** the 2048-byte window above is gone — the per-stack extra data is now decoded, so each stack's
 > exact length is known and the walk is deterministic. See **§4i** for the current decoder + the extra-data catalog
-> (condition / equipped / mods). The list **start** is no longer a whole-record most-distinct ranking either: it is
-> anchored by the `changeFlags`-gated MOVE skip, then the first chain with ≥ 3 distinct refs (§4i).
+> (condition / equipped / mods). The list **start** is no longer a whole-record most-distinct ranking either: on
+> vanilla saves it is a pure structural walk (MOVE skip + fixed havok array + sized ExtraDataList → the `vsval`
+> stack count → first item); modded ExtraDataLists fall back to a forward scan (§4i).
 
 ### 4h. FormID → display name — reading the game's ESM/ESP masters
 Every FormID the tool surfaces (inventory above all) is resolved to a human name by a small custom
@@ -370,11 +371,11 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
    made the whole list correct: every stack resolves, no spurious rows, and previously-missing items
    (Antivenom, caps, Pip-Boy 3000, …) appear. The decoder is now **deterministic** (§4i): the 2048-byte window
    is gone, the per-stack **extra data** (condition / equipped / `0x21` ref) is decoded, and **condition is
-   editable**. The list *start* is now `changeFlags`-anchored (MOVE skip + first ≥3-distinct chain), replacing
-   the whole-record most-distinct ranking (§4i; byte-identical on all 30 saves). The start is now a **pure
-   structural walk** on all 30 saves: the MOVE block, the fixed 1160-byte havok array, **and the ExtraDataList**
+   editable**. The list *start* is now a **pure structural walk** on all 30 vanilla saves (§4i), replacing the
+   whole-record most-distinct ranking: the MOVE block, the fixed 1160-byte havok array, **and the ExtraDataList**
    are sized, and the inventory's **`vsval` stack count** anchors the first item — no forward scan, no distinct-ref
-   test. Remaining nuance: editing targets the first stack of a given FormID (duplicate-FormID stacks are
+   test (byte-identical on all 30 saves). Remaining nuance: editing targets the first stack of a given FormID
+   (duplicate-FormID stacks are
    ambiguous by FormID alone), and the ExtraDataList grammar is verified on the 30 vanilla saves — an unrecognised
    shape falls back to the §4g scan (§4i ◑).
 3. ~~**Item / form name resolution (FormID → display name)**~~ — ✅ **DONE** (§4h). Small custom TES4
