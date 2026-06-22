@@ -22,8 +22,12 @@ a CLI — and validated against real saves.
 | **Change-form record header / walker** | ✅ decoded — walks to exactly `ChangeFormCount` records, lands on `GlobalData3Offset` (both characters, fresh→4 h) |
 | **Player inventory** (item stacks in the player's inventory change form) | ✅ **deterministic** decode **and safely editable** — `[ref][7C][u32 count][7C]` + per-stack extra data (`ref` = index + 1); confirmed by controlled diffs (Antivenom 1→2→1) — every stack resolves with correct counts, no scan window. List start is a **pure structural walk** (no scan): MOVE block + **fixed 1160-byte havok array** + **sized ExtraDataList** → the **`vsval` stack count** → first item; byte-identical on all 30 saves, deterministic path taken on all 30 |
 | **Item condition / equipped / mods** (per-stack extra data) | ✅ cracked by a controlled 3-save diff — condition (`0x25` float, **editable**), equipped (`0x16`), weapon-mod ref (`0x21`); surfaced in CLI + GUI |
-| **FormID → display name** (item names from the game's ESM/ESP masters) | ✅ custom TES4 reader resolves inventory/FormID names (Stimpak, Vault 21 Jumpsuit…); all 10 base+DLC plugins parse, DLC renumbering + compressed records handled |
-| **Change forms** (perks, per-actor state, deterministic list start) | 🔬 walker + inventory + skills + per-stack extra data decoded; remaining per-record internals **next** |
+| **FormID → display name** (item names from the game's ESM/ESP masters) | ✅ custom TES4 reader resolves inventory/FormID names (Stimpak, Vault 21 Jumpsuit…); all 10 base+DLC plugins parse, DLC renumbering + compressed records handled; works on **Mod Organizer 2 / Viva New Vegas** saves (auto-detects the MO2 `mods\` folder) |
+| **Inventory list start — modded too** | ✅ **deterministic on all 607 real saves** (vanilla 30, base VNV 98, VNV Extended 479): the typed-entry ExtraDataList walk (variable order + modded `0x1D`/`0x75`) + the ExtraDataList-header anchor for havok-physics records → the `vsval` count |
+| **Caps** (the `0x0000000F` "Bottle Cap" stack) | ✅ decoded **and safely editable** |
+| **Karma + XP** (float actor-values in the player reference) | ✅ decoded **and safely editable** — cracked via a float-aware diff (slot 100 = karma, 101 = XP), confirmed on a 2nd character |
+| **Pip-Boy notes** (Data → Notes, read **and** unread) | ✅ fully decoded — read markers (corpus-proven over 45,783) + the acquired-notes ref-list in the player inventory record; CLI + GUI show the full list with read/unread status + media type (Text/Voice/Sound/Image). Read-only |
+| **Change forms** (perks, other per-actor state) | 🔬 walker + inventory + skills + per-stack extra data + notes decoded; remaining per-record internals (perks, quest/script state) **next** |
 
 ## The `.fos` format (validated against real New Vegas saves)
 
@@ -134,12 +138,13 @@ handles **DLC renumbering**; **compressed records** (zlib) and `GRUP`-skipping o
 `Data` folder is auto-detected (with an override); when it isn't found, FormIDs fall back to hex.
 A runtime-created `0xFF…` FormID shows `(created)`; a form not found in the masters shows `?`.
 
-**Still next:** perks and other per-record internals. The inventory list *start* is now fully structural on all
-30 real saves (MOVE + havok array + ExtraDataList + vsval count); the last mile is **breadth** — the ExtraDataList
-grammar is verified on the 30 vanilla saves, so a record with a different entry composition (a heavily-modded/VNV
-ExtraDataList, or new BSExtraData types) falls back safely to the prior forward scan. Decoding the rest needs
-controlled in-game diffs (change one thing, save, byte-diff) — the tooling (`walk`, `refdump` (prints the sized
-ExtraDataList + vsval count), `find`, `diff … cf`, `idiff`, `probe`, `hex`, `playerdump`) is in place to support it.
+The inventory list *start* is now **deterministic on all 607 real saves** (vanilla 30, base VNV 98, VNV Extended
+479): the typed-entry ExtraDataList walk handles the variable order and modded entry types (`0x1D`/`0x75`), and
+records whose pre-list region is a variable-length Havok physics blob are located by an ExtraDataList-header anchor
+(the prior forward scan is retained only as an unused safety net). **Still next:** perks and other per-record
+internals. Decoding the rest needs controlled in-game diffs (change one thing, save, byte-diff) — the tooling
+(`walk`, `refdump`, `find`, `diff … cf`, `idiff` / `idiff … clean`, `fdiff`, `probe`, `hex`, `playerdump`,
+`notescan`, `resolve`) is in place to support it.
 
 ## Architecture — the "retention model"
 
@@ -153,8 +158,8 @@ even though the body isn't fully understood.
 
 - `src/FnvSaveExplorer.Core` — UI-agnostic parser/writer (`FalloutSave`, `ByteReader`, `SaveScreenshot`)
   plus the FormID-name resolver (`TesPlugin`, `PluginDatabase`, `GameDataLocator`).
-- `src/FnvSaveExplorer.App` — WPF GUI: screenshot, character panel, plugins, File Location Table, SPECIAL/skills/safe edits, named inventory.
-- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`, `special`, `skills`, `setskill`, `inventory`, `setcount`, `setcondition`, `names`, `walk`, `refdump`, `find`, `diff`/`idiff`, `playerdump`, … (run with no args to list all).
+- `src/FnvSaveExplorer.App` — WPF GUI: screenshot, character panel, plugins, File Location Table, SPECIAL/skills/inventory/caps/karma/XP safe edits, named inventory, and the full Notes tab (read/unread + media type).
+- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`, `special`, `skills`, `setskill`, `inventory`, `setcount`, `setcondition`, `names`, `notes`, `caps`/`setcaps`, `karma`/`xp`/`setkarma`/`setxp`, `walk`, `refdump`, `find`, `diff`/`idiff` (+ `idiff … clean`)/`fdiff`, `notescan`, `resolve`, `playerdump`, … (run with no args to list all).
 - `tests/FnvSaveExplorer.Tests` — synthetic-save unit tests + a theory that round-trips every real `.fos` it finds.
 
 ## Usage
@@ -170,6 +175,8 @@ dotnet run --project src/FnvSaveExplorer.Cli -- dump    "<save.fos>"   # metadat
 dotnet run --project src/FnvSaveExplorer.Cli -- special "<save.fos>"   # player SPECIAL
 dotnet run --project src/FnvSaveExplorer.Cli -- skills  "<save.fos>"   # stored skill modifications
 dotnet run --project src/FnvSaveExplorer.Cli -- inventory "<save.fos>" # player inventory (name + FormID x count)
+dotnet run --project src/FnvSaveExplorer.Cli -- notes   "<save.fos>"   # Pip-Boy notes — read AND unread + type
+dotnet run --project src/FnvSaveExplorer.Cli -- karma   "<save.fos>"   # player karma (and `xp` for XP)
 dotnet run --project src/FnvSaveExplorer.Cli -- names   "<save.fos>"   # FormID->name resolver status (masters)
 dotnet run --project src/FnvSaveExplorer.Cli -- stats   "<save.fos>"   # Misc Stats counters
 dotnet run --project src/FnvSaveExplorer.Cli -- globals "<save.fos>"   # global data records
@@ -193,17 +200,15 @@ offset. The recipe to locate any value (a skill, caps, a perk):
 
 The header, File Location Table, global-data tables, Misc Stats, the FormID array, the change-form
 record header/walker, SPECIAL, skills, inventory item stacks **and their per-stack extra data**
-(condition / equipped / mods), and FormID→display-name resolution are decoded. Remaining:
+(condition / equipped / mods), FormID→display-name resolution, **caps**, **karma + XP**, and the full
+**Pip-Boy notes** list (read and unread, with media type) are decoded. The inventory list start is
+**deterministic on all 607 real saves** (vanilla + base VNV + VNV Extended). Remaining:
 
-1. **Inventory list start — done** (now a pure structural walk on all 30 saves: MOVE + fixed 1160-byte havok
-   array + sized ExtraDataList → the `vsval` stack count → first item, no scan; byte-identical, deterministic
-   path on all 30). The remaining work is **breadth**: the ExtraDataList grammar is verified on the 30 vanilla
-   saves, so an unrecognised entry composition (modded/VNV ExtraDataList, new BSExtraData types) falls back to
-   the prior forward scan. Extend the typed-entry catalog to cover those (`refdump` prints the sized
-   ExtraDataList + vsval count for it).
-2. **Caps / karma / XP** — caps may simply be an inventory stack; karma/XP via controlled diffs.
-3. **Other per-record state** (perks, quest/script data) — now enumerable record-by-record via the
-   walker; crack each with a controlled in-game change → `idiff`, cross-referencing FormIDs in FNVEdit.
+1. **Other per-record state** (perks, quest/script data) — now enumerable record-by-record via the
+   walker; crack each with a controlled in-game change → `idiff` / `idiff … clean` (the latter hides
+   the recurring game-time/havok churn), cross-referencing FormIDs in FNVEdit.
+2. **Length-changing edits** (arbitrary rename, add/remove items/plugins) — needs full File Location
+   Table offset rewriting; deferred by design (see the retention model).
 
 ### References
 
