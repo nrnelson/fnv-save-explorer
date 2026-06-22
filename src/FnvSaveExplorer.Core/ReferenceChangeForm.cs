@@ -515,20 +515,40 @@ public static class ReferenceChangeForm
     //   0x25 ExtraCondition  : 4-byte LE float (item health / weapon condition)   — EDITABLE same-length
     //   0x16 ExtraEquipped   : 0-byte flag; its presence means the item is equipped/worn
     //   0x21 ExtraWeaponMod  : 3-byte BE refID of an attached weapon mod (seen on modded VNV weapons)
-    //   0x0D / 0x18 / 0x24 / 0x6E … : longer/structured or mod-added; payload length not yet pinned.
+    //
+    // Four further types had their *payload length* pinned structurally by a CORPUS-ALIGNMENT measurement
+    // (CLI `edlscan` over vanilla + base VNV + VNV Extended = 607 saves): for each occurrence, the byte gap
+    // from the property's [type][7C] header to the next valid stack was histogrammed, cleanest when the
+    // property is the block's LAST one (block ends → next stack). Each spiked at a single gap, so the length
+    // is fixed (payload = gap==2 ? 0 : gap-3). Lengths only — the SEMANTICS stay unlabeled (per "label, don't
+    // guess"), exactly as 0x21's was sized before its meaning was known:
+    //   0x6E ExtraFlag6E     : 0-byte flag                — gap 2 on 929/929 (Extended; modded weapons)
+    //   0x1C ExtraRef1C      : 3-byte BE refID            — gap 6 on 108/108
+    //   0x24 ExtraU16_24     : 2-byte value (a small u16) — gap 5 on 1163/1169 (+ a 0x25 condition often follows)
+    //   0x30 ExtraFloat30    : 4-byte LE float            — gap 7 (last) / 12 when a 0x24 follows; a 0.82-ish float
+    //   0x0D … : still STRUCTURED/variable (internal 7C-delimited sub-fields; gaps spread 4/12/18…) — left on
+    //           the per-stack resync until its sub-grammar is decoded.
     // See ROADMAP §4i.
 
     public const byte ExtraEquipped = 0x16;
+    public const byte ExtraRef1C = 0x1C;
     public const byte ExtraWeaponMod = 0x21;
+    public const byte ExtraU16_24 = 0x24;
     public const byte ExtraCondition = 0x25;
+    public const byte ExtraFloat30 = 0x30;
+    public const byte ExtraFlag6E = 0x6E;
 
     /// <summary>Fixed payload length (bytes) of a per-stack extra-data property <paramref name="type"/>,
     /// or -1 if the type carries a variable/structured payload we can't yet size deterministically.</summary>
     public static int FixedPropertyPayload(byte type) => type switch
     {
-        ExtraEquipped => 0,
-        ExtraWeaponMod => 3,
-        ExtraCondition => 4,
+        ExtraEquipped => 0, // 0x16
+        ExtraFlag6E => 0,   // 0x6E — corpus-pinned (gap 2 on 929/929)
+        ExtraU16_24 => 2,   // 0x24 — corpus-pinned (gap 5 on 1163/1169)
+        ExtraWeaponMod => 3, // 0x21
+        ExtraRef1C => 3,    // 0x1C — corpus-pinned (gap 6 on 108/108)
+        ExtraCondition => 4, // 0x25
+        ExtraFloat30 => 4,  // 0x30 — corpus-pinned (gap 7 last / 12 with a trailing 0x24)
         _ => -1,
     };
 
@@ -536,11 +556,12 @@ public static class ReferenceChangeForm
     /// false when an unknown/variable property type was hit, in which case <see cref="ByteLength"/> only
     /// covers the decoded prefix and the caller must resynchronise to the next item; <see cref="UnknownType"/>
     /// is that first unsized property type (for RE histograms — ROADMAP §4i), or null when fully decoded or
-    /// stopped by truncation rather than an unknown type.</summary>
+    /// stopped by truncation rather than an unknown type. <see cref="UnknownOffset"/> is the absolute file
+    /// offset of that unsized property's <c>[type][7C]</c> header (for the RE corpus-alignment sizer), or null.</summary>
     public readonly record struct StackExtra(
-        int ByteLength, float? Condition, int? ConditionOffset, bool Equipped, IReadOnlyList<int> ModRefIds, bool FullyDecoded, byte? UnknownType)
+        int ByteLength, float? Condition, int? ConditionOffset, bool Equipped, IReadOnlyList<int> ModRefIds, bool FullyDecoded, byte? UnknownType, int? UnknownOffset)
     {
-        public static readonly StackExtra None = new(2, null, null, false, [], true, null);
+        public static readonly StackExtra None = new(2, null, null, false, [], true, null, null);
     }
 
     /// <summary>
@@ -566,7 +587,7 @@ public static class ReferenceChangeForm
         var propCount = data[p + 2] / 4;
         var cur = p + 4;
         float? condition = null; int? conditionOffset = null; var equipped = false; List<int>? mods = null;
-        var fully = true; byte? unknownType = null;
+        var fully = true; byte? unknownType = null; int? unknownOffset = null;
         for (var i = 0; i < propCount; i++)
         {
             if (cur + 2 > data.Length || data[cur + 1] != Delimiter)
@@ -581,6 +602,7 @@ public static class ReferenceChangeForm
             {
                 fully = false; // structured/unknown — can't size the rest deterministically
                 unknownType = type;
+                unknownOffset = dataOffset + cur;
                 break;
             }
             if (payloadStart + plen > data.Length)
@@ -604,7 +626,7 @@ public static class ReferenceChangeForm
             // type(1) + delimiter(1), then payload + its delimiter only when the payload is non-empty.
             cur = payloadStart + (plen > 0 ? plen + 1 : 0);
         }
-        extra = new StackExtra(cur - p, condition, conditionOffset, equipped, (IReadOnlyList<int>?)mods ?? [], fully, unknownType);
+        extra = new StackExtra(cur - p, condition, conditionOffset, equipped, (IReadOnlyList<int>?)mods ?? [], fully, unknownType, unknownOffset);
         return true;
     }
 }

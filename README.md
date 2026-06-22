@@ -121,7 +121,10 @@ confirming both the `+ 1` encoding and that counts are **safely editable** in pl
 **deterministic** — the extra-data block's exact length is decoded, so the walk advances stack-to-stack
 without a scan window. The extra data was cracked by a controlled 3-save diff (equip a 9mm pistol, then
 repair it): **condition/health** (`0x25`, a float — **editable**, e.g. repair-to-full), the **equipped**
-flag (`0x16`), and a weapon-mod ref (`0x21`). Every stack resolves to its **display name** (see below).
+flag (`0x16`), and a weapon-mod ref (`0x21`). Four further per-stack property types (`0x6E`/`0x1C`/`0x24`/`0x30`)
+were later **sized by corpus alignment** across all 607 saves, so the walk steps over them deterministically too —
+which also **corrected a handful of modded-save item counts** (phantom over-read stacks the old scan picked up now
+drop, several inventories now matching the engine's own count exactly). Every stack resolves to its **display name** (see below).
 The list **start** is now a **pure structural walk** (no scan): the walk skips the 27-byte MOVE block
 (`CHANGE_REFR_MOVE`), the **fixed 1160-byte havok/float array** after it (232 `[u32][7C]` slots — an empirical
 invariant across all 30 saves, independent of bit22), **and the reference's ExtraDataList** (a fixed-shape typed

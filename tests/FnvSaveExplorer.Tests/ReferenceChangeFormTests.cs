@@ -186,6 +186,44 @@ public class ReferenceChangeFormTests
     }
 
     [Fact]
+    public void FixedPropertyPayload_sizes_the_corpus_pinned_per_stack_types()
+    {
+        // Three original (0x16/0x21/0x25) + four pinned by corpus alignment over 607 saves (ROADMAP §4i):
+        // 0x6E flag (0), 0x24 u16 (2), 0x1C ref (3), 0x30 float (4). 0x0D stays structured/variable -> -1.
+        Assert.Equal(0, ReferenceChangeForm.FixedPropertyPayload(ReferenceChangeForm.ExtraEquipped)); // 0x16
+        Assert.Equal(0, ReferenceChangeForm.FixedPropertyPayload(ReferenceChangeForm.ExtraFlag6E));   // 0x6E
+        Assert.Equal(2, ReferenceChangeForm.FixedPropertyPayload(ReferenceChangeForm.ExtraU16_24));   // 0x24
+        Assert.Equal(3, ReferenceChangeForm.FixedPropertyPayload(ReferenceChangeForm.ExtraWeaponMod)); // 0x21
+        Assert.Equal(3, ReferenceChangeForm.FixedPropertyPayload(ReferenceChangeForm.ExtraRef1C));    // 0x1C
+        Assert.Equal(4, ReferenceChangeForm.FixedPropertyPayload(ReferenceChangeForm.ExtraCondition)); // 0x25
+        Assert.Equal(4, ReferenceChangeForm.FixedPropertyPayload(ReferenceChangeForm.ExtraFloat30));  // 0x30
+        Assert.Equal(-1, ReferenceChangeForm.FixedPropertyPayload(0x0D));                              // still variable
+    }
+
+    [Fact]
+    public void TryReadStackExtra_walks_a_block_mixing_all_pinned_types_then_a_condition()
+    {
+        // A per-stack extra block [04][7C][b][7C] of five properties in mixed order — the four newly-sized
+        // types (0x6E/0x24/0x1C/0x30) plus a trailing 0x25 condition — must decode fully (no resync) with
+        // the exact byte length, and surface the condition that a resync over an unsized type would have lost.
+        var d = new List<byte>();
+        d.AddRange([0x04, 0x7C, 0x14, 0x7C]);              // a=04, b=20 -> 5 properties
+        d.AddRange([0x6E, 0x7C]);                          // 0x6E flag (0-byte)
+        d.AddRange([0x24, 0x7C, 0xAA, 0xBB, 0x7C]);        // 0x24 u16 (2-byte)
+        d.AddRange([0x1C, 0x7C, 0x11, 0x22, 0x33, 0x7C]);  // 0x1C ref (3-byte)
+        d.AddRange([0x30, 0x7C, 0x85, 0xEB, 0x51, 0x3F, 0x7C]); // 0x30 float (4-byte)
+        d.AddRange([0x25, 0x7C, 0x00, 0x00, 0x80, 0x3F, 0x7C]); // 0x25 condition = 1.0 (4-byte)
+        var expectedLength = d.Count;                      // 31 bytes
+
+        Assert.True(ReferenceChangeForm.TryReadStackExtra(d.ToArray(), 0, dataOffset: 0x5000, out var extra));
+        Assert.True(extra.FullyDecoded);
+        Assert.Null(extra.UnknownType);
+        Assert.Equal(expectedLength, extra.ByteLength);
+        Assert.Equal(1.0f, extra.Condition);
+        Assert.Equal(0x5000 + expectedLength - 5, extra.ConditionOffset); // the 4-byte float + its 0x7C
+    }
+
+    [Fact]
     public void DescribeFlags_labels_the_confirmed_reference_bits()
     {
         var text = ReferenceChangeForm.DescribeFlags(

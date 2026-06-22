@@ -1246,6 +1246,19 @@ static void EdlScan(string dir)
     var unknownEdlEx = new SortedDictionary<byte, List<string>>();
     var perStackCount = new SortedDictionary<byte, int>();
     var perStackEx = new SortedDictionary<byte, List<string>>();
+    // RE corpus-alignment sizer (ROADMAP §4i): per unsized per-stack property type, histogram the byte gap
+    // from the property's [type][7C] header to the next valid stack start — a CLEAN payload measurement when
+    // the unsized property is the block's LAST one (block ends → next stack), noisier otherwise. A fixed-length
+    // type spikes at one gap (payload = gap==2 ? 0 : gap-3); a count-prefixed variable type spreads. lastGapHist
+    // keeps only the clean last-property cases; allGapHist keeps every case for cross-check.
+    var lastGapHist = new SortedDictionary<byte, SortedDictionary<int, int>>();
+    var allGapHist = new SortedDictionary<byte, SortedDictionary<int, int>>();
+
+    static void Bump(SortedDictionary<byte, SortedDictionary<int, int>> h, byte type, int gap)
+    {
+        if (!h.TryGetValue(type, out var inner)) h[type] = inner = new SortedDictionary<int, int>();
+        inner[gap] = inner.GetValueOrDefault(gap) + 1;
+    }
 
     static void Example(SortedDictionary<byte, List<string>> ex, byte key, string line)
     {
@@ -1297,10 +1310,44 @@ static void EdlScan(string dir)
         else otherFail++;                          // header ok but no entry/vsval framing (lead or post-entry shape)
 
         foreach (var it in s.Inventory!.Items)
-            if (it.UnknownExtraType is { } pt)
+            if (it.UnknownExtraType is { } pt && it.UnknownExtraOffset is { } off)
             {
                 perStackCount[pt] = perStackCount.GetValueOrDefault(pt) + 1;
-                Example(perStackEx, pt, $"{name} item 0x{it.FormId:X8}");
+
+                // Measure the gap from the unsized property's [type][7C] header to the next valid stack start,
+                // and re-walk the block (starting 5 bytes past the stack's count, i.e. CountValueOffset + 5) to
+                // learn whether this unsized property is the block's LAST one (propIndex == propCount-1).
+                var win = s.ReadAt(off, 64); // local coords: win[0]=type, win[1]=0x7C
+                var gap = -1;
+                for (var q = 2; q + 9 <= win.Length; q++)
+                    if (ReferenceChangeForm.LooksLikeStackStart(win, q)) { gap = q; break; }
+
+                var isLast = false;
+                var blk = s.ReadAt(it.CountValueOffset + 5, 256); // the per-stack extra block: [a][7C][b][7C] props…
+                if (blk.Length >= 4 && blk[0] == 0x04 && blk[1] == ReferenceChangeForm.Delimiter
+                    && blk[3] == ReferenceChangeForm.Delimiter)
+                {
+                    var propCount = blk[2] / 4;
+                    var blockStart = it.CountValueOffset + 5;
+                    var cur = 4; var idx = 0; var ok = true;
+                    while (blockStart + cur < off && idx < propCount)
+                    {
+                        if (cur + 2 > blk.Length || blk[cur + 1] != ReferenceChangeForm.Delimiter) { ok = false; break; }
+                        var plen = ReferenceChangeForm.FixedPropertyPayload(blk[cur]);
+                        if (plen < 0) { ok = false; break; }
+                        cur += 2 + (plen > 0 ? plen + 1 : 0);
+                        idx++;
+                    }
+                    if (ok && blockStart + cur == off) isLast = idx == propCount - 1;
+                }
+
+                if (gap >= 0)
+                {
+                    Bump(allGapHist, pt, gap);
+                    if (isLast) Bump(lastGapHist, pt, gap);
+                }
+                var raw = string.Join(' ', win.Take(Math.Min(24, win.Length)).Select(b => b.ToString("X2")));
+                Example(perStackEx, pt, $"{name} 0x{it.FormId:X8} gap={(gap < 0 ? "?" : gap.ToString())} last={isLast}: {raw}");
             }
     }
 
@@ -1333,9 +1380,18 @@ static void EdlScan(string dir)
         foreach (var (t, c) in perStackCount)
         {
             Console.WriteLine($"  0x{t:X2}  x{c}");
+            // Gap = bytes from the [type][7C] header to the next stack. When this property is the block's LAST,
+            // gap is the property's own size; payload = gap==2 ? 0 : gap-3 (header [type][7C] + payload + [7C]).
+            if (lastGapHist.TryGetValue(t, out var last))
+                Console.WriteLine($"      last-prop gap→size histogram (gap×count): {FormatGapHist(last)}");
+            if (allGapHist.TryGetValue(t, out var all))
+                Console.WriteLine($"      all-cases  gap     histogram (gap×count): {FormatGapHist(all)}");
             foreach (var e in perStackEx[t]) Console.WriteLine($"      {e}");
         }
     }
+
+    static string FormatGapHist(SortedDictionary<int, int> h) =>
+        string.Join("  ", h.OrderByDescending(kv => kv.Value).Take(8).Select(kv => $"{kv.Key}×{kv.Value}"));
 }
 
 static void IrefScan(FalloutSave s, uint offset, int len)

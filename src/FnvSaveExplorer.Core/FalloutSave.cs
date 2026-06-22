@@ -793,6 +793,7 @@ public sealed class FalloutSave
                 Equipped = extra.Equipped,
                 ExtraRefIds = extra.ModRefIds,
                 UnknownExtraType = extra.UnknownType,
+                UnknownExtraOffset = extra.UnknownOffset,
             });
             if (after <= p)
             {

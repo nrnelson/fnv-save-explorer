@@ -34,6 +34,11 @@ public sealed record InventoryItem(int Iref, uint FormId, uint Count, int CountV
     /// or null when the stack's extra data fully decoded. Surfaced for reverse-engineering histograms of
     /// the still-unpinned modded property types (ROADMAP §4i) — not used by editing.</summary>
     public byte? UnknownExtraType { get; init; }
+
+    /// <summary>Absolute file offset of the unsized property's <c>[type][7C]</c> header
+    /// (<see cref="UnknownExtraType"/>), or null. Used by the RE corpus-alignment sizer (CLI <c>edlscan</c>)
+    /// to measure each unsized type's payload length — not used by editing (ROADMAP §4i).</summary>
+    public int? UnknownExtraOffset { get; init; }
 }
 
 /// <summary>
