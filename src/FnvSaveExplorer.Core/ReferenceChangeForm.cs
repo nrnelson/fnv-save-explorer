@@ -33,14 +33,26 @@ public static class ReferenceChangeForm
 {
     public const byte Delimiter = 0x7C;
 
-    // ---- changeFlags bits that gate a reference record's sections (CHANGE_REFR_*) ------------------
-    // Only the bits we have confirmed are named; the rest stay null (see FlagBitLabels). MOVE and
-    // INVENTORY are confirmed both empirically (the 27-byte MOVE block appears iff CHANGE_REFR_MOVE is
-    // set; CHANGE_REFR_INVENTORY is set on every record that carries an item list) and against the
-    // documented Gamebryo/TES change-flag values (MOVE = 0x2, INVENTORY = 0x20).
+    // ---- changeFlags bits that gate a reference record's sections (CHANGE_REFR_* / CHANGE_ACTOR_* etc.) ----
+    // The changeFlags is an engine-level (Gamebryo/Creation) bitmask. We FNV-corpus-CONFIRMED three bits —
+    // MOVE (the 27-byte block appears iff bit1), HAVOK_MOVE (the physics blob appears iff bit2, §4i), and
+    // INVENTORY (set on every record carrying an item list) — and they match the documented values exactly,
+    // which is good evidence the rest of the enum is shared too. The remaining bit NAMES below are
+    // cross-referenced from the UESP Skyrim ChangeFlags spec (ROADMAP §8a) and are NOT yet FNV-verified by a
+    // controlled diff (form-type *numbering* differs between FNV and Skyrim, so per-bit confirmation is still
+    // owed — ROADMAP §6 #13). They're surfaced for readability (refdump/walk) with this provenance noted.
+    //
+    // IMPORTANT: bits 10/11/12/17/21/22/23 mean DIFFERENT things on ACTOR (ACHR) vs OBJECT (non-actor REFR)
+    // records, so DescribeFlags takes a RefKind to disambiguate; with RefKind.Unknown it shows both.
 
     /// <summary>CHANGE_REFR_MOVE (bit 1): a 27-byte MOVE block (cell ref + position + rotation) leads the data.</summary>
     public const uint ChangeRefrMove = 0x00000002;
+
+    /// <summary>CHANGE_REFR_HAVOK_MOVE (bit 2): an active-Havok-physics blob follows the MOVE block (§4i).</summary>
+    public const uint ChangeRefrHavokMove = 0x00000004;
+
+    /// <summary>CHANGE_REFR_SCALE (bit 4): a float scale field is present (spec-derived).</summary>
+    public const uint ChangeRefrScale = 0x00000010;
 
     /// <summary>CHANGE_REFR_INVENTORY (bit 5): the reference carries an inventory item list.</summary>
     public const uint ChangeRefrInventory = 0x00000020;
@@ -137,20 +149,96 @@ public static class ReferenceChangeForm
         return fields;
     }
 
-    /// <summary>
-    /// changeFlags bit → section label for reference records (null = not yet identified). Only bits we
-    /// have confirmed are named — <see cref="ChangeRefrMove"/> (bit 1) and <see cref="ChangeRefrInventory"/>
-    /// (bit 5); the remaining set bits observed on real inventory records (4, 11, 22, 28, 29, 31) are not
-    /// yet pinned to a section and stay null per the repo's "label, don't guess" convention.
-    /// </summary>
-    public static readonly string?[] FlagBitLabels = BuildFlagLabels();
+    /// <summary>Which kind of reference a change form is, for disambiguating the context-dependent
+    /// <c>changeFlags</c> bits (10/11/12/17/21/22/23). <see cref="Actor"/> = ACHR (the player/NPCs/creatures);
+    /// <see cref="Object"/> = a non-actor placed reference (container/door/item/…); <see cref="Unknown"/> when
+    /// the record kind isn't known (those bits are then shown with both meanings).</summary>
+    public enum RefKind { Unknown, Actor, Object }
 
-    static string?[] BuildFlagLabels()
+    /// <summary>
+    /// changeFlags bit → label for the bits whose meaning is the SAME on actor and object references (null =
+    /// not identified). MOVE (1), HAVOK_MOVE (2) and INVENTORY (5) are FNV-corpus-confirmed; the rest are
+    /// cross-referenced from the UESP Skyrim spec (ROADMAP §8a / §6 #13) and shown for readability. The
+    /// kind-dependent bits (10/11/12/17/21/22/23) live in <see cref="ActorFlagBitLabels"/> /
+    /// <see cref="ObjectFlagBitLabels"/>, not here.
+    /// </summary>
+    public static readonly string?[] FlagBitLabels = BuildSharedLabels();
+
+    /// <summary>changeFlags bit → label when the record is an ACTOR (ACHR). Only the actor-specific bits are
+    /// populated; for the shared bits see <see cref="FlagBitLabels"/>. Spec-derived (UESP, ROADMAP §8a).</summary>
+    public static readonly string?[] ActorFlagBitLabels = BuildActorLabels();
+
+    /// <summary>changeFlags bit → label when the record is a non-actor OBJECT reference. Only the
+    /// object-specific bits are populated; for the shared bits see <see cref="FlagBitLabels"/>. Spec-derived.</summary>
+    public static readonly string?[] ObjectFlagBitLabels = BuildObjectLabels();
+
+    static string?[] BuildSharedLabels()
     {
-        var labels = new string?[32];
-        labels[1] = "MOVE";      // CHANGE_REFR_MOVE: 27-byte cell+pos+rot block follows
-        labels[5] = "INVENTORY"; // CHANGE_REFR_INVENTORY: the reference carries an item list
-        return labels;
+        var l = new string?[32];
+        l[0] = "FORM_FLAGS";            // CHANGE_FORM_FLAGS
+        l[1] = "MOVE";                  // CHANGE_REFR_MOVE          (FNV-confirmed: 27-byte block)
+        l[2] = "HAVOK_MOVE";            // CHANGE_REFR_HAVOK_MOVE    (FNV-confirmed: physics blob, §4i)
+        l[3] = "CELL_CHANGED";          // CHANGE_REFR_CELL_CHANGED
+        l[4] = "SCALE";                 // CHANGE_REFR_SCALE
+        l[5] = "INVENTORY";             // CHANGE_REFR_INVENTORY     (FNV-confirmed: item list)
+        l[6] = "EXTRA_OWNERSHIP";       // CHANGE_REFR_EXTRA_OWNERSHIP
+        l[7] = "BASEOBJECT";            // CHANGE_REFR_BASEOBJECT
+        l[25] = "PROMOTED";             // CHANGE_REFR_PROMOTED
+        l[26] = "ACTIVATING_CHILDREN";  // CHANGE_REFR_EXTRA_ACTIVATING_CHILDREN
+        l[27] = "LEVELED_INVENTORY";    // CHANGE_REFR_LEVELED_INVENTORY
+        l[28] = "ANIMATION";            // CHANGE_REFR_ANIMATION
+        l[29] = "ENCOUNTER_ZONE";       // CHANGE_REFR_EXTRA_ENCOUNTER_ZONE
+        l[30] = "CREATED_ONLY";         // CHANGE_REFR_EXTRA_CREATED_ONLY
+        l[31] = "GAME_ONLY";            // CHANGE_REFR_EXTRA_GAME_ONLY
+        return l;
+    }
+
+    static string?[] BuildActorLabels()
+    {
+        var l = new string?[32];
+        l[10] = "ACTOR_LIFESTATE";              // CHANGE_ACTOR_LIFESTATE
+        l[11] = "ACTOR_PACKAGE_DATA";           // CHANGE_ACTOR_EXTRA_PACKAGE_DATA
+        l[12] = "ACTOR_MERCHANT_CONTAINER";     // CHANGE_ACTOR_EXTRA_MERCHANT_CONTAINER
+        l[17] = "ACTOR_DISMEMBERED_LIMBS";      // CHANGE_ACTOR_EXTRA_DISMEMBERED_LIMBS
+        l[18] = "ACTOR_LEVELED";                // CHANGE_ACTOR_LEVELED_ACTOR
+        l[19] = "ACTOR_DISPOSITION_MODIFIERS";  // CHANGE_ACTOR_DISPOSITION_MODIFIERS
+        l[20] = "ACTOR_TEMP_MODIFIERS";         // CHANGE_ACTOR_TEMP_MODIFIERS
+        l[21] = "ACTOR_DAMAGE_MODIFIERS";       // CHANGE_ACTOR_DAMAGE_MODIFIERS
+        l[22] = "ACTOR_OVERRIDE_MODIFIERS";     // CHANGE_ACTOR_OVERRIDE_MODIFIERS
+        l[23] = "ACTOR_PERMANENT_MODIFIERS";    // CHANGE_ACTOR_PERMANENT_MODIFIERS
+        return l;
+    }
+
+    static string?[] BuildObjectLabels()
+    {
+        var l = new string?[32];
+        l[10] = "OBJECT_ITEM_DATA";         // CHANGE_OBJECT_EXTRA_ITEM_DATA
+        l[11] = "OBJECT_AMMO";              // CHANGE_OBJECT_EXTRA_AMMO
+        l[12] = "OBJECT_LOCK";              // CHANGE_OBJECT_EXTRA_LOCK
+        l[17] = "DOOR_TELEPORT";            // CHANGE_DOOR_EXTRA_TELEPORT
+        l[21] = "OBJECT_EMPTY";             // CHANGE_OBJECT_EMPTY
+        l[22] = "OBJECT_OPEN_DEFAULT_STATE"; // CHANGE_OBJECT_OPEN_DEFAULT_STATE
+        l[23] = "OBJECT_OPEN_STATE";        // CHANGE_OBJECT_OPEN_STATE
+        return l;
+    }
+
+    /// <summary>The label for one set <c>changeFlags</c> bit given the record <paramref name="kind"/>: the shared
+    /// label, or — for a context-dependent bit — the actor/object label (or both, <c>actor|object</c>, when
+    /// <paramref name="kind"/> is <see cref="RefKind.Unknown"/>). Returns null when the bit isn't named.</summary>
+    public static string? LabelForBit(int bit, RefKind kind = RefKind.Unknown)
+    {
+        if (bit is < 0 or > 31)
+            return null;
+        var actor = ActorFlagBitLabels[bit];
+        var obj = ObjectFlagBitLabels[bit];
+        if (actor is null && obj is null)
+            return FlagBitLabels[bit]; // shared (or unnamed)
+        return kind switch
+        {
+            RefKind.Actor => actor ?? obj,
+            RefKind.Object => obj ?? actor,
+            _ => actor is not null && obj is not null ? $"{actor}|{obj}" : actor ?? obj,
+        };
     }
 
     /// <summary>
@@ -533,14 +621,16 @@ public static class ReferenceChangeForm
             fully ? null : unknown, fully ? 0 : Math.Max(0, stopOffset - p));
     }
 
-    /// <summary>Human description of the set bits in a reference record's <c>changeFlags</c> — labelled
-    /// where known (<see cref="FlagBitLabels"/>), otherwise <c>bitN</c>.</summary>
-    public static string DescribeFlags(uint flags)
+    /// <summary>Human description of the set bits in a reference record's <c>changeFlags</c> — each as
+    /// <c>bitN(NAME)</c> where the name is known (<see cref="LabelForBit"/>), else bare <c>bitN</c>.
+    /// <paramref name="kind"/> disambiguates the context-dependent bits (10/11/12/17/21/22/23); with
+    /// <see cref="RefKind.Unknown"/> those show both meanings as <c>actor|object</c>.</summary>
+    public static string DescribeFlags(uint flags, RefKind kind = RefKind.Unknown)
     {
         var parts = new List<string>();
         for (var b = 0; b < 32; b++)
             if ((flags & (1u << b)) != 0)
-                parts.Add(FlagBitLabels[b] is { } name ? $"bit{b}({name})" : $"bit{b}");
+                parts.Add(LabelForBit(b, kind) is { } name ? $"bit{b}({name})" : $"bit{b}");
         return parts.Count == 0 ? "(none)" : string.Join(' ', parts);
     }
 

@@ -742,11 +742,18 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     skip.) **Lead (§8a):** the UESP spec stores REFR `Havok data` as a `vsval count + uint8[count]` (length-prefixed)
     present iff `CHANGE_REFR_HAVOK_MOVE` — FNV's delimited preamble doesn't trivially decode as that size, but
     testing whether the FNV havok blob is length-prefixed is the concrete path to a deterministic skip.
-13. **Label the REFR/ACHR `changeFlags` bits from the UESP table** (NEW quick win — §8a). We currently name only
-    bits 1 (MOVE) and 5 (INVENTORY); the spec names the rest (bit4 Scale, bit7 BaseObject, and the ACHR actor bits
-    10/11/22/28/29/31 we see set on the player record). Verify each against an FNV controlled diff where cheap,
-    then extend `ReferenceChangeForm.FlagBitLabels`/`DescribeFlags` so `refdump`/`walk` read in plain English.
-    Low-risk, inspection-only — accelerates every other RE task.
+13. ~~**Label the REFR/ACHR `changeFlags` bits from the UESP table**~~ — ✅ **DONE (labels shipped; per-bit FNV
+    controlled-diff verification still owed).** `ReferenceChangeForm` now carries the full bit set: a shared table
+    (`FlagBitLabels`, bits 0–7/25–31) plus `ActorFlagBitLabels`/`ObjectFlagBitLabels` for the bits that mean
+    different things on actor vs object references (10/11/12/17/21/22/23). `DescribeFlags(flags, RefKind)` +
+    `LabelForBit` pick the right label by record kind; with `RefKind.Unknown` an ambiguous bit shows **both** as
+    `actor|object` so nothing is silently mislabelled. `refdump` passes `RefKind.Actor` for the player record (other
+    refs stay Unknown). Output now reads e.g. `bit1(MOVE) bit4(SCALE) bit5(INVENTORY) bit11(ACTOR_PACKAGE_DATA)
+    bit22(ACTOR_OVERRIDE_MODIFIERS) bit28(ANIMATION) bit29(ENCOUNTER_ZONE) bit31(GAME_ONLY)`. **Provenance:** bits
+    1/2/5 are FNV-corpus-confirmed; the rest are cross-referenced from the UESP Skyrim spec (§8a) and surfaced for
+    readability — the engine-level changeFlags enum is shared (1/2/5 match), but a controlled diff per bit (and a
+    generic FNV form-type→`RefKind` classifier so non-player refs aren't all `Unknown`) is still owed. Tests pin the
+    decode + the actor/object disambiguation. 727 green.
 14. **Full ordered REFR/ACHR structural decode** (NEW — §8a). Use the spec's field order (Initial/MOVE →
     Havok(if bit2) → Flags(if bit0) → BaseObject(if bit7) → Scale(if bit4) → ExtraData → Inventory(if bit5) →
     Animation(if bit28)) as the blueprint to decode the player record end-to-end, which would reach the item list

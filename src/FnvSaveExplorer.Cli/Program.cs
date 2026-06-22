@@ -1096,10 +1096,15 @@ static void RefDump(FalloutSave s, string savePath, int? iref)
     var cf = target.Value;
     var db = PluginDatabase.ForSave(s, null, GameDataLocator.FindMo2Mods(savePath));
 
+    // The player inventory record (iref = PlayerRef + 1) is an actor (ACHR), so the context-dependent
+    // changeFlags bits use the actor meanings; other references stay Unknown (both meanings shown).
+    var pr = s.FindIref(0x14);
+    var kind = pr >= 0 && cf.Iref == pr + 1 ? ReferenceChangeForm.RefKind.Actor : ReferenceChangeForm.RefKind.Unknown;
+
     Console.WriteLine($"Reference change form @0x{cf.Offset:X}");
     Console.WriteLine($"  iref {cf.Iref} -> 0x{cf.FormId:X8} {db.Resolve(cf.FormId) ?? ""}");
     Console.WriteLine($"  typeByte 0x{cf.TypeByte:X2} (formType 0x{cf.FormType:X2})  version 0x{cf.Version:X2}  data @0x{cf.DataOffset:X} len {cf.DataLength}");
-    Console.WriteLine($"  changeFlags 0x{cf.ChangeFlags:X8} = {ReferenceChangeForm.DescribeFlags(cf.ChangeFlags)}");
+    Console.WriteLine($"  changeFlags 0x{cf.ChangeFlags:X8} = {ReferenceChangeForm.DescribeFlags(cf.ChangeFlags, kind)}");
 
     var data = s.ReadAt(cf.DataOffset, cf.DataLength);
     // The deterministic inventory start: skip the MOVE block + the fixed 1160-byte havok/float array

@@ -297,6 +297,39 @@ public class ReferenceChangeFormTests
         Assert.Contains("MOVE", text);
         Assert.Contains("INVENTORY", text);
         Assert.Equal("MOVE", ReferenceChangeForm.FlagBitLabels[1]);
+        Assert.Equal("HAVOK_MOVE", ReferenceChangeForm.FlagBitLabels[2]);
         Assert.Equal("INVENTORY", ReferenceChangeForm.FlagBitLabels[5]);
+    }
+
+    [Fact]
+    public void DescribeFlags_decodes_the_real_player_actor_flags()
+    {
+        // The player inventory/actor record's flags on real saves (e.g. vanilla Save 12, iref 368): 0xB0400832
+        // = bits 1,4,5,11,22,28,29,31. As an ACTOR record these read cleanly in English (ROADMAP §6 #13).
+        var text = ReferenceChangeForm.DescribeFlags(0xB0400832u, ReferenceChangeForm.RefKind.Actor);
+
+        Assert.Equal(
+            "bit1(MOVE) bit4(SCALE) bit5(INVENTORY) bit11(ACTOR_PACKAGE_DATA) bit22(ACTOR_OVERRIDE_MODIFIERS) "
+            + "bit28(ANIMATION) bit29(ENCOUNTER_ZONE) bit31(GAME_ONLY)",
+            text);
+    }
+
+    [Fact]
+    public void LabelForBit_disambiguates_actor_vs_object_context_bits()
+    {
+        // Bits 10/11/12/17/21/22/23 mean different things on actor vs object references. RefKind picks the
+        // right one; Unknown shows both as actor|object so nothing is silently mislabelled.
+        Assert.Equal("ACTOR_OVERRIDE_MODIFIERS", ReferenceChangeForm.LabelForBit(22, ReferenceChangeForm.RefKind.Actor));
+        Assert.Equal("OBJECT_OPEN_DEFAULT_STATE", ReferenceChangeForm.LabelForBit(22, ReferenceChangeForm.RefKind.Object));
+        Assert.Equal("ACTOR_OVERRIDE_MODIFIERS|OBJECT_OPEN_DEFAULT_STATE", ReferenceChangeForm.LabelForBit(22));
+
+        // bit10: actor LifeState vs object item-data; bit21: actor damage-modifiers vs object empty.
+        Assert.Equal("ACTOR_LIFESTATE", ReferenceChangeForm.LabelForBit(10, ReferenceChangeForm.RefKind.Actor));
+        Assert.Equal("OBJECT_ITEM_DATA", ReferenceChangeForm.LabelForBit(10, ReferenceChangeForm.RefKind.Object));
+
+        // A shared bit is kind-independent; an unnamed bit is null.
+        Assert.Equal("INVENTORY", ReferenceChangeForm.LabelForBit(5, ReferenceChangeForm.RefKind.Object));
+        Assert.Equal("INVENTORY", ReferenceChangeForm.LabelForBit(5));
+        Assert.Null(ReferenceChangeForm.LabelForBit(13));
     }
 }
