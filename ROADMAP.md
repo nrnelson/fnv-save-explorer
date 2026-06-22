@@ -92,7 +92,9 @@ Five absolute offsets then three counts (NV has one fewer global-data table than
 
 ### 4c. Global data — `[type:u32][length:u32][data]`
 Table 1 holds 12 records, types 0–11: `0`=Misc Stats, `1`=Player Location, `2`=TES, `3`=Global
-Variables (large), `4`=Created Objects, `6`=Weather, … (7–11 unlabeled).
+Variables (large), `4`=Created Objects, `6`=Weather, … (5, 7–11 unlabeled). **Candidate labels (UESP Skyrim
+spec, §8a — verify; FNV's set differs from Skyrim's):** `5`=Effects, `7`=Audio, `8`=SkyCells; 9–11 are
+FNV-specific (Skyrim moves higher categories into a separate table).
 
 **Misc Stats (type 0):** `u32 count, 0x7C, then count x (u32 value, 0x7C)` — Pip-Boy counters
 (quests/kills/locations…). Positional (no names stored). Decoded + editable.
@@ -710,9 +712,12 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     skipped while the quest still completes). Where it lives in the save is not yet decoded; the likely homes are
     `QUST` change forms (per-quest stage flags + objective completion bitsets) and/or a quest-state global-data
     table (§4c types 7–11 are still unlabeled). Names/objective text come from the masters (the `QUST` records,
-    via an extension of `TesPlugin`, which today only indexes item record types). **Method:** controlled diff —
-    advance one objective in-game, save before/after, `idiff … clean` to isolate the changed bytes (mirrors how
-    notes §4k were cracked). Read-only first; editing quest state is likely same-length (flag/stage bytes).
+    via an extension of `TesPlugin`, which today only indexes item record types). **Structural blueprint (UESP,
+    §8a — verify against FNV):** quest state lives in **QUST change forms**; **stages** under `CHANGE_QUEST_STAGES`
+    (bit 31) as a `vsval count` of `{sint16 stage, uint8 done}`, **objectives** under `CHANGE_QUEST_OBJECTIVES`
+    (bit 29). So the walker can filter for the QUST form-type and decode by these flags. **Method:** controlled
+    diff — advance one objective in-game, save before/after, `idiff … clean` to isolate the changed bytes (mirrors
+    how notes §4k were cracked). Read-only first; editing quest state is likely same-length (flag/stage bytes).
 11. **Item condition maximums (base-form Health)** (NEW — not started). Condition (`0x25`, §4i) is the item's
     **absolute current health**, not a percentage — verified on a real save: 9mm Pistol 45, 9mm SMG 205, Metal
     Armor 497.2, Grenade Rifle 99.9 (values differ per item). The **max** is the base form's **Health** stat,
@@ -734,7 +739,22 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     VNV *and* Extended, save while standing still vs. immediately after a jump/knockdown, manual vs. autosave,
     and compare the player-ref `changeFlags`. (Decode value is low — the list is already located correctly via
     the self-validating anchor, §10 — but it would settle the cause and could retire the anchor for a structural
-    skip.)
+    skip.) **Lead (§8a):** the UESP spec stores REFR `Havok data` as a `vsval count + uint8[count]` (length-prefixed)
+    present iff `CHANGE_REFR_HAVOK_MOVE` — FNV's delimited preamble doesn't trivially decode as that size, but
+    testing whether the FNV havok blob is length-prefixed is the concrete path to a deterministic skip.
+13. **Label the REFR/ACHR `changeFlags` bits from the UESP table** (NEW quick win — §8a). We currently name only
+    bits 1 (MOVE) and 5 (INVENTORY); the spec names the rest (bit4 Scale, bit7 BaseObject, and the ACHR actor bits
+    10/11/22/28/29/31 we see set on the player record). Verify each against an FNV controlled diff where cheap,
+    then extend `ReferenceChangeForm.FlagBitLabels`/`DescribeFlags` so `refdump`/`walk` read in plain English.
+    Low-risk, inspection-only — accelerates every other RE task.
+14. **Full ordered REFR/ACHR structural decode** (NEW — §8a). Use the spec's field order (Initial/MOVE →
+    Havok(if bit2) → Flags(if bit0) → BaseObject(if bit7) → Scale(if bit4) → ExtraData → Inventory(if bit5) →
+    Animation(if bit28)) as the blueprint to decode the player record end-to-end, which would reach the item list
+    with **zero heuristics** (retiring the §10 anchor + the residual over-read) and expose more per-record state.
+    Verify field-by-field against FNV (delimiter-aware); this is the principled successor to the current locators.
+15. **RefID 2-bit type handling** (NEW — §8a). The 3-byte refID's top 2 bits are a type: 0 = formID-array index
+    (value−1, our existing `+1` rule), 1 = base ESM formID directly, 2 = created (`0xFF`), 3 = ?. Today we only
+    handle type 0; decoding 1/2 would resolve refIDs that currently show `?` (e.g. linked refs in extra data).
 
 ---
 
@@ -766,15 +786,62 @@ bytes, so it never shows as a clean byte-run delta in `diff`/`idiff`). `fdiff` i
 - `Nexus-Mods/node-gamebryo-savegames` — C++ parser (FO3/FNV/FO4/Skyrim). **Header-only**: stops at the
   plugin list, does not decode the body — the change-form/inventory format here was reverse-engineered locally.
 - Vault-Tec Labs "FOS file format" (falloutmods wiki) — header + stats tables.
-- UESP "Oblivion / Skyrim Save File Format" — change-record / FormID-array model NV mirrors.
+- UESP "Oblivion / Skyrim Save File Format" — change-record / FormID-array model NV mirrors. **The Skyrim pages
+  are the best structural guide for the still-undecoded FNV body** and **validated much of our local RE** (see §8a):
+  `Skyrim_Mod:Save_File_Format` (RefID 2-bit type; global-data type list; change-form header), `Skyrim_Mod:ChangeFlags`
+  (every REFR/ACHR/QUST changeFlag bit + the REFR field-order layout + the per-item extra-data type→size catalog),
+  `.../REFR_Changeform`, `.../QUST_Changeform`. **Fetch (UESP 403s WebFetch):** `curl` with a browser User-Agent on
+  `https://en.uesp.net/w/index.php?title=<Page>&action=raw` returns raw wikitext (confirmed 2026-06).
 - **Game ESM/ESP master files** (`<game>/Data/*.esm`) — the source for FormID → display name (§6.3). On
   this machine: `C:\Games\Steam\steamapps\common\Fallout New Vegas\Data` (`FalloutNV.esm` + DLC esms).
   Standard Bethesda TES4 plugin format; FNV stores `FULL` names **inline** (no `.STRINGS` localization
   files), so names are readable directly. UESP "Mod File Format" (TES4/FO3) documents the record/GRUP/subrecord layout.
 - FNVEdit + GECK — resolve FormIDs/irefs while reverse-engineering.
-- Note: those wikis block automated fetchers on `/wiki/` URLs; Fandom's `api.php?action=parse` works.
+- Note: those wikis 403 the WebFetch tool on `/wiki/` URLs. Fandom's `api.php?action=parse` works; **UESP works via
+  `curl` + a browser User-Agent on `/w/index.php?title=<Page>&action=raw`** (the Bash tool, not WebFetch).
 
 ---
+
+## 8a. Cross-reference with the UESP Skyrim/Gamebryo spec — validated matches + leads
+
+The Skyrim save spec (§8) shares the **Gamebryo/Creation change-form model** FNV uses. **Caveat:** Skyrim ≠ FNV
+byte-for-byte — FNV is FO3-era (pervasive `0x7C` delimiters, different form-type numbering, smaller global-data set,
+some saves zlib-compress the player ACHR while FNV doesn't), so **every item below is an FNV-corpus hypothesis to
+verify**, not a drop-in. That said, several of our independently-RE'd findings line up exactly, which is strong
+validation of the method:
+
+**Confirmed (our local RE matches the spec):**
+- **MOVE block = 27 bytes** = the spec's REFR "Initial type 4" (`RefId cell/world` + `float pos[3]` + `rot[3]`). (§4i)
+- **vsval `>>2` counts** — the spec's per-item `extra count` and inventory `count` are vsval, "shift right two bits
+  to get the count" = our `b/4` propCount and `ReadVsval`. (§4i)
+- **Per-stack extra-data sizes** — the spec's extraData catalog gives `0x1C`→3, `0x24`→2, `0x25`→4 ("appears to be a
+  float"), independently matching our corpus-aligned sizes (§4i) and confirming `0x25` is a float.
+- **`CHANGE_REFR_HAVOK_MOVE` = bit 2** and **`CHANGE_REFR_MOVE` = bit 1**, **`CHANGE_REFR_INVENTORY` = bit 5** —
+  exactly our `FlagBitLabels`. (§4f/§4i)
+- **Inventory item = `refId, count, vsval extraCount, extraData[…]`** — exactly our stack model (§4g/§4i).
+- **Read-note marker** — the spec lists `CHANGE_NOTE_READ = 0x80000000`, matching our §4k marker `changeFlags` exactly.
+
+**Leads (verify against FNV, then graduate to the §6 items noted):**
+- **changeFlags bit labels** for REFR/ACHR — the spec names every bit (bit4 Scale, bit7 BaseObject; ACHR bit10
+  LifeState, bit11 PackageData, bit22 OverrideModifiers, bit28 Animation, bit29 EncounterZone, bit31 GameOnly). Lets
+  us replace our "label, don't guess" placeholders with confirmed names. → §6 #13.
+- **Havok data is length-prefixed** — the spec's REFR layout has `Havok data = vsval count + uint8[count]` present
+  *iff* `CHANGE_REFR_HAVOK_MOVE`. FNV's delimited preamble (`E1 10 7C 04 7C 4C 7C` / `49 11 7C 05 7C 4C 7C`) doesn't
+  trivially decode as that size, so it's not a free win — but it's a concrete hypothesis to test that could turn the
+  §10 anchor scan into a deterministic skip. → §6 #12.
+- **Ordered REFR/ACHR field model** — Initial(MOVE) → Havok(if bit2) → Flags(if bit0) → BaseObject(if bit7) →
+  Scale(if bit4) → ExtraData(if extra bits) → Inventory(if bit5) → Animation(if bit28). A structural blueprint to
+  decode the *whole* player record (and reach the item list with zero heuristics). → §6 #14.
+- **QUST change form** — quest **stages** live under `CHANGE_QUEST_STAGES` (bit31) as `vsval count` of
+  `{sint16 stage, uint8 done}`; **objectives** under `CHANGE_QUEST_OBJECTIVES` (bit29). Direct blueprint for the
+  quest log. → §6 #10.
+- **RefID 2-bit type** — top 2 bits of the 3-byte refID: 0 = formID-array index (value−1, our `+1` rule), 1 = base
+  ESM formID directly, 2 = created (0xFF), 3 = ?. A framework for refIDs that currently don't resolve. → §6 #15.
+- **Global-data type labels** — spec types 5=Effects, 7=Audio, 8=SkyCells (FNV table 1 has types 0–11; 0–6 likely
+  shared, 7–11 need FNV verification — FNV's set differs from Skyrim's 0–8 + 100+). → refines §4c.
+- **More extra-data types to name** — the spec catalog labels several we haven't: `0x2a`=lock (level + KEYM refId),
+  `0x70`=encounter-zone refId, `0x88`=QUST alias assignment, `0x8e`=outfit refId, `0x21`="could be owner". Candidate
+  semantics for our sized-but-unlabelled types (§10).
 
 ## 9. Known limitations / risks
 - Change-form **internals**: skills (§4e), inventory item stacks (§4g), and per-stack extra data —
