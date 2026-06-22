@@ -239,6 +239,49 @@ public static class ReferenceChangeForm
         return true;
     }
 
+    // ---- The bit2/bit10 (CHANGE_REFR_HAVOK_MOVE) pre-list Havok physics blob (ROADMAP §4i / §10) -------
+    //
+    // On late-game records the region between the MOVE block and the ExtraDataList is NOT the vanilla
+    // 232-slot [4][7C] array — it is an active-Havok-physics blob. Characterised by corpus alignment over
+    // all 113 bit2/bit10 records (VNV Extended ONLY — base VNV and vanilla have zero):
+    //
+    //   [preamble]                       7 bytes: [u16][7C][u8][7C][u8][7C]  (e.g. E1 10 7C 04 7C 4C 7C, or 49 11 7C 05 7C 4C 7C)
+    //   N × HAVOK ENTRY (58 bytes each): [pos:3×f32][7C][quat:4×f32][7C][03][7C][vel:3×f32][7C][angvel:3×f32][7C]
+    //   [truncated final entry]          pos+quat+[03] then trails off into zeros
+    //   [trailing slot array]            a variable run of vanilla-style [4][7C] actor-value/havok slots
+    //   [ExtraDataList header]           the item-list start
+    //
+    // It is GENUINELY variable-length (6 distinct blob lengths, scattered mod 5) with a truncated last entry
+    // and a variable trailing slot array whose values locally COLLIDE with IsExtraDataListHeader (a slot with
+    // high byte 0x00 matches), so it cannot be byte-sized to a fixed stride and the list end can't be found by
+    // structure alone. The robust locator is therefore the self-validating ExtraDataList-header anchor
+    // (FalloutSave.ScanForExtraDataListAnchor) — a structural sizer wouldn't remove the need for that
+    // self-validation at the slot-array tail, so it's deliberately NOT used to find the list (ROADMAP §10).
+    // HavokPhysicsEntryLength below recognises one full 58-byte entry (the confirmed grammar, pinned by a test)
+    // for inspection and any future exact decode; it does not gate the live decoder.
+
+    /// <summary>The per-entry type byte inside a Havok physics entry (a full, non-truncated entry).</summary>
+    public const byte HavokEntryType = 0x03;
+
+    /// <summary>Byte length of one full Havok physics entry:
+    /// <c>[pos:3×f32][7C][quat:4×f32][7C][03][7C][vel:3×f32][7C][angvel:3×f32][7C]</c> = 58 bytes.</summary>
+    public const int HavokEntryLength = 58;
+
+    /// <summary>Returns <see cref="HavokEntryLength"/> (58) when <paramref name="data"/> at <paramref name="p"/>
+    /// is a structurally-valid full Havok physics entry — the five <c>0x7C</c> delimiters at their fixed offsets
+    /// (12, 29, 31, 44, 57) and the <c>0x03</c> type byte at offset 30 — else -1. Inspection/validation only
+    /// (the variable, truncated blob isn't sized this way; the list start uses the self-validating anchor). The
+    /// grammar is corpus-confirmed across the 113 bit2/bit10 records (ROADMAP §4i).</summary>
+    public static int HavokPhysicsEntryLength(ReadOnlySpan<byte> data, int p)
+    {
+        if (!Within(data, p, HavokEntryLength))
+            return -1;
+        // pos(12) | quat(16) | [03] | vel(12) | angvel(12) |  -> delimiters at 12, 29, 31, 44, 57; type at 30.
+        return data[p + 12] == Delimiter && data[p + 29] == Delimiter && data[p + 30] == HavokEntryType
+            && data[p + 31] == Delimiter && data[p + 44] == Delimiter && data[p + 57] == Delimiter
+            ? HavokEntryLength : -1;
+    }
+
     // ---- The reference ExtraDataList + inventory count (the deterministic item-list start) ----------
     //
     // Between the fixed havok array (above) and the item stacks sit the reference's own ExtraDataList and

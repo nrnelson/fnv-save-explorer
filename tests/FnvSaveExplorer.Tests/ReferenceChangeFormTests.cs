@@ -266,6 +266,29 @@ public class ReferenceChangeFormTests
     }
 
     [Fact]
+    public void HavokPhysicsEntryLength_recognises_the_corpus_confirmed_58_byte_entry()
+    {
+        // The bit2/bit10 (CHANGE_REFR_HAVOK_MOVE) pre-list physics entry (ROADMAP §4i / §10), confirmed across
+        // all 113 bit2/bit10 records: [pos:3×f32][7C][quat:4×f32][7C][03][7C][vel:3×f32][7C][angvel:3×f32][7C].
+        var e = new List<byte>();
+        e.AddRange(Enumerable.Repeat((byte)0x11, 12)); e.Add(0x7C); // pos (3 floats)
+        e.AddRange(Enumerable.Repeat((byte)0x22, 16)); e.Add(0x7C); // quat (4 floats)
+        e.Add(0x03); e.Add(0x7C);                                   // type 0x03
+        e.AddRange(Enumerable.Repeat((byte)0x33, 12)); e.Add(0x7C); // vel (3 floats)
+        e.AddRange(Enumerable.Repeat((byte)0x44, 12)); e.Add(0x7C); // angvel (3 floats)
+        Assert.Equal(58, e.Count);
+
+        Assert.Equal(58, ReferenceChangeForm.HavokPhysicsEntryLength(e.ToArray(), 0));
+
+        // A wrong type byte, a misplaced delimiter, or truncation all reject (returns -1) — no false positives.
+        var badType = e.ToArray(); badType[30] = 0x02;
+        Assert.Equal(-1, ReferenceChangeForm.HavokPhysicsEntryLength(badType, 0));
+        var badDelim = e.ToArray(); badDelim[12] = 0x00;
+        Assert.Equal(-1, ReferenceChangeForm.HavokPhysicsEntryLength(badDelim, 0));
+        Assert.Equal(-1, ReferenceChangeForm.HavokPhysicsEntryLength(e.Take(40).ToArray(), 0));
+    }
+
+    [Fact]
     public void DescribeFlags_labels_the_confirmed_reference_bits()
     {
         var text = ReferenceChangeForm.DescribeFlags(
