@@ -707,10 +707,10 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
    caps total — both anchor the alignment. (A few slots are vestigial FO3 names the engine still tracks under the
    same index, e.g. "Bobbleheads Found"; the label matches what the save stores.)
 9. **GUI/UX polish:** screenshot export (PNG), a raw hex viewer tab, backup management.
-10. **Quest log + objectives decode** (◑ IN PROGRESS — masters QUST reader **fixed & verified**; stage-list
-    change-form **format decoded** via a zero-churn diff; per-quest mapping for *freeform* quests still partial).
-    Surface the player's quests — **completed / active / failed** — and, within each, the **individual
-    objectives/stages** (incl. *optional* ones).
+10. **Quest log + objectives decode** (◑ IN PROGRESS — masters QUST reader **fixed & verified**; both storage
+    mechanisms **decoded** — normal quests' formType-9/7 stage lists *and* freeform quests' objective-target
+    enable-state; a generic quest-log *reader* not yet built). Surface the player's quests — **completed /
+    active / failed** — and, within each, the **individual objectives/stages** (incl. *optional* ones).
     **Masters QUST reader — ✅ FIXED & VERIFIED (the committed step-1).** Root cause was **not** a misaligned
     group read: `TesPlugin.ItemTypes` simply **did not list `QUST`**, so the QUST top-level group was
     seek-skipped and every quest FormID resolved to `null` (the prior "✓ named correctly" notes came from a
@@ -734,8 +734,9 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     appeared); the data is **`0x7C`-delimited** and stage/script updates are **length-changing**.
     `ReferenceChangeForm.DescribeFlags` still prints **REFR** labels for QUST records (e.g. it shows `0x80000000`
     as "GAME_ONLY" where for QUST it is `CHANGE_QUEST_STAGES`) — the §6 #13 follow-up.
-    **Zero-churn controlled diff — CAPTURED & ANALYSED** (vanilla Save 43, paused console, no movement;
-    `setstage 0x0010A214` → 10/20/30/40, saves `zc0`–`zc4`, preserved alongside the 43→47 set):
+    **Zero-churn controlled diff — CAPTURED & ANALYSED** (method: from vanilla Save 43, paused console, no
+    movement, `setstage 0x0010A214` → 10/20/30/40, saved as `zc0`–`zc4`; cross-checked against the natural
+    Saves 43→47 playthrough):
     - **Quest stage state is a growing `0x7C`-delimited STAGE LIST inside formType-9 change forms.** A completed
       entry is `[stageNum][7C][done][7C][04][7C][stageIdx][7C][done2][7C][u32 game-time][7C]`; an incomplete one
       drops the trailing `[u32][7C]` and has `done=0`. So a setstage **grows the list +5 bytes** (`[u32 time][7C]`)
@@ -743,19 +744,38 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       (`0x06009250`, Lonesome Road's ending tracker) grew one entry on **every** setstage (127→146→151→156→181),
       all entries sharing the frozen time `24 01 E9 08` (proving the paused capture froze game-time, and that the
       `u32` *is* the completion time).
-    - **There are ≥2 stage layouts.** formType-7 ("Ain't That a Kick") packs stages as a fixed `1F 00…` array;
-      formType-9 uses the delimited list above. A second formType-9 form `0x00174BC0` (*created/game-only*, 153
-      fields) grew **only on the "finish" stages 10 & 40** → an objective/completion manager; `NVDLC04Ending` grew
-      on every stage.
-    - **The active freeform quest's OWN form is NOT where its stages live.** Across all four setstages
-      `0x0010A214`'s record (the formType-1 actor-like form, iref 3486) **did not change at all** — no growth, flag
-      flip, or insert. Its progress is recorded only in the shared engine tracker/manager forms above (+ item
-      grants + a 5-byte form `0x0010A1E6` created at stage 40). So freeform-quest progress is **engine-buried in
-      shared manager forms**, not in the quest's per-form change record.
+    - **The change-form type byte is a *layout discriminator* keyed to which `changeFlags` are set — not the
+      record type.** formType-7 (`0x00104C1C`, changeFlags `0x80000000` = STAGES-only) lays out a 3-byte header
+      (`10 7C 00 7C 00 7C`) then **4× `[2 marker bytes][32-byte packed-bitmask array]`** (150 B; the arrays are
+      contiguous bit-runs — `1F 1F 1F 1F 0F`, `00 FE 00 FE … C0`, `07 0F 1F 1F 1F 1F`, `E0 F8 FC FE FF FF FF FF`
+      — i.e. bit-packed stage/objective state; exact per-bit meaning needs an *in-progress* formType-7 diff, which
+      the already-**completed** chargen quest can't provide). formType-9 (changeFlags `0xE0000002` =
+      STAGES+SCRIPT+OBJECTIVES) instead uses the delimited stage *list* above. A second formType-9 form
+      `0x00174BC0` (*created/game-only*, 153 fields) grew **only on the "finish" stages 10 & 40** → an
+      objective/completion manager; `NVDLC04Ending` grew on every stage.
+    - **The active freeform quest's progress lives in its objective-target *references*, not its own change
+      form.** `0x0010A214`'s own record (formType-1, iref 3486) only ever ticks a 2-byte timer (`data+0xF0`). A
+      re-analysis of the **natural** playthrough (Saves 43→47, objectives completed in real play, filtered to the
+      quest's FormID neighborhood) shows progress stored as the **enable-state of the quest's objective-target
+      placed refs** — sequential FormIDs just below the quest (`0x0010A204`–`0x0010A209`, `0x0010A1Ex`,
+      `0x0010A21C`…). Activating an objective **enables** its markers: the ref's form-flags clear `0x800`
+      *Initially Disabled* (field[0] `09 08`→`0B 00`, i.e. `0x00800809`→`0x0080000B`), recorded as a
+      `bit0 FORM_FLAGS` change form — at 44→45 six markers `0x0010A204`–`A209` enabled together (the gecko pack for
+      "kill the geckos at the well"), and `0x0010A207` gained an ExtraDataList; at quest close (47) they revert. So
+      "which objectives are active" ≈ "which of the quest's target refs are enabled" — **reconstructable from the
+      save**. (The console `setstage` zero-churn captures missed this: setstage skips the result-script
+      `Enable`/`SetObjectiveCompleted` calls — why objectives there displayed but never checked off.) Stage
+      *sequence* is logged in parallel by tracker quests (`NVDLC04Ending`, formType-9).
     **Remaining work:** attribute a stage-list entry to its owning quest (real QUST forms like `NVDLC04Ending` own
     their list via the change form's refID; freeform "Back in the Saddle" routes through `0x00174BC0`/created forms
-    with no inline quest FormID seen yet); decode the formType-7 packed array; and give QUST `changeFlags` their own
-    labels (bit31 STAGES / bit30 SCRIPT / bit29 OBJECTIVES) — the §6 #13 follow-up.
+    with no inline quest FormID seen yet); decode the formType-7 packed array; give QUST `changeFlags` their own
+    labels (bit31 STAGES / bit30 SCRIPT / bit29 OBJECTIVES) — the §6 #13 follow-up; and build a generic reader that
+    walks target-ref enable-state + tracker stage-lists into a quest-log view.
+    **Dataset note (ephemeral):** the `zc0`–`zc4` captures and the natural Saves 43→47 used above are a **temporary**
+    dataset and will likely be deleted. The byte-level findings here — FormIDs, offsets, flag bits, the
+    formType-7/9 layouts, and the exact capture method — are recorded to **stand alone**, so the decode is
+    reproducible from a fresh equivalent capture (start FNV, in Doc Mitchell's house do "Back in the Saddle", save
+    before/after each objective) without the original files.
 11. **Item condition maximums (base-form Health)** (NEW — not started). Condition (`0x25`, §4i) is the item's
     **absolute current health**, not a percentage — verified on a real save: 9mm Pistol 45, 9mm SMG 205, Metal
     Armor 497.2, Grenade Rifle 99.9 (values differ per item). The **max** is the base form's **Health** stat,
