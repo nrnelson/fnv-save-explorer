@@ -26,6 +26,7 @@ if (args.Length < 2)
           fnvsave inventory <save.fos> [dataDir]   Show the player's inventory (resolves item names from
                                               the game masters; dataDir overrides Data-folder auto-detect)
           fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
+          fnvsave notes <save.fos> [dataDir]  List the notes the player has READ (Pip-Boy Data -> Notes, §4k)
           fnvsave setcount <in.fos> <out.fos> <formId> <count>  Edit a stack count (writes a new file)
           fnvsave setcondition <in.fos> <out.fos> <formId> <value>  Edit a stack's condition/health (new file)
           fnvsave caps <save.fos>             Show the player's caps (the 0x0000000F inventory stack)
@@ -148,6 +149,9 @@ try
             break;
         case "names":
             Names(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
+            break;
+        case "notes":
+            Notes(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
             break;
         case "setcount":
             return SetCount(path, args[2], ParseOffset(args[3]), uint.Parse(args[4]));
@@ -472,6 +476,25 @@ static void Names(FalloutSave s, string savePath, string? dataDir)
     var resolvedSet = db.ResolvedPlugins.ToHashSet(StringComparer.OrdinalIgnoreCase);
     foreach (var p in s.Plugins)
         Console.WriteLine($"  {(resolvedSet.Contains(p) ? "[ok]" : "[--]")} {p}");
+}
+
+static void Notes(FalloutSave s, string savePath, string? dataDir)
+{
+    // The notes the player has READ/viewed (Pip-Boy Data -> Notes, non-bold). Each is a zero-length
+    // change-form marker on the note's inventory reference; the note's FormID is array-index + 1 -> NOTE
+    // (§4k). Names resolve from the masters, exactly like the inventory.
+    var notes = s.ReadNotes;
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    Console.WriteLine($"Read notes ({notes.Count}):");
+    if (db.Count == 0)
+        Console.WriteLine("  (note names unavailable — game Data folder not found; pass it as the 2nd argument)");
+    foreach (var n in notes.Notes
+                 .Select(n => (Note: n, Name: db.Count > 0 ? db.Resolve(n.FormId) : null))
+                 .OrderBy(x => x.Name ?? "￿", StringComparer.OrdinalIgnoreCase))
+    {
+        var src = s.FriendlySourceForModIndex(n.Note.ModIndex) ?? "?";
+        Console.WriteLine($"  {n.Name ?? "?",-40}  0x{n.Note.FormId:X8} (mod {n.Note.ModIndex:X2})  {src}");
+    }
 }
 
 static int SetCount(string inPath, string outPath, uint formId, uint count)

@@ -36,8 +36,8 @@ quicksave). The test theory auto-discovers them (and a local `samples/`) and ski
 
 CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setstat`, `formids`,
 `findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `inventory`, `setcount`,
-`setcondition`, `names`, `setlevel`, `caps`, `setcaps`, `karma`, `xp`, `setkarma`, `setxp`, `diff`, plus R&D
-helpers `walk`, `refdump`, `edlscan`, `invsig`, `idiff`, `fdiff`, `find`, `irefscan`.
+`setcondition`, `names`, `notes`, `setlevel`, `caps`, `setcaps`, `karma`, `xp`, `setkarma`, `setxp`, `diff`, plus
+R&D helpers `walk`, `refdump`, `edlscan`, `invsig`, `idiff`, `fdiff`, `find`, `irefscan`.
 Run with no args to list them. (`edlscan <dir>` aggregates the modded ExtraDataList grammar + a deterministic-path
 tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory signature for byte-identical-decode checks — §4i.)
 
@@ -48,12 +48,12 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 - **`src/FnvSaveExplorer.Core`** (`net10.0`, UI-agnostic)
   - `FalloutSave.cs` — parser, retention writer, all decoders + same-length editors, change-form walker.
   - `ByteReader.cs` — little-endian cursor; throws `SaveFormatException` with the failing offset.
-  - `FileLocationTable.cs`, `GlobalData.cs`, `MiscStats.cs`, `PlayerSpecial.cs`, `PlayerSkills.cs`, `PlayerInventory.cs`, `SaveScreenshot.cs`.
+  - `FileLocationTable.cs`, `GlobalData.cs`, `MiscStats.cs`, `PlayerSpecial.cs`, `PlayerSkills.cs`, `PlayerInventory.cs`, `PlayerNotes.cs`, `SaveScreenshot.cs`.
   - `ReferenceChangeForm.cs` — reference (REFR/ACHR) change-form helpers: the `0x7C` field tokenizer, `changeFlags` describer, the per-stack extra-data catalog/decoder (`TryReadStackExtra`) behind the deterministic inventory walk, and the generalised typed-entry ExtraDataList walk (`WalkExtraDataList`/`ExtraEntryLength` — modded-grammar RE, inspection-only) (§4i).
   - `TesPlugin.cs`, `PluginDatabase.cs`, `GameDataLocator.cs` — FormID → display-name resolution from the game's ESM/ESP masters (§4h / §6.3).
 - **`src/FnvSaveExplorer.App`** (`net10.0-windows`, WPF MVVM) — `MainViewModel.cs`, `MainWindow.xaml`
   (+ code-behind for file dialogs). Tabs: Plugins, File Location Table, Edit (name/level/save#/SPECIAL),
-  Misc Stats, Body. Left panel: screenshot + character summary.
+  Skills, Inventory, Notes, Misc Stats, Body. Left panel: screenshot + character summary.
 - **`src/FnvSaveExplorer.Cli`** — `Program.cs` (top-level statements; all commands + diagnostics).
 - **`tests/FnvSaveExplorer.Tests`** — xUnit; 160 tests. Synthetic-save unit tests + theories over
   every real `.fos` found (round-trip identity, globals, Misc Stats, SPECIAL + skills + inventory locate + edit).
@@ -373,6 +373,75 @@ all six pairs + the second character; edits round-trip same-length. Tooling: CLI
 > meaning generally) stay labelled as the undecoded havok/float array — more controlled diffs can graduate
 > further slots (e.g. carry weight, action points) the same way.
 
+### 4k. Player read notes — the Pip-Boy "Data → Notes" viewed markers
+The notes the player has **read/viewed** (Pip-Boy *Data → Notes*, shown in normal font; unread ones are bold)
+are recorded **one change form per read note**. Reading a note makes the engine write a tiny, zero-payload
+change form on the note's inventory reference:
+```
+[refID : 3 bytes BE]   the note's inventory reference = FormID-array index + 1 (the §4g convention)
+[changeFlags : 0x80000000]   the "read" marker (no other bits)
+[type : 0x1F]          form-type 0x1F; high 2 bits 0 -> the length field is one byte
+[version : 0x1B]
+[length : 0]           NO payload — the marker's mere presence is the read state
+```
+The note's own FormID is therefore `FormIdArray[refID - 1]`, which resolves to a **`NOTE`** record (named via
+the masters, §4h). **Cracked by a controlled in-game diff** (VNV Extended Saves 491→492: hover one inventory
+note to mark it read): `idiff` showed **exactly one inserted change form** — `iref 54137 → 0x0014068C, type
+0x1F, flags 0x80000000, len 0` — against a backdrop of pure game-time-stamp churn; the note it named via the
+`-1` index was **"Recipes - Rose's Wasteland Omelet"**, the note that was read. Verified across the whole save:
+**all 171 markers resolve to `NOTE` records via the `-1` index (171/171)**, and the count moved 170 → 171 with
+the single read. Sane counts on vanilla too (a fresh Goodsprings save = 0; a played save names "How To Play
+Caravan", "Mojave Express Delivery Order (6 of 6)", …).
+
+**Decode is read-only.** The marker is a whole change form, so toggling read/unread is a **length-changing**
+edit (add/remove a record + a FormID-array entry — deferred, §6.7), not a same-length splice; we surface the
+list but don't edit it. `FalloutSave.ReadNotes` enumerates the markers (`type 0x1F`, `changeFlags 0x80000000`,
+`len 0`) into `PlayerNotes`/`NoteEntry`; CLI `notes` and the GUI **Notes** tab resolve the names. **Scope:** the
+save records *read* notes only — a note that's been **acquired but never opened leaves no marker**, so the
+acquired-unread set (e.g. a bold "They Didn't Shoot The Deputy") is not represented here; locating that list
+(quest/global structure) is a separate follow-up (§4k.1 #4).
+
+### 4k.1. Notes — open decode items (the worklist toward *full* notes understanding)
+The read-notes **list** is solid (§4k), but not every field/structure of the notes system is decoded. These are
+the remaining items, each with the experiment that would close it. **The method is always a controlled diff
+(§7): change exactly one thing in-game, save before/after, diff.** Tick items off here as they're cracked.
+
+*Used-but-not-truly-decoded (the marker works empirically; the semantics aren't pinned):*
+- [ ] **1. `changeFlags = 0x80000000` — which engine flag is it?** We match the exact value and it's reliable, but
+  haven't proven it's a specific CHANGE_ bit nor that a read note can't also carry other bits. *Crack:* tally the
+  flag value of every read marker across all 607 saves (is it *always* exactly `0x80000000`?); cross-check the
+  FO3/FNV change-record flag enum (xNVSE/GECK headers, UESP). Settles whether the filter can ever miss/over-match.
+- [ ] **2. `type = 0x1F` — is form-type `0x1F` exactly NOTE?** We filter on it + name via `−1` (171/171), but the
+  standalone meaning of `0x1F` isn't pinned (an over-indexed masters scan showed FormID-remap *collisions* onto
+  other record types that were never untangled). *Crack:* enumerate *all* `type 0x1F` change forms across saves;
+  confirm every one resolves (via `−1`) to a `NOTE`; reconcile the apparent non-NOTE tail as remap artifacts
+  (extend `TesPlugin` to index all record types cleanly, or resolve per-plugin without collapsing).
+- [ ] **3. What is the marker's own `refID` form?** The `refID` resolves to a *different* form than the note
+  (e.g. `0x0014068C`, a nested reference `TesPlugin` can't name); we infer the note via `−1`. *Crack:* identify
+  what that form is — confirm it's the note's *inventory reference* (does `refID` appear as an inventory entry in
+  the player inventory record? it did at data+0x296BD in Save 492); extend the reader to nested CELL/WRLD refs, or
+  decode the inventory entry that owns it. Confirms the `+1` is the inventory-reference convention, not a coincidence.
+
+*Not decoded at all:*
+- [ ] **4. Acquired-but-unread notes list.** Notes you have but never opened (bold in-game) leave **no marker**, so
+  the full Pip-Boy list isn't recoverable yet. *Crack:* controlled pair — **pick up / receive one note without
+  opening it** (save A → acquire, don't read → save B), diff. Candidates: global-data table 9 (@823 B) or 10
+  (@2340 B), or a quest change form. Earlier work ruled out a contiguous FormID/iref table.
+- [ ] **5. Inventory-side read/bold state.** Reading the note also changed bytes *inside* the player inventory
+  record (iref 496, ~7,988 same-length bytes in Save 491→492). *Crack:* decode the inventory record's diff near the
+  note's stack (is the bold→normal display also tracked as a per-stack extra-data flag, §4i catalog?), or do an
+  inventory-only controlled read with no other churn.
+- [ ] **6. Note metadata: is anything else in the *save*?** Text, holodisk-vs-text-note, Pip-Boy sort/category, a
+  "new" indicator. *Crack:* confirm these are pure functions of the base form (read from masters, §4h) and not
+  stored per-save — compare in-game Pip-Boy ordering/grouping against what the save holds.
+- [ ] **7. (low priority) The game-time-stamp "noise."** The ~8,400 same-length record changes that swamp a notes
+  diff are an undecoded recurring stamp. *Crack:* decode the recurring same-length delta (likely a per-reference
+  game-time field) so future notes diffs can subtract it — not notes per se, but it's what obscures them.
+
+Tooling that helped here and is worth re-adding as needed (kept out of the committed CLI): a `resolve <save>
+<formId>` one-shot name/type lookup and a `notescan`/`readnotes` marker dumper — both were scratch helpers during
+this RE; re-add behind the existing `PluginDatabase`/`EnumerateChangeForms` when picking an item back up.
+
 ---
 
 ## 5. Completed (with verification)
@@ -396,9 +465,10 @@ all six pairs + the second character; edits round-trip same-length. Tooling: CLI
 | Pip-Boy item category / tab (§4h) | ✅ from the base form's record type (read from the masters, not the save): `RecordType`/`Category`/`PipBoyTab`; verified in-game (WEAP/ARMO/AMMO; ALCH+BOOK→Aid; KEYM→Misc/"Keyring"; NOTE→Data) |
 | Caps decode + edit (§6.4) | ✅ caps are an inventory stack (FormID `0x0000000F`); `Caps`/`TrySetCaps` wrap the inventory path; CLI `caps`/`setcaps` + GUI Edit field; same-length edit round-trips |
 | Karma + XP decode + edit (§4j) | ✅ two float32 actor-values in the player reference record (slot 100 = karma, slot 101 = XP), cracked via the new `fdiff` float-aware diff on controlled pairs (XP `10→60→110`, karma `0→100→200`) + confirmed on a 2nd character; `Karma`/`Xp` + `TrySetKarma`/`TrySetXp`; CLI `karma`/`xp`/`setkarma`/`setxp` + GUI; same-length float edit round-trips |
-| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory + caps + karma/XP edit) | ✅ launches + builds |
+| Read notes decode (§4k) | ✅ Pip-Boy *Data → Notes* "viewed" markers — one zero-payload change form per read note (`type 0x1F`, `changeFlags 0x80000000`, `len 0`) on the note's inventory reference (FormID-array index + 1); note = `FormIdArray[refID-1]` → `NOTE`. Cracked by a controlled diff (Saves 491→492: one note read = **+1 change form**, "Recipes - Rose's Wasteland Omelet"); **all 171 markers resolve to NOTE (171/171)**. `ReadNotes`/`PlayerNotes`; CLI `notes` + GUI Notes tab. **Read-only** (the marker is a whole change form → toggling is length-changing, §6.7) |
+| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory + caps + karma/XP edit + read notes) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion |
-| Tests | ✅ 457 xUnit, all green |
+| Tests | ✅ 495 xUnit, all green |
 | Deterministic inventory decoder + condition edit (§4i) | ✅ window removed; condition (`0x25`) editable + equipped/`0x21` surfaced in CLI + GUI; condition edit round-trips |
 | Deterministic inventory list *start* (§4i) | ✅ **deterministic on all 607 real saves** (vanilla 30/30, base VNV 98/98, VNV Extended 479/479): MOVE-skip + the typed-entry ExtraDataList walk (variable order + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor** for bit2/bit10 havok-physics records → the **`vsval` stack count** → first item. The §4g scan is now an unused safety net. vsval self-validates (decoded ≥ vsval, **0 under-reads**); verified **display byte-identical** across all 607 except **35 endgame inventories this *fixed* (empty → full)** |
 | Modded inventory start — **deterministic on all 3 corpora** (§4i) | ✅ the typed-entry walk is now the **live decoder**: variable-order entries (`0x18/0x74/0x5E/0x60` + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor scan** for bit2/bit10 `CHANGE_REFR_HAVOK_MOVE` records (whose pre-list region is a variable-length Havok physics blob, not a sized slot array) + a `vsval` sanity cap. Deterministic list start on **vanilla 30/30, base VNV 98/98, VNV Extended 479/479**; the §4g scan is now an unused safety net. **0 under-reads**; display **byte-identical** across all 607 except **35 VNV Extended endgame inventories that this *fixed* from decoding-empty → full** (the §4g scan had latched onto havok-blob garbage). New: `PlayerInventory.DeterministicStart`, CLI `invsig` (decode-signature cross-check). 347 tests green |
@@ -494,17 +564,18 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
      two are cross-stable (XP unchanged across the karma saves and vice-versa). Slot indices confirmed on a
      second character (Mace Windu: karma 35, XP 338). `FalloutSave.Karma`/`Xp` + `TrySetKarma`/`TrySetXp`
      (same-length float splices), CLI `karma`/`xp`/`setkarma`/`setxp`, GUI `EditKarma`/`EditXp`.
-5. **Notes / message log (Pip-Boy "Data → Notes")** — the collected notes/holotapes shown under Pip-Boy
-   *Data → Notes* are **not inventory items**. The player's inventory change form (iref = PlayerRef+1)
-   holds at most a stray carried holotape: a 40 h VNV save (Save 335) decodes only **one** `NOTE` stack
-   while the Pip-Boy lists *many* (most marked viewed). So the notes log is a **separate, undecoded
-   structure** — a different change form or a global-data table, keyed by note FormID. **Findings so far:**
-   a known note is "Message: Khan Hospitality" (FormID `0x000CCFCB`, a `NOTE` record) present in Save 335;
-   each entry carries a **viewed/unviewed** flag (dimmed vs bold in-game). **Ready-made controlled pair**
-   for that toggle: in Save 335 "Message: Khan Hospitality" is *viewed* and the next entry "They Didn't
-   Shoot The Deputy" is *unviewed* — diff/inspect to pin the flag (same method as the equipped flag, §4i).
-   **Lead:** `find` a note's FormID/iref *outside* the inventory record to locate the structure. (Raised
-   out of scope; logged for future us.)
+5. ~~**Notes / message log (Pip-Boy "Data → Notes")**~~ — ✅ **DONE (read side)** (§4k). Cracked by a controlled
+   diff (VNV Extended Saves 491→492: hover one inventory note to mark it read): reading a note writes **one
+   zero-payload change form** on the note's inventory reference — `type 0x1F`, `changeFlags 0x80000000`, `len 0`
+   — whose `refID` is the note's FormID-array index + 1 (the §4g convention), so the note = `FormIdArray[refID-1]`,
+   a `NOTE` record. The read produced **exactly +1 change form** ("Recipes - Rose's Wasteland Omelet") and **all
+   171 markers in the save resolve to NOTE (171/171)**. `FalloutSave.ReadNotes` → `PlayerNotes`/`NoteEntry`; CLI
+   `notes` + GUI Notes tab (names via the masters, §4h). **Read-only** — the marker is a whole change form, so
+   toggling read/unread is length-changing (§6.7), not a same-length splice.
+   **Toward *full* notes decode:** the read **list** is done, but the marker's flag/type semantics, the
+   acquired-but-unread list, and the inventory-side read state are not yet pinned. These are tracked as a
+   checklist in **§4k.1** (each with the controlled-diff experiment that closes it) — the active worklist for
+   "understand every element of notes."
 6. ~~**General change-form record header**~~ — ✅ **DONE** (§4f). Walker (`EnumerateChangeForms`) reproduces
    all records exactly; CLI `walk` validates. Enables a future full change-form browser.
 7. **Length-changing edits** (arbitrary rename, add/remove plugins, add/remove items) — requires rewriting every
@@ -577,6 +648,9 @@ bytes, so it never shows as a clean byte-run delta in `diff`/`idiff`). `fdiff` i
   saves); a save lacking it would return null (handled gracefully).
 - Only **same-length** edits are supported by design (see §1). Length-changing edits are unsafe until
   full offset-fixup is implemented.
+- Read notes (§4k) capture only notes the player has **opened** (each leaves a change-form marker). Notes
+  **acquired but never opened** (bold in the Pip-Boy) leave no marker, so the full acquired-notes list isn't
+  decoded yet — its structure (a quest/global table) is a separate controlled-diff follow-up.
 - `findplayer`'s refID scan can report false positives in data; the player records are confirmed via
   the SPECIAL/name anchor, which is the reliable locator.
 

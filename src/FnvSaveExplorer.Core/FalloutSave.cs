@@ -972,6 +972,47 @@ public sealed class FalloutSave
     /// if the inventory wasn't located or no caps stack is present.</summary>
     public bool TrySetCaps(uint caps) => TrySetItemCount(CapsFormId, caps);
 
+    // ---- Player read notes (Pip-Boy Data -> Notes "viewed" markers, §4k) -------------------
+    private PlayerNotes? _readNotes;
+
+    /// <summary>The form-type tag (low six bits of the change-form type byte) of a note "read" marker;
+    /// its high two bits are 0, so the marker's length field is a single byte (always 0 here).</summary>
+    private const byte NoteReadMarkerType = 0x1F;
+
+    /// <summary>The change-flags value the engine writes on a note's inventory reference when the note is
+    /// read/viewed in the Pip-Boy. The marker carries no payload — its mere presence is the read state.</summary>
+    private const uint NoteReadMarkerFlags = 0x80000000;
+
+    /// <summary>
+    /// The player's <b>read notes</b> (Pip-Boy <i>Data → Notes</i>, shown non-bold once viewed), decoded from
+    /// the per-note read markers — change forms with <c>type 0x1F</c>, <c>changeFlags 0x80000000</c> and a
+    /// zero-length payload (ROADMAP §4k). A marker's <c>refID</c> is the note's inventory reference (FormID-array
+    /// index + 1, as for item stacks §4g), so the note's own FormID is <c>FormIdArray[refID - 1]</c> — a
+    /// <c>NOTE</c> record, resolved to a name separately via <see cref="PluginDatabase"/>. Never null (empty when
+    /// the player has read no notes); read-only, since a marker is a whole change form (toggling it is
+    /// length-changing — §6.7).
+    /// </summary>
+    public PlayerNotes ReadNotes => _readNotes ??= LocateReadNotes();
+
+    private PlayerNotes LocateReadNotes()
+    {
+        var notes = new List<NoteEntry>();
+        foreach (var cf in EnumerateChangeForms())
+        {
+            if (cf.FormType != NoteReadMarkerType || cf.ChangeFlags != NoteReadMarkerFlags || cf.DataLength != 0)
+                continue;
+            // The marker's iref is the note's inventory reference: FormID-array index + 1 (the §4g convention),
+            // so the note itself is the form one slot earlier. iref 0 has no predecessor and can't be a note.
+            if (cf.Iref <= 0)
+                continue;
+            var formId = ResolveIref(cf.Iref - 1);
+            if (formId == 0)
+                continue;
+            notes.Add(new NoteEntry(cf.Iref, cf.FormId, formId));
+        }
+        return new PlayerNotes(notes);
+    }
+
     // ---- Editing (same-length splices only) --------------------------------
     public void SetPlayerLevel(uint level) => StageUInt32(_playerLevelOffset, level);
 

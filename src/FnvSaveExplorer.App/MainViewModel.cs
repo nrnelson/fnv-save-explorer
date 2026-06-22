@@ -103,6 +103,20 @@ public sealed class InventoryRow : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 }
 
+/// <summary>One note the player has read (Pip-Boy Data → Notes); read-only display (ROADMAP §4k).</summary>
+public sealed class NoteRow
+{
+    public uint FormId { get; init; }
+    public int ModIndex { get; init; }
+    public string Note => $"0x{FormId:X8} (mod {ModIndex:X2})";
+
+    /// <summary>Display name resolved from the game masters; empty until/unless a Data folder is found.</summary>
+    public string Name { get; init; } = "";
+
+    /// <summary>The plugin (ESM/ESP) the note's mod index points at — its source mod/DLC.</summary>
+    public string Source { get; init; } = "";
+}
+
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private FalloutSave? _save;
@@ -113,6 +127,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<SpecialAttr> Special { get; } = [];
     public ObservableCollection<SkillRow> Skills { get; } = [];
     public ObservableCollection<InventoryRow> Inventory { get; } = [];
+    public ObservableCollection<NoteRow> Notes { get; } = [];
     public ObservableCollection<MiscStatRow> MiscStats { get; } = [];
 
     private static readonly string[] SpecialNames =
@@ -160,6 +175,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private string _inventoryInfo = "";
     public string InventoryInfo { get => _inventoryInfo; private set => Set(ref _inventoryInfo, value); }
+
+    private string _notesInfo = "";
+    public string NotesInfo { get => _notesInfo; private set => Set(ref _notesInfo, value); }
 
     // ---- Edit fields (two-way bound) --------------------------------------
     private string _editName = "";
@@ -257,6 +275,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (invDb.ModsFolder is not null && string.IsNullOrWhiteSpace(EditModsFolder))
                 EditModsFolder = invDb.ModsFolder;
             PopulateInventory(save, invDb);
+            PopulateNotes(save, invDb);
 
             MiscStats.Clear();
             if (save.MiscStats is { } ms)
@@ -298,6 +317,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (db.ModsFolder is not null)
             EditModsFolder = db.ModsFolder;
         PopulateInventory(_save, db);
+        PopulateNotes(_save, db);
     }
 
     /// <summary>
@@ -330,6 +350,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 OriginalCondition = item.Condition,
             });
         InventoryInfo = DescribeInventory(Inventory.Count, db);
+    }
+
+    /// <summary>Fills the Notes grid with the notes the player has read (Pip-Boy Data → Notes, §4k),
+    /// resolving names from the masters when available. Read-only — toggling read state is length-changing.</summary>
+    private void PopulateNotes(FalloutSave save, PluginDatabase db)
+    {
+        Notes.Clear();
+        var read = save.ReadNotes;
+        foreach (var n in read.Notes
+                     .Select(n => (Note: n, Name: db.Count > 0 ? db.Resolve(n.FormId) : null))
+                     .OrderBy(x => x.Name ?? "￿", StringComparer.OrdinalIgnoreCase))
+            Notes.Add(new NoteRow
+            {
+                FormId = n.Note.FormId,
+                ModIndex = n.Note.ModIndex,
+                Name = n.Name ?? "",
+                Source = save.FriendlySourceForModIndex(n.Note.ModIndex) ?? "",
+            });
+        NotesInfo = db.Count > 0
+            ? $"{Notes.Count} note(s) read (Pip-Boy Data → Notes). Read-only — the save records read notes only " +
+              "(unopened notes leave no marker)."
+            : $"{Notes.Count} note(s) read. Names need the game's Data folder (FalloutNV.esm) — set it on the Edit tab.";
     }
 
     private static string DescribeInventory(int stacks, PluginDatabase db) =>

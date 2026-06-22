@@ -156,6 +156,21 @@
                     </StackPanel>
                 </TabItem>
 
+                <TabItem Header="Notes">
+                    <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10" Text="{Binding NotesInfo}"/>
+                        <DataGrid ItemsSource="{Binding Notes}" AutoGenerateColumns="False" IsReadOnly="True"
+                                  CanUserAddRows="False" HeadersVisibility="Column" FontFamily="Consolas"
+                                  Width="700" HorizontalAlignment="Left" MaxHeight="400">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Note" Binding="{Binding Name}" Width="300"/>
+                                <DataGridTextColumn Header="FormID" Binding="{Binding Note}" Width="160"/>
+                                <DataGridTextColumn Header="Source (mod)" Binding="{Binding Source}" Width="200"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </StackPanel>
+                </TabItem>
+
                 <TabItem Header="Misc Stats">
                     <DataGrid ItemsSource="{Binding MiscStats}" AutoGenerateColumns="False" IsReadOnly="True"
                               HeadersVisibility="Column" FontFamily="Consolas" Margin="2">
