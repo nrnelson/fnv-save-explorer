@@ -707,17 +707,42 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
    caps total — both anchor the alignment. (A few slots are vestigial FO3 names the engine still tracks under the
    same index, e.g. "Bobbleheads Found"; the label matches what the save stores.)
 9. **GUI/UX polish:** screenshot export (PNG), a raw hex viewer tab, backup management.
-10. **Quest log + objectives decode** (NEW — not started). Surface the player's quests — **completed / active /
-    failed** — and, within each, the **individual objectives/stages** (including *optional* ones that can be
-    skipped while the quest still completes). Where it lives in the save is not yet decoded; the likely homes are
-    `QUST` change forms (per-quest stage flags + objective completion bitsets) and/or a quest-state global-data
-    table (§4c types 7–11 are still unlabeled). Names/objective text come from the masters (the `QUST` records,
-    via an extension of `TesPlugin`, which today only indexes item record types). **Structural blueprint (UESP,
-    §8a — verify against FNV):** quest state lives in **QUST change forms**; **stages** under `CHANGE_QUEST_STAGES`
-    (bit 31) as a `vsval count` of `{sint16 stage, uint8 done}`, **objectives** under `CHANGE_QUEST_OBJECTIVES`
-    (bit 29). So the walker can filter for the QUST form-type and decode by these flags. **Method:** controlled
-    diff — advance one objective in-game, save before/after, `idiff … clean` to isolate the changed bytes (mirrors
-    how notes §4k were cracked). Read-only first; editing quest state is likely same-length (flag/stage bytes).
+10. **Quest log + objectives decode** (◑ IN PROGRESS — partial findings, decode not finished). Surface the
+    player's quests — **completed / active / failed** — and, within each, the **individual objectives/stages**
+    (incl. *optional* ones). **Confirmed by a controlled diff (vanilla Saves 43→44: completed one objective + a
+    new one appeared, while moving Doc Mitchell's House → Prospector Saloon):**
+    - **FNV QUST change-form type byte = `0x07`** (low-6-bit form type 0x07). Multiple quests decode as type 0x07
+      (e.g. "Ain't That a Kick in the Head" `0x00104C1C`, iref 2). This is the FNV-specific number (Skyrim's
+      compacted index differs, like NOTE).
+    - **changeFlags use the UESP QUST bit meanings** — the iref-2 record went `0x80000000` → `0xC0000000`, i.e.
+      `bit31 CHANGE_QUEST_STAGES` → `+ bit30 CHANGE_QUEST_SCRIPT`, when a script value (`0x99`) was written. (So
+      `ReferenceChangeForm.DescribeFlags` needs QUST-specific labels — it currently shows REFR labels for QUST; a
+      §6 #13 follow-up.) `bit29 OBJECTIVES` was **not** set — the save stores **stages**, and the Pip-Boy derives
+      objective display from the stage + the QUST's masters definition.
+    - Quest data is **`0x7C`-delimited** (FNV style, not Skyrim's raw layout) and a stage/script update can be
+      **length-changing** (iref-2 grew 150→155 by prepending the `[u32 script][7C]` field; the active quest "Back
+      in the Saddle" appeared as a brand-new **inserted** type-0x07 record).
+    **A 5-save in-place progression (vanilla Saves 43→44→45→46→47, "Back in the Saddle" `0x0010A214`: one task
+    completed + a new one added per save, quest closed at 47) was captured and analysed — but the decode is NOT
+    cracked, and the picture is messier than the UESP blueprint:**
+    - **`type 0x07` is NOT exclusively QUST.** Many type-0x07 change forms are **map/cell fog-of-war records** whose
+      data is a *growing exploration bitmap* (e.g. `0x0010D9F4`: a small dot expanding to a blob as the player
+      explored Goodsprings). So quest change forms can't be identified by form-type alone — the masters (record
+      type == `QUST`) are required.
+    - **"Back in the Saddle" (`0x0010A214`) resolves to a QUST in the masters, yet its change form is type `0x41`
+      (a placed *reference*), and across all five saves it changed only in two **increasing timer fields** — no
+      stage/objective bytes moved.** So the quest's per-objective state is **not** sitting in an obvious diffable
+      change form; it appears script/engine-buried (the `CHANGE_QUEST_SCRIPT` bit + a `[u32][7C]` script value seen
+      on the chargen quest hints objective state may live in quest *script variables*, not a stages list).
+    - The masters **QUST reader is suspect** — it named some forms correctly ("Ain't That a Kick" `0x00104C1C` ✓,
+      "Classic Inspiration" is a real challenge-quest ✓) but the `0x0010A214`→reference contradiction suggests
+      possible misalignment in the QUST group read; needs verifying before trusting QUST FormID→name.
+    **Assessment:** this is a **deep, multi-session RE effort**, not a quick win — FNV's quest/objective storage
+    diverges hard from Skyrim and isn't surfacing as a clean change-form diff even with good controlled saves.
+    **Deferred.** When resumed, the surgical next steps are: (1) verify/fix the `TesPlugin` QUST reader; (2) a
+    **zero-churn** controlled diff — console `setstage` on an active quest **without moving at all** — to isolate
+    the bytes; (3) if stages aren't in the QUST change form, look at the script/Papyrus-equivalent global data.
+    The 43→47 saves are preserved as the dataset.
 11. **Item condition maximums (base-form Health)** (NEW — not started). Condition (`0x25`, §4i) is the item's
     **absolute current health**, not a percentage — verified on a real save: 9mm Pistol 45, 9mm SMG 205, Metal
     Armor 497.2, Grenade Rifle 99.9 (values differ per item). The **max** is the base form's **Health** stat,
