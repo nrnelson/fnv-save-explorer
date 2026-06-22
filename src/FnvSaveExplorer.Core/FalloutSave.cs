@@ -700,13 +700,61 @@ public sealed class FalloutSave
         {
             var chain = BuildChain(itemsOffset, end, out _);
             if (chain.Count >= stackCount)
-                return new PlayerInventory(cf.DataOffset, chain);
+                return new PlayerInventory(cf.DataOffset, chain) { DeterministicStart = true };
         }
 
-        // Fallback (atypical/modded ExtraDataList): the prior forward scan + distinct-ref acceptance, from the
-        // ExtraDataList start and then, as a last resort, the record start.
-        return ScanForInventory(cf, start, end)
+        // The direct structural skip mis-landed: either an atypical/modded ExtraDataList, or a bit2/bit10
+        // CHANGE_REFR_HAVOK_MOVE record whose pre-list havok physics blob is variable-length and can't be byte-sized
+        // (ROADMAP §4i gap 1). Locate the list with two complementary locators — the deterministic
+        // ExtraDataList-header anchor and the §4g forward scan — and prefer the anchor (vsval-validated, and it
+        // drops the leading over-read stacks the §4g scan picks up, so it is the *cleaner* decode of the same real
+        // list). Defer to §4g only when the anchor found a short coincidental chain in the havok blob / zeroed slot
+        // array while §4g found the genuine list: those differ by a huge factor (real endgame lists are 180–214
+        // stacks, garbage chains ≤ ~12), whereas the anchor-vs-scan difference on the same real list is just the few
+        // leading over-reads — so a 2× gap cleanly distinguishes "anchor missed the list" from "anchor is cleaner".
+        var anchored = ScanForExtraDataListAnchor(cf, start, end);
+        var scanned = ScanForInventory(cf, start, end)
             ?? (start != cf.DataOffset ? ScanForInventory(cf, cf.DataOffset, end) : null);
+        if (anchored is null)
+            return scanned;
+        if (scanned is not null && scanned.Items.Count > 2 * anchored.Items.Count)
+            return scanned; // the anchor only found a short garbage chain; §4g has the real (much longer) list
+        return anchored;
+    }
+
+    /// <summary>Scans <c>[start, end)</c> for the reference ExtraDataList header
+    /// (<see cref="ReferenceChangeForm.IsExtraDataListHeader"/>) whose typed-entry walk
+    /// (<see cref="ReferenceChangeForm.TryInventoryItemsStart"/>) lands on a <c>vsval</c> followed by at least
+    /// that many real stacks — the deterministic anchor for records whose pre-list havok region isn't byte-sized
+    /// (§4i gap 1). Among all self-validating headers it picks the one with the <b>largest vsval stack count</b>:
+    /// that is the engine's genuine item count, whereas a coincidental header in the havok blob / zeroed slot
+    /// array yields a small/random count (and an absurd count is already excluded — no chain is that long). Ties
+    /// break to the tightest chain (smallest over-read) then the earliest header. Returns the decoded inventory
+    /// (flagged deterministic) or null if no header self-validates.</summary>
+    private PlayerInventory? ScanForExtraDataListAnchor(ChangeFormHeader cf, int start, int end)
+    {
+        var span = _raw.AsSpan(0, end);
+        List<InventoryItem>? best = null;
+        var bestStack = -1;
+        var bestOver = int.MaxValue;
+        for (var h = start; h + ReferenceChangeForm.RefExtraHeaderLength <= end; h++)
+        {
+            if (!ReferenceChangeForm.IsExtraDataListHeader(span, h))
+                continue;
+            if (!ReferenceChangeForm.TryInventoryItemsStart(span, h, out var itemsOffset, out var stackCount) || stackCount <= 0)
+                continue;
+            var chain = BuildChain(itemsOffset, end, out _);
+            if (chain.Count < stackCount)
+                continue;
+            var over = chain.Count - stackCount;
+            if (stackCount > bestStack || (stackCount == bestStack && over < bestOver))
+            {
+                best = chain;
+                bestStack = stackCount;
+                bestOver = over;
+            }
+        }
+        return best is null ? null : new PlayerInventory(cf.DataOffset, best) { DeterministicStart = true };
     }
 
     /// <summary>Forward-scans <c>[start, end)</c> for the first contiguous stack chain with at least

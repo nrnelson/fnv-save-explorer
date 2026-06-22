@@ -68,8 +68,17 @@ public static class ReferenceChangeForm
     /// <summary>Bytes per gated-array slot: a 4-byte value + its single <c>0x7C</c> delimiter.</summary>
     public const int GatedArraySlotStride = 5;
 
-    /// <summary>Total byte length of the fixed gated array (1160 = 232 × 5).</summary>
+    /// <summary>Total byte length of the fixed gated array (1160 = 232 × 5) — the vanilla invariant.</summary>
     public const int GatedArrayBlockLength = GatedArraySlotCount * GatedArraySlotStride;
+
+    // The 232-slot size above is vanilla-specific: late-game MODDED records carry a *different* slot count
+    // (~214 observed; correlates with extra changeFlags bits), so the array must be SIZED, not assumed, for the
+    // search start to land on the ExtraDataList. GatedArrayLength walks the [4-byte][7C] slot run until the
+    // ExtraDataList header begins; the run never approaches this bound on a real save (it is just a runaway guard).
+    // See ROADMAP §4i / §10.
+
+    /// <summary>Upper bound on havok-array slots the variable sizer will walk before giving up (runaway guard).</summary>
+    public const int GatedArrayMaxSlots = 512;
 
     /// <summary>
     /// Splits a record's payload into <c>0x7C</c>-delimited fields. <paramref name="data"/> is the payload
@@ -133,13 +142,55 @@ public static class ReferenceChangeForm
             return dataOffset;
         var afterMove = MoveBlockLength + 1;
 
-        // Fixed havok/float array: GatedArraySlotCount delimited 4-byte slots. Skip it only when that exact
-        // structure is present (true on every real inventory record) so the result lands on the ExtraDataList;
-        // otherwise fall back to just-past-MOVE and let the forward scan handle the rest.
+        // Fixed havok/float array (vanilla fast path): exactly GatedArraySlotCount delimited 4-byte slots. Kept
+        // verbatim so every vanilla save lands byte-identically at MOVE+1+1160 (and the pinned-size tests hold).
         if (IsDelimitedSlotRun(data, afterMove, GatedArraySlotCount))
             return dataOffset + afterMove + GatedArrayBlockLength;
+
+        // Modded: the array size is variable (late records carry ~214 slots, not 232 — ROADMAP §4i). Size it by
+        // walking the [4-byte][7C] slot run to the ExtraDataList header, so the result still lands on the list.
+        var sized = GatedArrayLength(data, afterMove, out _);
+        if (sized >= 0)
+            return dataOffset + afterMove + sized;
+
+        // Couldn't size it (a synthetic/atypical record) → return just past MOVE; the forward scan handles the rest.
         return dataOffset + afterMove;
     }
+
+    /// <summary>
+    /// Sizes the variable-length havok/float array that follows the MOVE block: the run of
+    /// <c>[4-byte value][0x7C]</c> slots that ends where the reference's ExtraDataList header
+    /// (<see cref="IsExtraDataListHeader"/>) begins. Returns the run's total byte length (slots ×
+    /// <see cref="GatedArraySlotStride"/>) and outputs <paramref name="slotCount"/>, or -1 if no header is
+    /// reached within <see cref="GatedArrayMaxSlots"/> or the run breaks (a non-slot byte before any header).
+    /// Vanilla records size to exactly <see cref="GatedArraySlotCount"/> (232); modded records vary.
+    /// <para><paramref name="afterMove"/> is the offset just past the MOVE block's delimiter, relative to
+    /// <paramref name="data"/>'s base.</para>
+    /// </summary>
+    public static int GatedArrayLength(ReadOnlySpan<byte> data, int afterMove, out int slotCount)
+    {
+        slotCount = -1;
+        for (var slots = 0; slots <= GatedArrayMaxSlots; slots++)
+        {
+            var p = afterMove + slots * GatedArraySlotStride;
+            if (IsExtraDataListHeader(data, p)) // the run ends exactly at the ExtraDataList header
+            {
+                slotCount = slots;
+                return slots * GatedArraySlotStride;
+            }
+            if (p + GatedArraySlotStride > data.Length || data[p + 4] != Delimiter) // not a slot either → can't size
+                return -1;
+        }
+        return -1;
+    }
+
+    /// <summary>True when <paramref name="data"/> at <paramref name="p"/> is the reference ExtraDataList header
+    /// <c>[00][7C][scale:f32][7C]</c> (7 bytes): a <c>0x00</c> flags byte, delimiters at +1 and +6, and a +4 byte
+    /// that is <em>not</em> the delimiter (so a havok slot <c>[00 7C v2 v3][7C]</c>, whose +4 is the slot delimiter,
+    /// is never mistaken for the header).</summary>
+    public static bool IsExtraDataListHeader(ReadOnlySpan<byte> data, int p) =>
+        Within(data, p, RefExtraHeaderLength) && data[p] == 0x00 && data[p + 1] == Delimiter
+        && data[p + 4] != Delimiter && data[p + 6] == Delimiter;
 
     /// <summary>True when <paramref name="data"/> from <paramref name="start"/> holds <paramref name="slots"/>
     /// consecutive <c>[4-byte value][0x7C]</c> slots — i.e. a delimiter at every <see cref="GatedArraySlotStride"/>th
@@ -202,9 +253,15 @@ public static class ReferenceChangeForm
     /// <paramref name="extraDataListStart"/> is <see cref="InventorySearchStart"/> (past MOVE + the havok array).
     /// On success outputs <paramref name="itemsOffset"/> (the first stack) and <paramref name="stackCount"/> (the
     /// decoded vsval count, for the caller to validate by walking exactly that many stacks). Returns false — so
-    /// the caller falls back to the forward scan — if the ExtraDataList isn't the recognised shape (the structural
-    /// type anchors <see cref="RefListType"/>/<see cref="FixedBlockType"/>/<see cref="LinkedRefType"/> are the guard
-    /// against mis-sizing an atypical/modded record).
+    /// the caller falls back to the forward scan — when the ExtraDataList isn't a recognised shape.
+    /// <para>The list is a header + lead pair + a sequence of typed entries in <b>any order</b> (vanilla is
+    /// <c>5E,18,74</c>(+<c>60</c>); modded VNV reorders to <c>18,74,5E,…</c> and adds <c>1D</c>/<c>75</c>),
+    /// terminated by the inventory's <c>vsval</c> stack count whose value + delimiter lands on the first item.
+    /// This walks entries via the shared <see cref="ExtraEntryLength"/> catalog (in lockstep with the inspection
+    /// walk <see cref="WalkExtraDataList"/>) and recognises the terminating <c>vsval</c> by it being immediately
+    /// followed by a structurally-valid stack (<see cref="LooksLikeStackStart"/>) — an entry-type byte can also be
+    /// a small <c>vsval</c> value, so this strong "next is a real stack" test, checked first, disambiguates; the
+    /// caller then confirms by walking ≥ <paramref name="stackCount"/> FormID-resolving stacks.</para>
     /// </summary>
     public static bool TryInventoryItemsStart(ReadOnlySpan<byte> data, int extraDataListStart, out int itemsOffset, out int stackCount)
     {
@@ -217,37 +274,67 @@ public static class ReferenceChangeForm
             return false;
         p += RefExtraHeaderLength;
 
-        // 2. ExtraDataList ref-list: [xx][7C][5E][7C][N*4][7C] then N × (ref:3 7C flag:1 7C).
-        if (!Within(data, p, 6) || data[p + 1] != Delimiter || data[p + 2] != RefListType
-            || data[p + 3] != Delimiter || data[p + 5] != Delimiter)
+        // 2. ExtraDataList lead pair [xx][7C] (a flag/count; meaning unpinned — only its delimiter is framing).
+        if (!Within(data, p, 2) || data[p + 1] != Delimiter)
             return false;
-        var n = data[p + 4] / 4;
-        p += 6 + 6 * n;
+        p += 2;
 
-        // 3. fixed 24-byte block, type 0x18.
-        if (!Within(data, p, FixedBlockLength) || data[p] != FixedBlockType)
+        // 3. typed entries in ANY order, terminated by the inventory stack count (vsval). Check the vsval
+        //    termination first (it's the strong, self-validating anchor — value + 7C landing on a real stack);
+        //    otherwise consume the next typed entry from the shared catalog.
+        while (true)
+        {
+            if (TryReadInventoryVsval(data, p, out itemsOffset, out stackCount))
+                return true;
+            var len = ExtraEntryLength(data, p);
+            if (len > 0)
+            {
+                p += len;
+                continue;
+            }
+            // Neither a vsval nor a known entry: the variable post-entry tail (the 0x04/0x14/0x15 ref-lists,
+            // ROADMAP §4i gap 2 — inconsistently framed, so not individually sized). Advance to the
+            // self-validating vsval within a bounded window; the caller still confirms ≥ stackCount real stacks.
+            for (var q = p + 1; q <= p + PostEntryResyncWindow; q++)
+                if (TryReadInventoryVsval(data, q, out itemsOffset, out stackCount))
+                    return true;
             return false;
-        p += FixedBlockLength;
+        }
+    }
 
-        // 4. linked-ref entry: [74][7C][ref:3][7C].
-        if (!Within(data, p, 6) || data[p] != LinkedRefType || data[p + 1] != Delimiter || data[p + 5] != Delimiter)
-            return false;
-        p += 6;
+    /// <summary>Bytes the post-entry tail resync (variable 0x04/0x14/0x15 ref-lists) will scan for the vsval
+    /// before giving up; the observed tails are ≤ ~284 bytes.</summary>
+    public const int PostEntryResyncWindow = 1024;
 
-        // 5. optional u32 entry on large inventories: [60][7C][u32][7C]. (A genuine 24-stack count also encodes
-        //    as the byte 0x60, but then it isn't followed by this entry's framing — the count validation below,
-        //    and the forward-scan fallback, resolve that rare collision.)
-        if (Within(data, p, 7) && data[p] == U32EntryType && data[p + 1] == Delimiter && data[p + 6] == Delimiter)
-            p += 7;
+    /// <summary>Sanity bound on the inventory's <c>vsval</c> stack count. A real inventory holds at most a few
+    /// hundred stacks (the largest observed across 607 saves is ~221); a value this large is a misread of entry
+    /// data as a wide vsval, so it's rejected — keeping a coincidental 4-byte vsval from passing the resync.</summary>
+    public const int MaxInventoryStacks = 100_000;
 
-        // 6. inventory stack count (vsval) then the first item stack.
+    /// <summary>True when <paramref name="p"/> is the inventory's terminating <c>vsval</c> stack count: a
+    /// positive, sane (<see cref="MaxInventoryStacks"/>) value whose width + a <c>0x7C</c> delimiter lands on a
+    /// structurally-valid first stack (<see cref="LooksLikeStackStart"/>). Outputs that first-stack offset and count.</summary>
+    static bool TryReadInventoryVsval(ReadOnlySpan<byte> data, int p, out int itemsOffset, out int stackCount)
+    {
+        itemsOffset = -1;
+        stackCount = -1;
         var count = ReadVsval(data, p, out var vlen);
-        if (count < 0 || !Within(data, p, vlen + 1) || data[p + vlen] != Delimiter)
+        if (count <= 0 || count > MaxInventoryStacks || !Within(data, p, vlen + 1) || data[p + vlen] != Delimiter
+            || !LooksLikeStackStart(data, p + vlen + 1))
             return false;
         stackCount = (int)count;
         itemsOffset = p + vlen + 1;
         return true;
     }
+
+    /// <summary>Structural test that <paramref name="p"/> begins an inventory stack
+    /// <c>[ref:3 BE][7C][count:u32 LE][7C]</c>: both delimiters present, a non-zero reference, and a count whose
+    /// upper three bytes aren't the <c>0x7C</c> delimiter — the same shape <see cref="FalloutSave"/> validates,
+    /// minus the FormID resolution, so it can recognise the <c>vsval</c>→items boundary without the masters.</summary>
+    public static bool LooksLikeStackStart(ReadOnlySpan<byte> data, int p) =>
+        Within(data, p, 9) && data[p + 3] == Delimiter && data[p + 8] == Delimiter
+        && (data[p] | data[p + 1] | data[p + 2]) != 0
+        && data[p + 5] != Delimiter && data[p + 6] != Delimiter && data[p + 7] != Delimiter;
 
     static bool Within(ReadOnlySpan<byte> data, int start, int length) => start >= 0 && (long)start + length <= data.Length;
 

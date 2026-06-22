@@ -116,6 +116,21 @@ public class PlayerInventoryTests
 
     [Theory]
     [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_locate_the_inventory_deterministically(string path)
+    {
+        // The whole point of the §4i work: the item-list start is found deterministically (vsval-validated),
+        // not by the heuristic §4g scan. Every discovered real save that has an inventory must set
+        // DeterministicStart — measured true on all 30 vanilla + 98 base VNV + 479 VNV Extended saves
+        // (the modded corpora live outside the test roots; verified there via `edlscan`). This pins the
+        // guarantee against regression on the auto-discovered (vanilla) corpus.
+        var save = FalloutSave.Load(path);
+        if (save.Inventory is not { } inv)
+            return;
+        Assert.True(inv.DeterministicStart, $"inventory start should be deterministic ({Path.GetFileName(path)})");
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
     public void Real_saves_inventory_start_sizes_to_the_vsval_count_no_scan_needed(string path)
     {
         // The deterministic finish (ROADMAP §4i): the ExtraDataList sizes to the inventory's vsval stack count,

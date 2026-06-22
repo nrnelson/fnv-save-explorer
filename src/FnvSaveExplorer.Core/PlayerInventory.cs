@@ -60,6 +60,14 @@ public sealed class PlayerInventory
     /// <summary>Every decoded inventory stack, in file order.</summary>
     public IReadOnlyList<InventoryItem> Items { get; }
 
+    /// <summary>True when the item-list <em>start</em> was located deterministically — by sizing the MOVE
+    /// block + havok array + ExtraDataList and reading the inventory's <c>vsval</c> stack count
+    /// (<see cref="ReferenceChangeForm.TryInventoryItemsStart"/>) — rather than by the heuristic forward scan
+    /// fallback. The vanilla path and the modded reordered/typed ExtraDataList both set this; only records the
+    /// typed-entry walk can't yet size (e.g. the bit2/bit10 active-havok blob) fall back with this false.
+    /// ROADMAP §4i.</summary>
+    public bool DeterministicStart { get; init; }
+
     public PlayerInventory(int offset, IReadOnlyList<InventoryItem> items)
     {
         Offset = offset;

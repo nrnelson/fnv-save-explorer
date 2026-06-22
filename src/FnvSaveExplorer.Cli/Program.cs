@@ -37,6 +37,8 @@ if (args.Length < 2)
                                               (bounded by the located first item) + 0x7C-field walk (R&D §4i)
           fnvsave edlscan <dir>              Walk every .fos in a folder and aggregate the ExtraDataList
                                               typed-entry grammar + per-stack extra-data types (R&D §4i ◑)
+          fnvsave invsig <dir>              Print a per-save decoded-inventory signature (stack count + hash)
+                                              for byte-identical-decode checks across decoder changes (R&D §4i)
         """);
     return 1;
 }
@@ -44,8 +46,8 @@ if (args.Length < 2)
 var command = args[0];
 var path = args[1];
 
-// Most commands take a save file; `edlscan` takes a folder of saves.
-if (command == "edlscan")
+// Most commands take a save file; `edlscan`/`invsig` take a folder of saves.
+if (command is "edlscan" or "invsig")
 {
     if (!Directory.Exists(path))
     {
@@ -107,6 +109,9 @@ try
             break;
         case "edlscan":
             EdlScan(path);
+            break;
+        case "invsig":
+            InvSig(path);
             break;
         case "idiff":
             IDiff(path, args[2]);
@@ -796,6 +801,39 @@ static void RefDump(FalloutSave s, string savePath, int? iref)
     Console.WriteLine($"\nlast field ends @0x{end:X}; record data ends @0x{cf.DataOffset + cf.DataLength:X} (delta {cf.DataOffset + cf.DataLength - end}).");
 }
 
+static void InvSig(string dir)
+{
+    // Byte-identical-decode verification aid: for every .fos in `dir`, print a stable signature of the decoded
+    // inventory (stack count + an FNV-1a hash over each stack's iref|count|countOffset|condition|equipped).
+    // The signature captures the DECODE only (not which path located it), so it stays identical across decoder
+    // refactors that don't change the result. One process per folder, no masters → fast. Read-only.
+    // Usage: capture before a change (e.g. `git stash`), again after, and diff the two outputs.
+    var files = Directory.EnumerateFiles(dir, "*.fos").OrderBy(f => f, StringComparer.Ordinal).ToList();
+    foreach (var file in files)
+    {
+        string sig;
+        try
+        {
+            var s = FalloutSave.Load(file);
+            if (s.Inventory is not { } inv) { sig = "no-inventory"; }
+            else
+            {
+                ulong h = 1469598103934665603UL; // FNV-1a 64
+                void Mix(long v) { for (var i = 0; i < 8; i++) { h ^= (byte)(v >> (8 * i)); h *= 1099511628211UL; } }
+                foreach (var it in inv.Items)
+                {
+                    Mix(it.Iref); Mix(it.Count); Mix(it.CountValueOffset);
+                    Mix(BitConverter.SingleToInt32Bits(it.Condition ?? float.NaN));
+                    Mix(it.Equipped ? 1 : 0);
+                }
+                sig = $"{inv.Items.Count,5} stacks  {h:X16}";
+            }
+        }
+        catch (Exception e) { sig = "LOAD-FAIL: " + e.GetType().Name; }
+        Console.WriteLine($"{Path.GetFileName(file)}\t{sig}");
+    }
+}
+
 static void EdlScan(string dir)
 {
     // R&D aggregate for ROADMAP §4i ◑: across every .fos in `dir`, walk the player inventory's
@@ -809,6 +847,7 @@ static void EdlScan(string dir)
 
     int scanned = 0, parseFail = 0, noInv = 0, fully = 0, unknownEdl = 0, headerMissing = 0, otherFail = 0;
     int vsvalOver = 0, vsvalUnder = 0; // decoded stack count vs the engine's vsval (over = benign §9 over-read; under = lost items)
+    int detStart = 0; // the LIVE decoder located the item-list start deterministically (vs the §4g scan fallback)
     var orderings = new Dictionary<string, int>();
     var edlTypeCounts = new SortedDictionary<byte, int>();
     var unknownEdlCount = new SortedDictionary<byte, int>();
@@ -837,6 +876,7 @@ static void EdlScan(string dir)
                 if (c.Iref == playerRef + 1) { rec = c; break; }
 
         if (rec is null || s.Inventory?.FirstStackOffset is not { } firstAbs) { noInv++; continue; }
+        if (s.Inventory!.DeterministicStart) detStart++;
         var cf = rec.Value;
         var data = s.ReadAt(cf.DataOffset, cf.DataLength);
         var searchStart = ReferenceChangeForm.InventorySearchStart(data, cf.DataOffset, cf.ChangeFlags);
@@ -873,6 +913,7 @@ static void EdlScan(string dir)
     }
 
     Console.WriteLine($"parsed {scanned} (failed {parseFail}); no inventory located: {noInv}");
+    Console.WriteLine($"LIVE decoder: deterministic list start {detStart} / {scanned - noInv} (rest via the §4g scan fallback)");
     Console.WriteLine($"ExtraDataList typed-walk: fully explained {fully}, first-unknown-type {unknownEdl}, "
         + $"header mis-landed (variable havok array) {headerMissing}, other {otherFail}");
     Console.WriteLine($"of the fully-explained, decoded stacks vs engine vsval: over-read {vsvalOver}, under-read {vsvalUnder} (rest exact)\n");
