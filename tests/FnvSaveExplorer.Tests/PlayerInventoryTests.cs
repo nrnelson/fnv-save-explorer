@@ -191,6 +191,19 @@ public class PlayerInventoryTests
         Assert.True(walk.Vsval <= inv.Items.Count); // the engine count never exceeds the decoded chain (no under-read)
     }
 
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_have_no_unsized_per_stack_extra_data(string path)
+    {
+        // With 0x0D decoded (ROADMAP §4i), every per-stack extra-data property type is now sized, so the walk
+        // never resyncs: no decoded stack should carry an UnknownExtraType. Pins the corpus result (vanilla
+        // over-read 318→0 of the per-0x0D kind; under-read 0) against regression on the auto-discovered saves.
+        var save = FalloutSave.Load(path);
+        if (save.Inventory is not { } inv)
+            return;
+        Assert.All(inv.Items, i => Assert.Null(i.UnknownExtraType));
+    }
+
     [Fact]
     public void Caps_is_null_and_TrySetCaps_fails_when_no_caps_stack()
     {

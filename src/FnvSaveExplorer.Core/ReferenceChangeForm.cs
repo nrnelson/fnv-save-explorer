@@ -526,10 +526,10 @@ public static class ReferenceChangeForm
     //   0x1C ExtraRef1C      : 3-byte BE refID            — gap 6 on 108/108
     //   0x24 ExtraU16_24     : 2-byte value (a small u16) — gap 5 on 1163/1169 (+ a 0x25 condition often follows)
     //   0x30 ExtraFloat30    : 4-byte LE float            — gap 7 (last) / 12 when a 0x24 follows; a 0.82-ish float
-    //   0x0D … : still STRUCTURED/variable (internal 7C-delimited sub-fields; gaps spread 4/12/18…) — left on
-    //           the per-stack resync until its sub-grammar is decoded.
+    //   0x0D … : STRUCTURED/variable — now DECODED (sized) by VariablePropertyLength below; see its summary.
     // See ROADMAP §4i.
 
+    public const byte Extra0D = 0x0D;
     public const byte ExtraEquipped = 0x16;
     public const byte ExtraRef1C = 0x1C;
     public const byte ExtraWeaponMod = 0x21;
@@ -551,6 +551,39 @@ public static class ReferenceChangeForm
         ExtraFloat30 => 4,  // 0x30 — corpus-pinned (gap 7 last / 12 with a trailing 0x24)
         _ => -1,
     };
+
+    /// <summary>
+    /// Total byte length (including the leading <c>[type][7C]</c>) of a <b>structured</b> per-stack
+    /// extra-data property at <paramref name="p"/> whose size is computed from its own self-describing
+    /// fields, or -1 if it isn't such a type or the structure is malformed/truncated. These are the types
+    /// <see cref="FixedPropertyPayload"/> can't size with a single fixed length.
+    /// <para>Currently only <c>0x0D</c>, pinned by corpus alignment across all 607 saves (its recovered
+    /// lengths form an exact <c>12 + 14·(n/4)</c> progression — 12, 26, 54, 68, 110 … for 0, 1, 3, 4, 7
+    /// pairs):</para>
+    /// <code>[0D][7C] [ref:3 BE][7C] [n:u8][7C] (n/4)×( [u32:4][7C][f64:8][7C] ) [00][7C][00][7C]</code>
+    /// i.e. a 3-byte refID, a <c>×4</c> pair count, that many <c>(u32, double)</c> pairs, then two fixed
+    /// trailing fields. Length-only — the semantics stay unlabelled per the repo's "size, don't guess" rule.
+    /// </summary>
+    public static int VariablePropertyLength(ReadOnlySpan<byte> data, int p)
+    {
+        if (p < 0 || p >= data.Length || data[p] != Extra0D)
+            return -1;
+        // [0D][7C] [ref:3][7C] [n:u8][7C]
+        if (!Within(data, p, 8) || data[p + 1] != Delimiter || data[p + 5] != Delimiter || data[p + 7] != Delimiter)
+            return -1;
+        var pairs = data[p + 6] / 4;
+        var q = p + 8;
+        for (var i = 0; i < pairs; i++) // each pair: [u32:4][7C][f64:8][7C] = 14 bytes
+        {
+            if (!Within(data, q, 14) || data[q + 4] != Delimiter || data[q + 13] != Delimiter)
+                return -1;
+            q += 14;
+        }
+        // two trailing [xx][7C] fields (always 00 on every observed save; we frame on the delimiters only)
+        if (!Within(data, q, 4) || data[q + 1] != Delimiter || data[q + 3] != Delimiter)
+            return -1;
+        return q + 4 - p;
+    }
 
     /// <summary>Decoded per-stack extra data plus the block's byte length. <see cref="FullyDecoded"/> is
     /// false when an unknown/variable property type was hit, in which case <see cref="ByteLength"/> only
@@ -600,6 +633,14 @@ public static class ReferenceChangeForm
             var plen = FixedPropertyPayload(type);
             if (plen < 0)
             {
+                // Not a single-fixed-length type: try the structured sizer (currently 0x0D). When it sizes,
+                // advance by the whole entry and keep decoding — the property is opaque to us (length only).
+                var vlen = VariablePropertyLength(data, cur);
+                if (vlen > 0)
+                {
+                    cur += vlen;
+                    continue;
+                }
                 fully = false; // structured/unknown — can't size the rest deterministically
                 unknownType = type;
                 unknownOffset = dataOffset + cur;

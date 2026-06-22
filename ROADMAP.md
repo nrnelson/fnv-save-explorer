@@ -249,9 +249,11 @@ Property type → payload catalog (**confirmed by a controlled 3-save diff** —
   linked refs (a VNV "Bill of Sale" note appears on a consumable), so the general semantics aren't pinned.
 - `0x6E` (0-byte flag), `0x1C` (3-byte refID), `0x24` (2-byte value), `0x30` (4-byte float) — **payload lengths
   now pinned by corpus alignment** (see "Per-stack property sizing" below); sized but semantics unlabelled.
-- `0x0D` — still longer/**structured/variable** (internal `7C`-delimited sub-fields); payload length not yet
-  pinned. When the walk hits this last un-sized type it falls back to a **bounded 512-byte resync** to the next
-  valid stack (rare; modded only) — far tighter than the old window, and the list stays contiguous.
+- `0x0D` — **structured/variable, now DECODED** (sized). It is `[0D][7C][ref:3 BE][7C][n:u8][7C]` then `n/4`
+  `[u32:4][7C][f64:8][7C]` pairs then two fixed `[00][7C]` fields, so its length is **`12 + 14·(n/4)`** — pinned by
+  corpus alignment (recovered lengths were exactly 12, 26, 54, 68, 110 … for 0/1/3/4/7 pairs across all 607 saves).
+  `ReferenceChangeForm.VariablePropertyLength` sizes it and `TryReadStackExtra` now walks straight through it; the
+  ≤512-byte resync is retired to a never-hit safety net (semantics stay unlabelled per "size, don't guess").
 
 The list **start** is now anchored by `changeFlags` and a sized preamble, not by ranking every run in the
 record. The walk (`ReferenceChangeForm.InventorySearchStart` + `FalloutSave.WalkInventory`) skips **two
@@ -351,10 +353,22 @@ Added to `ReferenceChangeForm.FixedPropertyPayload`, so the per-stack walk now d
 instead of resyncing. **Bonus correctness win:** because the walk no longer scans forward over these blocks (where
 the old resync occasionally latched onto a coincidental stack-like pattern *inside* the extra data), it **drops
 phantom over-read stacks** — 11 modded saves moved closer to / exactly onto their `vsval` count (e.g. base VNV
-Save 34: decoded 145 → **141 = vsval exactly**; every changed save decreased, **0 became under-read**). Vanilla
-decode is **byte-identical** (those saves carry no `0x1C/0x24/0x30/0x6E`). Only `0x0D` (×3715 in Extended) remains
-unsized — it is genuinely **structured/variable** (internal `7C`-delimited sub-fields; gaps spread 4/12/18…) and
-stays on the bounded ≤512 B resync until its sub-grammar is decoded. Pinned in `ReferenceChangeFormTests`.
+Save 34: decoded 145 → **141 = vsval exactly**; every changed save decreased, **0 became under-read**). Pinned in
+`ReferenceChangeFormTests`.
+
+**`0x0D` — the last per-stack type — is now DECODED (sized), so *every* observed per-stack type is sized and the
+≤512 B resync is retired to a never-hit safety net.** `0x0D` is structured, not single-fixed-length: `[0D][7C]`
+`[ref:3 BE][7C]` `[n:u8][7C]` then `n/4` `[u32:4][7C][f64:8][7C]` pairs then two fixed `[00][7C]` fields. Its total
+length is **`12 + 14·(n/4)`**, pinned by **corpus alignment**: a boundary recovery (anchoring on the known-sized
+properties that *follow* the `0x0D` inside the same block — the `LooksLikeStackStart` gap is unreliable because
+`0x0D`'s own payload contains stack-looking bytes) measured recovered lengths of exactly 12, 26, 54, 68, 110 … for
+0/1/3/4/7 pairs across **all 607 saves** — a clean `12 + 14k` progression. `ReferenceChangeForm.VariablePropertyLength`
+sizes it; `TryReadStackExtra` walks straight through it (semantics unlabelled per "size, don't guess"). **Correctness:**
+over-read **strictly decreased on every corpus with 0 under-reads** (vanilla 2 saves/+4 → **0/+0**; base VNV 8/+35 → 4/+12;
+Extended 318/+448 → 314/+393), **and** condition/equipped extra-data that the old resync *dropped* when it sat after a
+`0x0D` is now **recovered** — verified on VNV Extended Save 116, where "Legion Recruit Armor" now correctly shows
+`cond 117 [equipped]` (the only change in an otherwise byte-identical name-filtered inventory). Pinned in
+`ReferenceChangeFormTests` + a real-save theory asserting no decoded stack carries an unsized type.
 
 Tooling: CLI `refdump` prints the typed-entry ExtraDataList walk (flagging the first unrecognised type + a raw
 window); **`edlscan <dir>`** aggregates the grammar + the per-save deterministic-path tally + the
@@ -555,7 +569,8 @@ one-shot lookup (record type + name + source plugin, and where the FormID appear
 | Game-time-stamp churn suppression (§4k.1 #7) | ✅ `idiff … clean` auto-hides the recurring per-reference game-time/havok churn (value-frequency + adjacency clustering), collapsing the notes diff 3,314 → 11 and surfacing the inserted read marker; characterised as per-`REFR` time/havok float updates |
 | WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory + caps + karma/XP edit + full notes read/unread + media type) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion, `idiff … clean` hides game-time churn (§4k.1 #7) |
-| Tests | ✅ 683 xUnit, all green |
+| Tests | ✅ 724 xUnit, all green |
+| Per-stack `0x0D` extra-data decode (§4i) | ✅ the last unsized per-stack type, sized by corpus alignment: `[0D][7C][ref:3][7C][n:u8][7C]` + `n/4` `[u32][f64]` pairs + two fixed fields = `12 + 14·(n/4)` (lengths 12/26/54/68/110 across all 607 saves). `VariablePropertyLength`; over-read strictly ↓ (vanilla 2→0, base 8→4, ext 318→314, **0 under-reads**) + recovers condition/equipped that the old resync dropped after a `0x0D`. ≤512 B resync now a never-hit safety net |
 | Deterministic inventory decoder + condition edit (§4i) | ✅ window removed; condition (`0x25`) editable + equipped/`0x21` surfaced in CLI + GUI; condition edit round-trips |
 | Deterministic inventory list *start* (§4i) | ✅ **deterministic on all 607 real saves** (vanilla 30/30, base VNV 98/98, VNV Extended 479/479): MOVE-skip + the typed-entry ExtraDataList walk (variable order + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor** for bit2/bit10 havok-physics records → the **`vsval` stack count** → first item. The §4g scan is now an unused safety net. vsval self-validates (decoded ≥ vsval, **0 under-reads**); verified **display byte-identical** across all 607 except **35 endgame inventories this *fixed* (empty → full)** |
 | Modded inventory start — **deterministic on all 3 corpora** (§4i) | ✅ the typed-entry walk is now the **live decoder**: variable-order entries (`0x18/0x74/0x5E/0x60` + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor scan** for bit2/bit10 `CHANGE_REFR_HAVOK_MOVE` records (whose pre-list region is a variable-length Havok physics blob, not a sized slot array) + a `vsval` sanity cap. Deterministic list start on **vanilla 30/30, base VNV 98/98, VNV Extended 479/479**; the §4g scan is now an unused safety net. **0 under-reads**; display **byte-identical** across all 607 except **35 VNV Extended endgame inventories that this *fixed* from decoding-empty → full** (the §4g scan had latched onto havok-blob garbage). New: `PlayerInventory.DeterministicStart`, CLI `invsig` (decode-signature cross-check). 347 tests green |
@@ -608,9 +623,9 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
 >
 > **Logged follow-up (not a correctness risk):** the bit2/bit10 havok blob is *located past* but not *byte-decoded*
 > — its exact serialization (preamble + ~58-byte `pos/quat/vel/[03]/vel/angvel` entries with `02`/`03` per-entry
-> type bytes + a truncated final entry) is partly RE'd in §4i for a future exact decode. Per-stack types
-> `0x6E/0x1C/0x24/0x30` are now corpus-sized (§4i "Per-stack property sizing"); only the structured/variable
-> `0x0D` is still unsized (the ≤512 B per-stack resync handles it).
+> type bytes + a truncated final entry) is partly RE'd in §4i for a future exact decode. **All per-stack extra-data
+> types are now sized** — `0x6E/0x1C/0x24/0x30` (§4i "Per-stack property sizing") **and** the structured `0x0D`
+> (`12 + 14·(n/4)`, §4i) — so the per-stack walk is fully deterministic and the ≤512 B resync is a never-hit guard.
 
 1. ~~**Skills**~~ — ✅ **DONE** (§4e). Located via the controlled-diff method: skills are floats in
    the PlayerRef (`0x14`) actor-value modification block, not an inline structure. Decoder + index map
@@ -732,15 +747,15 @@ bytes, so it never shows as a clean byte-run delta in `diff`/`idiff`). `fdiff` i
   anchor instead of by sizing the blob. Exact blob decode is a logged follow-up; the list is correct without it.
 - The **`vsval` reveals a benign over-read** it doesn't fully eliminate: on a few saves the decoder reads slightly
   *more* stacks than the engine's count (interspersed non-item over-reads the name filter already hides; **0
-  under-reads across all 607** — never *fewer*). Sizing the per-stack property types (§4i) **reduced** this — 11
-  modded saves dropped phantom stacks, several now matching `vsval` exactly (base VNV over-read 8, e.g. Save 34
-  145 → 141 = vsval) — because the walk no longer scans forward over a block where the old resync could latch onto
-  a coincidental stack pattern. The residual over-read is the `0x0D` blocks (still resynced). Core keeps the full
+  under-reads across all 607** — never *fewer*). Sizing **every** per-stack property type (§4i — incl. the structured
+  `0x0D`) **reduced** this with each fix strictly monotone: vanilla over-read 2 → **0**, base VNV 8 → 4, Extended
+  318 → 314 (every changed save decreased; **0 became under-read**). The residual over-read on Extended comes from the
+  bit2/bit10 havok-blob anchor path, **not** per-stack sizing (all per-stack types are now sized). Core keeps the full
   chain (truncating by position would drop real trailing items); dropping the rest needs the masters (CLI/GUI).
-- The `0x21`/`0x1C`/`0x24`/`0x30`/`0x6E` per-stack extra-data types are **sized** (lengths right) but their
-  **semantics** aren't pinned — `0x21` is an attached weapon mod on weapons, reused for other linked refs (a VNV
-  "Bill of Sale"); the rest were sized structurally (§4i). Only the structured/variable `0x0D` is unsized, so the
-  walk resyncs (≤512 B) on `0x0D` blocks alone.
+- The `0x21`/`0x1C`/`0x24`/`0x30`/`0x6E`/`0x0D` per-stack extra-data types are all **sized** (lengths right, walk fully
+  deterministic — the ≤512 B resync is now a never-hit safety net) but their **semantics** aren't pinned: `0x21` is an
+  attached weapon mod on weapons (reused for other linked refs, a VNV "Bill of Sale"); the rest (incl. `0x0D`'s
+  `ref` + `(u32,f64)` pairs) were sized structurally by corpus alignment (§4i).
 - Inventory editing targets the **first** stack of a given FormID; duplicate-FormID stacks (same item,
   different extra data) can't be disambiguated by FormID alone yet.
 - SPECIAL locator relies on the player-name field appearing in the player base record (held on all 16
@@ -770,7 +785,7 @@ structure. None is a fundamental wall.
 | **bit2/bit10 havok blob is located past, not byte-decoded** (§4i). The list start is deterministic on all 607 saves, but on `CHANGE_REFR_HAVOK_MOVE` records the pre-list physics blob is skipped via the self-validating ExtraDataList-header anchor rather than by sizing the blob. | The anchor + "pick the real (longest) chain" rule lands the list correctly (and *fixed* 35 endgame saves that previously decoded to empty); the blob's bytes aren't needed to find the list. | Byte-decode the blob's serialization (preamble + ~58-byte pos/quat/vel/angvel entries with `02`/`03` type bytes + truncated final entry) for a fully structural skip; `refdump` + the §4i notes have the layout. |
 | **`vsval` over-read** — the decoder reads *more* stacks than the engine's `vsval` count (interspersed non-items the name filter hides); the full chain is kept rather than truncated (§9). **Measured: under-read 0 across all 607** (never drops items), benign over-read on some — now **reduced** by per-stack property sizing (§4i): 11 modded saves dropped phantom stacks, several to `vsval` exactly. | The extra stacks are hidden in display, and truncating by position would drop real trailing items. | Drop the residual `0x0D`-block over-reads — either by sizing `0x0D`, or using the `vsval` as the authoritative count (the name filter for that lives in the CLI/GUI, not `Core`; surface the vsval there as the cross-check). |
 | **Inventory edits target the *first* stack** of a given FormID (§4g). | Duplicate-FormID stacks (same item, different extra data) are uncommon; the everyday case is unambiguous. | Address stacks by file offset / extra-data signature rather than FormID — straightforward once a UI/CLI affordance picks the specific stack. |
-| **Per-stack extra-data semantics unpinned** — `0x21`/`0x1C`/`0x24`/`0x30`/`0x6E` are **sized** (by corpus alignment, §4i) but unlabelled; the structured `0x0D` isn't sized → ≤512 B resync on `0x0D` blocks alone (§4i). | Lengths are right so the per-stack walk is deterministic except `0x0D`; sizes pinned across 607 saves (e.g. `0x6E` gap 2 on 929/929). | Controlled diffs (attach a known weapon mod; inspect a modded weapon) to *name* each sized type; decode the `0x0D` sub-grammar to size it, retiring the resync entirely. |
+| **Per-stack extra-data semantics unpinned** — `0x21`/`0x1C`/`0x24`/`0x30`/`0x6E`/`0x0D` are all **sized** (by corpus alignment, §4i) but **unlabelled**. | Lengths are right so the per-stack walk is **fully deterministic** (every type sized; the ≤512 B resync is a never-hit safety net); sizes pinned across 607 saves (e.g. `0x6E` gap 2 on 929/929; `0x0D` = `12 + 14·(n/4)`). | Controlled diffs (attach a known weapon mod; inspect a modded weapon) to *name* each sized type — e.g. confirm what `0x0D`'s `(u32, f64)` pairs are (script vars? effects?). |
 | **Skills are sparse** (only modified entries stored) and the absolute-vs-modifier semantics of small natural entries aren't pinned (§4e). | Reads/edits exactly what's stored; SPECIAL/skill sums verified across all 16 saves. | A single +3 skill-book controlled diff to confirm modifier vs absolute, then enumerate the full 13 from base + perks + tags. |
 
 > **Is the inventory start *fully* deterministic now?** **Yes — on all 607 real saves** (vanilla 30/30, base VNV

@@ -638,11 +638,12 @@ public sealed class FalloutSave
     }
 
     private const int InventoryMinEntries = 3;     // enough to distinguish a real item list from coincidence
-    private const int InventoryResyncWindow = 512; // bounded forward resync used ONLY when a stack carries an
-                                                   // extra-data property type we can't yet size (rare, modded
-                                                   // weapons). Replaces the old 2048-byte scan window — the walk
-                                                   // is otherwise exact (each stack's length comes from its decoded
-                                                   // extra data), so there is no run-merging or distinct-ref scoring.
+    private const int InventoryResyncWindow = 512; // bounded forward resync — a safety guard for a stack carrying a
+                                                   // genuinely-unknown future extra-data property type. As of the
+                                                   // 0x0D decode (ROADMAP §4i) EVERY observed per-stack type is sized
+                                                   // (fixed or structured), so the walk is exact and this guard is
+                                                   // unused across all 607 saves; it replaced the old 2048-byte scan
+                                                   // window, so there is no run-merging or distinct-ref scoring.
 
     /// <summary>
     /// Locates the player's inventory change form and decodes its item stacks. The player's inventory
@@ -808,10 +809,12 @@ public sealed class FalloutSave
 
     /// <summary>
     /// Returns the offset just past the stack at <paramref name="p"/> — its fixed 9-byte entry plus the
-    /// per-stack extra-data block — and outputs the decoded <paramref name="extra"/>. When the extra data
-    /// uses a property type we can't yet size (structured/mod-added), it resyncs to the next structurally
-    /// valid stack within <see cref="InventoryResyncWindow"/> bytes (any condition/equip we did decode is
-    /// still returned). Returns -1 if it can't advance.
+    /// per-stack extra-data block — and outputs the decoded <paramref name="extra"/>. Every observed
+    /// property type is now sized (fixed lengths + the structured <c>0x0D</c>, ROADMAP §4i), so the block
+    /// decodes fully and we advance by its exact byte length. The bounded forward resync to the next
+    /// structurally valid stack (within <see cref="InventoryResyncWindow"/> bytes) is kept only as a safety
+    /// guard for a genuinely-unknown future type (any condition/equip decoded before it is still returned).
+    /// Returns -1 if it can't advance.
     /// </summary>
     private int AdvancePastStack(int p, int end, out ReferenceChangeForm.StackExtra extra)
     {
@@ -826,7 +829,7 @@ public sealed class FalloutSave
             if (ex.FullyDecoded)
                 return exStart + ex.ByteLength;
         }
-        // Unknown/structured extra-data type: fall back to a bounded forward resync to the next valid stack.
+        // Genuinely-unknown future type (none across the 607-save corpus): bounded forward resync to the next valid stack.
         for (var r = exStart + 1; r <= Math.Min(end - 9, exStart + InventoryResyncWindow); r++)
             if (TryReadInventoryEntry(r, out _, out _, out _))
                 return r;

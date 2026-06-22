@@ -197,7 +197,49 @@ public class ReferenceChangeFormTests
         Assert.Equal(3, ReferenceChangeForm.FixedPropertyPayload(ReferenceChangeForm.ExtraRef1C));    // 0x1C
         Assert.Equal(4, ReferenceChangeForm.FixedPropertyPayload(ReferenceChangeForm.ExtraCondition)); // 0x25
         Assert.Equal(4, ReferenceChangeForm.FixedPropertyPayload(ReferenceChangeForm.ExtraFloat30));  // 0x30
-        Assert.Equal(-1, ReferenceChangeForm.FixedPropertyPayload(0x0D));                              // still variable
+        Assert.Equal(-1, ReferenceChangeForm.FixedPropertyPayload(0x0D)); // 0x0D isn't a single fixed length -> VariablePropertyLength
+    }
+
+    [Fact]
+    public void VariablePropertyLength_sizes_the_corpus_pinned_0x0D_grammar()
+    {
+        // 0x0D is [0D][7C][ref:3][7C][n:u8][7C] (n/4)×([u32:4][7C][f64:8][7C]) [00][7C][00][7C], so its total
+        // length is 12 + 14·(n/4). Pinned by aligning all 607 saves (recovered lengths were exactly 12, 26,
+        // 54, 68, 110 … for 0, 1, 3, 4, 7 pairs). Each pair is [u32:4][7C][f64:8][7C] = 14 bytes.
+        static byte[] D0d(int pairs)
+        {
+            var d = new List<byte> { 0x0D, 0x7C, 0x00, 0x11, 0x22, 0x7C, (byte)(pairs * 4), 0x7C };
+            for (var i = 0; i < pairs; i++)
+                d.AddRange([0x0A, 0x00, 0x00, 0x00, 0x7C, 0, 0, 0, 0, 0, 0, 0x30, 0x40, 0x7C]); // u32=10, f64=16.0
+            d.AddRange([0x00, 0x7C, 0x00, 0x7C]);                                                // two trailing fields
+            return d.ToArray();
+        }
+
+        Assert.Equal(12, ReferenceChangeForm.VariablePropertyLength(D0d(0), 0));
+        Assert.Equal(26, ReferenceChangeForm.VariablePropertyLength(D0d(1), 0));
+        Assert.Equal(54, ReferenceChangeForm.VariablePropertyLength(D0d(3), 0));
+        Assert.Equal(12 + 14 * 4, ReferenceChangeForm.VariablePropertyLength(D0d(4), 0));
+        // Not a 0x0D, or truncated / malformed framing -> -1 (degrades gracefully).
+        Assert.Equal(-1, ReferenceChangeForm.VariablePropertyLength(D0d(1).AsSpan(0, 20).ToArray(), 0)); // truncated
+        Assert.Equal(-1, ReferenceChangeForm.VariablePropertyLength([0x25, 0x7C, 0, 0, 0, 0], 0));        // wrong type
+    }
+
+    [Fact]
+    public void TryReadStackExtra_sizes_0x0D_then_recovers_a_following_condition()
+    {
+        // The real-save win (ROADMAP §4i): when a 0x0D precedes a 0x25 condition in the same block, the old
+        // resync over the unsized 0x0D dropped the condition. Sizing 0x0D lets the walk continue and surface it.
+        var d = new List<byte>();
+        d.AddRange([0x04, 0x7C, 0x08, 0x7C]);                                  // a=04, b=8 -> 2 properties
+        d.AddRange([0x0D, 0x7C, 0x00, 0x11, 0x22, 0x7C, 0x00, 0x7C, 0x00, 0x7C, 0x00, 0x7C]); // 0x0D, 0 pairs (12 B)
+        d.AddRange([0x25, 0x7C, 0x00, 0x00, 0x80, 0x3F, 0x7C]);                // 0x25 condition = 1.0
+        var expectedLength = d.Count;                                          // 4 + 12 + 7 = 23
+
+        Assert.True(ReferenceChangeForm.TryReadStackExtra(d.ToArray(), 0, dataOffset: 0x9000, out var extra));
+        Assert.True(extra.FullyDecoded);          // no resync — the block sized through the 0x0D
+        Assert.Null(extra.UnknownType);
+        Assert.Equal(expectedLength, extra.ByteLength);
+        Assert.Equal(1.0f, extra.Condition);      // the condition after the 0x0D is recovered
     }
 
     [Fact]
