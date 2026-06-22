@@ -38,6 +38,24 @@ public class PluginDatabaseTests
     }
 
     [Fact]
+    public void QUST_forms_are_named_and_typed_so_quest_change_forms_can_be_identified()
+    {
+        // ROADMAP §6 #10: a quest change form is identified by its masters record type == "QUST", which
+        // requires the reader to index QUST forms — even though a quest is not inventory and earns no
+        // Pip-Boy tab. (QUST was previously excluded, so every quest FormID resolved to null.)
+        using var dir = new TempDataFolder();
+        dir.Write("FalloutNV.esm", EsmBuilder.Plugin([],
+            new TestRecord("QUST", 0x0010A001, Edid: "TestQuest01", Full: "Test Quest"),
+            new TestRecord("WEAP", 0x0010A002, Edid: "TestRifle", Full: "Test Rifle")));
+
+        var db = PluginDatabase.Build(["FalloutNV.esm"], dir.Path);
+
+        Assert.Equal("Test Quest", db.Resolve(0x0010A001));
+        Assert.Equal("QUST", db.RecordType(0x0010A001));
+        Assert.Equal("Weapons", db.Category(0x0010A002)); // a real item still categorises as before
+    }
+
+    [Fact]
     public void Build_resolves_base_game_form_in_save_space()
     {
         using var dir = new TempDataFolder();

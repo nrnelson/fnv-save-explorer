@@ -7,8 +7,9 @@ namespace FnvSaveExplorer.Core;
 /// <summary>
 /// A minimal, read-only reader for a Bethesda TES4-generation plugin (<c>.esm</c>/<c>.esp</c>) as used
 /// by Fallout 3 / New Vegas. It extracts just what FormID → display-name resolution needs: the ordered
-/// master list (from the <c>TES4</c> header's <c>MAST</c> subrecords) and, for item-bearing record types,
-/// each form's FormID and display name (the <c>FULL</c> field, falling back to the editor id <c>EDID</c>).
+/// master list (from the <c>TES4</c> header's <c>MAST</c> subrecords) and, for item-bearing record types
+/// (and quests), each form's FormID and display name (the <c>FULL</c> field, falling back to the editor id
+/// <c>EDID</c>).
 ///
 /// <para><b>Streaming + GRUP-skipping.</b> The file is read forward; top-level <c>GRUP</c>s whose record
 /// type we don't care about are skipped by seeking past them — <c>FalloutNV.esm</c> is ~245 MB, so only
@@ -32,6 +33,15 @@ public sealed class TesPlugin
         "CCRD", "CHIP", "CMNY", "CDCK", // New Vegas: caravan card, casino chip, caps ("money"), caravan deck
     ];
 
+    /// <summary>
+    /// Record types we decode for FormID → name resolution: <see cref="ItemTypes"/> plus <c>QUST</c>. A quest
+    /// is not an inventory item, so it never reaches the inventory-only Pip-Boy tab mapping
+    /// (<see cref="PluginDatabase.PipBoyTab"/>); naming quest forms is what lets quest change forms be
+    /// identified by record type (ROADMAP §6 #10), so <c>QUST</c> is indexed here yet deliberately kept out
+    /// of <see cref="ItemTypes"/>.
+    /// </summary>
+    private static readonly HashSet<string> NamedTypes = [.. ItemTypes, "QUST"];
+
     /// <summary>The plugin's file name (e.g. <c>FalloutNV.esm</c>).</summary>
     public string FileName { get; }
 
@@ -39,10 +49,11 @@ public sealed class TesPlugin
     public IReadOnlyList<string> Masters { get; }
 
     /// <summary>
-    /// Named item forms, keyed by <b>plugin-local</b> FormID (its high byte is an index into
+    /// Named forms, keyed by <b>plugin-local</b> FormID (its high byte is an index into
     /// <see cref="Masters"/>, or == <c>Masters.Count</c> for forms the plugin defines itself). <c>Type</c>
-    /// is the record signature (<c>WEAP</c>/<c>ARMO</c>/<c>ALCH</c>/<c>AMMO</c>/<c>MISC</c>/…) — the basis
-    /// for the item's Pip-Boy tab (see <see cref="PluginDatabase.PipBoyTab"/>). <c>NoteType</c> is the
+    /// is the record signature (<c>WEAP</c>/<c>ARMO</c>/<c>ALCH</c>/<c>AMMO</c>/<c>MISC</c>/…, or <c>QUST</c>) —
+    /// for item types it is the basis for the item's Pip-Boy tab (see <see cref="PluginDatabase.PipBoyTab"/>);
+    /// <c>QUST</c> is indexed only so quests can be named/identified, not as inventory. <c>NoteType</c> is the
     /// <c>NOTE</c> record's <c>DATA</c> media byte (0=Sound, 1=Text, 2=Image, 3=Voice — the holodisk-vs-text
     /// distinction, ROADMAP §4k.1 #6), or <c>-1</c> for non-notes / notes with no <c>DATA</c>.
     /// </summary>
@@ -98,7 +109,7 @@ public sealed class TesPlugin
                 throw new SaveFormatException($"{fileName}: bad GRUP size {groupSize}", (int)fs.Position);
 
             var labelType = Encoding.ASCII.GetString(label);
-            if (groupType == 0 && ItemTypes.Contains(labelType))
+            if (groupType == 0 && NamedTypes.Contains(labelType))
                 ReadRecords(fs, contentSize, localized, forms);
             else
                 fs.Seek(contentSize, SeekOrigin.Current); // skip the whole group without reading its bytes

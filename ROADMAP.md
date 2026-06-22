@@ -707,42 +707,55 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
    caps total — both anchor the alignment. (A few slots are vestigial FO3 names the engine still tracks under the
    same index, e.g. "Bobbleheads Found"; the label matches what the save stores.)
 9. **GUI/UX polish:** screenshot export (PNG), a raw hex viewer tab, backup management.
-10. **Quest log + objectives decode** (◑ IN PROGRESS — partial findings, decode not finished). Surface the
-    player's quests — **completed / active / failed** — and, within each, the **individual objectives/stages**
-    (incl. *optional* ones). **Confirmed by a controlled diff (vanilla Saves 43→44: completed one objective + a
-    new one appeared, while moving Doc Mitchell's House → Prospector Saloon):**
-    - **FNV QUST change-form type byte = `0x07`** (low-6-bit form type 0x07). Multiple quests decode as type 0x07
-      (e.g. "Ain't That a Kick in the Head" `0x00104C1C`, iref 2). This is the FNV-specific number (Skyrim's
-      compacted index differs, like NOTE).
-    - **changeFlags use the UESP QUST bit meanings** — the iref-2 record went `0x80000000` → `0xC0000000`, i.e.
-      `bit31 CHANGE_QUEST_STAGES` → `+ bit30 CHANGE_QUEST_SCRIPT`, when a script value (`0x99`) was written. (So
-      `ReferenceChangeForm.DescribeFlags` needs QUST-specific labels — it currently shows REFR labels for QUST; a
-      §6 #13 follow-up.) `bit29 OBJECTIVES` was **not** set — the save stores **stages**, and the Pip-Boy derives
-      objective display from the stage + the QUST's masters definition.
-    - Quest data is **`0x7C`-delimited** (FNV style, not Skyrim's raw layout) and a stage/script update can be
-      **length-changing** (iref-2 grew 150→155 by prepending the `[u32 script][7C]` field; the active quest "Back
-      in the Saddle" appeared as a brand-new **inserted** type-0x07 record).
-    **A 5-save in-place progression (vanilla Saves 43→44→45→46→47, "Back in the Saddle" `0x0010A214`: one task
-    completed + a new one added per save, quest closed at 47) was captured and analysed — but the decode is NOT
-    cracked, and the picture is messier than the UESP blueprint:**
-    - **`type 0x07` is NOT exclusively QUST.** Many type-0x07 change forms are **map/cell fog-of-war records** whose
-      data is a *growing exploration bitmap* (e.g. `0x0010D9F4`: a small dot expanding to a blob as the player
-      explored Goodsprings). So quest change forms can't be identified by form-type alone — the masters (record
-      type == `QUST`) are required.
-    - **"Back in the Saddle" (`0x0010A214`) resolves to a QUST in the masters, yet its change form is type `0x41`
-      (a placed *reference*), and across all five saves it changed only in two **increasing timer fields** — no
-      stage/objective bytes moved.** So the quest's per-objective state is **not** sitting in an obvious diffable
-      change form; it appears script/engine-buried (the `CHANGE_QUEST_SCRIPT` bit + a `[u32][7C]` script value seen
-      on the chargen quest hints objective state may live in quest *script variables*, not a stages list).
-    - The masters **QUST reader is suspect** — it named some forms correctly ("Ain't That a Kick" `0x00104C1C` ✓,
-      "Classic Inspiration" is a real challenge-quest ✓) but the `0x0010A214`→reference contradiction suggests
-      possible misalignment in the QUST group read; needs verifying before trusting QUST FormID→name.
-    **Assessment:** this is a **deep, multi-session RE effort**, not a quick win — FNV's quest/objective storage
-    diverges hard from Skyrim and isn't surfacing as a clean change-form diff even with good controlled saves.
-    **Deferred.** When resumed, the surgical next steps are: (1) verify/fix the `TesPlugin` QUST reader; (2) a
-    **zero-churn** controlled diff — console `setstage` on an active quest **without moving at all** — to isolate
-    the bytes; (3) if stages aren't in the QUST change form, look at the script/Papyrus-equivalent global data.
-    The 43→47 saves are preserved as the dataset.
+10. **Quest log + objectives decode** (◑ IN PROGRESS — masters QUST reader **fixed & verified**; stage-list
+    change-form **format decoded** via a zero-churn diff; per-quest mapping for *freeform* quests still partial).
+    Surface the player's quests — **completed / active / failed** — and, within each, the **individual
+    objectives/stages** (incl. *optional* ones).
+    **Masters QUST reader — ✅ FIXED & VERIFIED (the committed step-1).** Root cause was **not** a misaligned
+    group read: `TesPlugin.ItemTypes` simply **did not list `QUST`**, so the QUST top-level group was
+    seek-skipped and every quest FormID resolved to `null` (the prior "✓ named correctly" notes came from a
+    throwaway local edit, not committed code). Fix = a `NamedTypes` set (`ItemTypes` + `QUST`) used **only** at
+    the group-decode guard, leaving `ItemTypes` (inventory / Pip-Boy tab) semantics untouched (`Core/TesPlugin.cs`).
+    Verified against the real `FalloutNV.esm` + corpus: `0x00104C1C` → "Ain't That a Kick in the Head" / QUST and
+    `0x0010A214` → "Back in the Saddle" / QUST, both cross-checked against the FNV wiki's quest IDs. New synthetic
+    test `QUST_forms_are_named_and_typed_…`.
+    **Key structural correction — the change-form *type byte* (low-6-bit "formType") is NOT the base record's
+    form type.** Proven by counterexample now that the masters name records: two confirmed QUSTs have *different*
+    change-form types — "Ain't That a Kick" (`0x00104C1C`, iref 2) is **type 0x07** (len 150; field[3] `1F 00 1F 00…`
+    = stage 31 data), while the active "Back in the Saddle" (`0x0010A214`, iref 3486) is **type 0x41** (len 297,
+    *actor-like*: `changeFlags 0x00040000`, inventory + MOVE). And `0x0010D9F4` (the "growing bitmap" form) is
+    **not** a QUST yet also carries a type-0x07 change form. So the earlier "FNV QUST change-form = type 0x07" and
+    "type-0x07 = fog-of-war" framings were **both artifacts of reading the type byte as the record type.** Change
+    forms must be classified by resolving **refID → FormID → masters record type** (now possible), *not* by the
+    type byte. The refID/FormID-array machinery itself is sound — refID is a **big-endian 24-bit** index
+    (`00 0D 9E` = 3486 → array[3486] = `0x0010A214`, consistent in both directions).
+    **Still confirmed (the type-0x07 model, from "Ain't That a Kick"):** changeFlags `0x80000000` → `0xC0000000`
+    during chargen = `bit31 CHANGE_QUEST_STAGES` → `+ bit30 CHANGE_QUEST_SCRIPT` (a `[u32 script][7C]` field
+    appeared); the data is **`0x7C`-delimited** and stage/script updates are **length-changing**.
+    `ReferenceChangeForm.DescribeFlags` still prints **REFR** labels for QUST records (e.g. it shows `0x80000000`
+    as "GAME_ONLY" where for QUST it is `CHANGE_QUEST_STAGES`) — the §6 #13 follow-up.
+    **Zero-churn controlled diff — CAPTURED & ANALYSED** (vanilla Save 43, paused console, no movement;
+    `setstage 0x0010A214` → 10/20/30/40, saves `zc0`–`zc4`, preserved alongside the 43→47 set):
+    - **Quest stage state is a growing `0x7C`-delimited STAGE LIST inside formType-9 change forms.** A completed
+      entry is `[stageNum][7C][done][7C][04][7C][stageIdx][7C][done2][7C][u32 game-time][7C]`; an incomplete one
+      drops the trailing `[u32][7C]` and has `done=0`. So a setstage **grows the list +5 bytes** (`[u32 time][7C]`)
+      and flips the two `done` bytes 0→1. Decoded from the cleanest signal — the formType-9 QUST `NVDLC04Ending`
+      (`0x06009250`, Lonesome Road's ending tracker) grew one entry on **every** setstage (127→146→151→156→181),
+      all entries sharing the frozen time `24 01 E9 08` (proving the paused capture froze game-time, and that the
+      `u32` *is* the completion time).
+    - **There are ≥2 stage layouts.** formType-7 ("Ain't That a Kick") packs stages as a fixed `1F 00…` array;
+      formType-9 uses the delimited list above. A second formType-9 form `0x00174BC0` (*created/game-only*, 153
+      fields) grew **only on the "finish" stages 10 & 40** → an objective/completion manager; `NVDLC04Ending` grew
+      on every stage.
+    - **The active freeform quest's OWN form is NOT where its stages live.** Across all four setstages
+      `0x0010A214`'s record (the formType-1 actor-like form, iref 3486) **did not change at all** — no growth, flag
+      flip, or insert. Its progress is recorded only in the shared engine tracker/manager forms above (+ item
+      grants + a 5-byte form `0x0010A1E6` created at stage 40). So freeform-quest progress is **engine-buried in
+      shared manager forms**, not in the quest's per-form change record.
+    **Remaining work:** attribute a stage-list entry to its owning quest (real QUST forms like `NVDLC04Ending` own
+    their list via the change form's refID; freeform "Back in the Saddle" routes through `0x00174BC0`/created forms
+    with no inline quest FormID seen yet); decode the formType-7 packed array; and give QUST `changeFlags` their own
+    labels (bit31 STAGES / bit30 SCRIPT / bit29 OBJECTIVES) — the §6 #13 follow-up.
 11. **Item condition maximums (base-form Health)** (NEW — not started). Condition (`0x25`, §4i) is the item's
     **absolute current health**, not a percentage — verified on a real save: 9mm Pistol 45, 9mm SMG 205, Metal
     Armor 497.2, Grenade Rifle 99.9 (values differ per item). The **max** is the base form's **Health** stat,
