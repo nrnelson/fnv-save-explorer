@@ -72,6 +72,79 @@ public class PlayerNotesTests
         Assert.Equal(save.FileLength, save.ToBytes().Length);
         Assert.Equal(File.ReadAllBytes(path), save.ToBytes());
     }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_every_type_0x1F_change_form_is_a_read_note_marker(string path)
+    {
+        // Corpus-verified invariant (ROADMAP §4k.1 #1/#2, `notescan` over 45,783 markers across vanilla +
+        // base VNV + VNV Extended): every change form of form-type 0x1F is a read-note marker — changeFlags
+        // EXACTLY 0x80000000 and a zero-length payload — and its note resolves via the −1 index. So the
+        // ReadNotes filter (type 0x1F + flags 0x80000000 + len 0) can neither miss nor over-match a 0x1F form.
+        var save = FalloutSave.Load(path);
+
+        var type1F = save.EnumerateChangeForms().Where(cf => cf.FormType == 0x1F).ToList();
+        Assert.All(type1F, cf =>
+        {
+            Assert.Equal(0x80000000u, cf.ChangeFlags);                 // #1: always exactly this flag value
+            Assert.Equal(0, cf.DataLength);                            // zero-payload marker
+            Assert.True(cf.Iref > 0);                                  // #3: the +1 convention (never iref 0)
+            Assert.NotEqual(0u, save.ResolveIref(cf.Iref - 1));        // the note one slot earlier resolves
+        });
+
+        // Every type-0x1F form is captured as a read note — the filter drops none of them.
+        Assert.Equal(type1F.Count, save.ReadNotes.Count);
+    }
+
+    [Fact]
+    public void Pip_boy_notes_includes_read_markers_when_no_inventory_record()
+    {
+        // The synthetic notes save has read markers but no player inventory record (no PlayerRef 0x14), so the
+        // full notes list (PipBoyNotes, §4k.1 #4) is just the read-marker union: both notes, each flagged Read,
+        // independent of the NOTE predicate.
+        var save = FalloutSave.Parse(NotesSave.Build());
+        var notes = save.PipBoyNotes(_ => false);
+        Assert.Equal([0x000A0001u, 0x000A0002u], notes.Select(n => n.FormId).OrderBy(f => f).ToArray());
+        Assert.All(notes, n => Assert.True(n.Read));
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Pip_boy_notes_is_a_superset_of_read_notes(string path)
+    {
+        // Masters-free invariant: restrict the NOTE predicate to FormIDs that already carry a read marker, so
+        // PipBoyNotes must return exactly those, every one flagged Read (the markers are the authoritative read
+        // set and are always included). Validates the acquired-scan ∪ read-marker union + read classification.
+        var save = FalloutSave.Load(path);
+        var readFormIds = save.ReadNotes.Notes.Select(n => n.FormId).ToHashSet();
+        var notes = save.PipBoyNotes(readFormIds.Contains);
+
+        Assert.Equal(readFormIds, notes.Select(n => n.FormId).ToHashSet());
+        Assert.All(notes, n => Assert.True(n.Read));
+    }
+
+    [Fact]
+    public void Pip_boy_notes_finds_the_acquired_unread_note_and_its_flip_to_read()
+    {
+        // Controlled triple (Saves 38→39→40, Doc Mitchell's House): Philippe's Recipes (0x00117E37) was added
+        // unread via the console, then read. Masters-free — the predicate accepts exactly that FormID. Skips
+        // gracefully when the triple isn't on this machine (ROADMAP §4k.1 #4).
+        const uint philippes = 0x00117E37;
+        bool IsPhilippes(uint fid) => fid == philippes;
+
+        string? Triple(string n) => FalloutSaveTests.RealSaves()
+            .Select(o => (string)o[0])
+            .FirstOrDefault(p => Path.GetFileName(p).StartsWith($"Save {n} ", StringComparison.OrdinalIgnoreCase)
+                && p.Contains("Doc Mitchell", StringComparison.OrdinalIgnoreCase));
+
+        var (a, b, c) = (Triple("38"), Triple("39"), Triple("40"));
+        if (a is null || b is null || c is null)
+            return; // controlled triple not present — nothing to assert
+
+        Assert.DoesNotContain(FalloutSave.Load(a).PipBoyNotes(IsPhilippes), n => n.FormId == philippes);
+        Assert.False(FalloutSave.Load(b).PipBoyNotes(IsPhilippes).Single(n => n.FormId == philippes).Read); // acquired, unread
+        Assert.True(FalloutSave.Load(c).PipBoyNotes(IsPhilippes).Single(n => n.FormId == philippes).Read);  // now read
+    }
 }
 
 /// <summary>

@@ -42,11 +42,13 @@ public sealed class TesPlugin
     /// Named item forms, keyed by <b>plugin-local</b> FormID (its high byte is an index into
     /// <see cref="Masters"/>, or == <c>Masters.Count</c> for forms the plugin defines itself). <c>Type</c>
     /// is the record signature (<c>WEAP</c>/<c>ARMO</c>/<c>ALCH</c>/<c>AMMO</c>/<c>MISC</c>/…) — the basis
-    /// for the item's Pip-Boy tab (see <see cref="PluginDatabase.PipBoyTab"/>).
+    /// for the item's Pip-Boy tab (see <see cref="PluginDatabase.PipBoyTab"/>). <c>NoteType</c> is the
+    /// <c>NOTE</c> record's <c>DATA</c> media byte (0=Sound, 1=Text, 2=Image, 3=Voice — the holodisk-vs-text
+    /// distinction, ROADMAP §4k.1 #6), or <c>-1</c> for non-notes / notes with no <c>DATA</c>.
     /// </summary>
-    public IReadOnlyList<(uint LocalFormId, string Name, string Type)> Forms { get; }
+    public IReadOnlyList<(uint LocalFormId, string Name, string Type, int NoteType)> Forms { get; }
 
-    private TesPlugin(string fileName, IReadOnlyList<string> masters, IReadOnlyList<(uint, string, string)> forms)
+    private TesPlugin(string fileName, IReadOnlyList<string> masters, IReadOnlyList<(uint, string, string, int)> forms)
     {
         FileName = fileName;
         Masters = masters;
@@ -78,7 +80,7 @@ public sealed class TesPlugin
                 masters.Add(ZString(data));
 
         // ---- top-level groups ----
-        var forms = new List<(uint, string, string)>();
+        var forms = new List<(uint, string, string, int)>();
         while (true)
         {
             var gsig = ReadSignature(fs);
@@ -106,7 +108,7 @@ public sealed class TesPlugin
     }
 
     /// <summary>Reads the records (and defensively skips any nested groups) inside one top-level item group.</summary>
-    private static void ReadRecords(Stream fs, long contentSize, bool localized, List<(uint, string, string)> forms)
+    private static void ReadRecords(Stream fs, long contentSize, bool localized, List<(uint, string, string, int)> forms)
     {
         var end = fs.Position + contentSize;
         while (fs.Position < end)
@@ -130,14 +132,16 @@ public sealed class TesPlugin
                 data = Decompress(data);
 
             string? edid = null, full = null;
+            var noteType = -1;
             foreach (var (type, sub) in ParseSubrecords(data))
             {
                 if (type == "EDID") edid = ZString(sub);
                 else if (type == "FULL" && !localized) full = ZString(sub);
+                else if (type == "DATA" && sig == "NOTE" && sub.Length >= 1) noteType = sub[0]; // 0=Sound 1=Text 2=Image 3=Voice
             }
             var name = full ?? edid;
             if (!string.IsNullOrEmpty(name))
-                forms.Add((formId, name, sig)); // sig is the record type (WEAP/ARMO/ALCH/AMMO/MISC/…)
+                forms.Add((formId, name, sig, noteType)); // sig is the record type (WEAP/ARMO/ALCH/AMMO/MISC/…)
         }
     }
 

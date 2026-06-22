@@ -17,6 +17,20 @@ public sealed record NoteEntry(int MarkerIref, uint MarkerFormId, uint FormId)
 }
 
 /// <summary>
+/// One note in the player's Pip-Boy <i>Data → Notes</i> list — <b>read or unread</b>. Unlike a
+/// <see cref="NoteEntry"/> (which is only a "viewed" change-form marker), this is a note the player
+/// <i>has</i>: its reference appears in the player inventory change form's note ref-list (ROADMAP §4k.1 #4).
+/// <see cref="Read"/> is true when a read marker (<see cref="NoteEntry"/>) also exists for it (bold → normal
+/// in-game). The note's FormID is <c>FormIdArray[RefId - 1]</c> (a <c>NOTE</c> record), resolved to a name
+/// via <see cref="PluginDatabase"/>.
+/// </summary>
+public sealed record PipBoyNote(int RefId, uint FormId, bool Read)
+{
+    /// <summary>The mod (plugin load-order) index of the note's FormID — its high byte.</summary>
+    public int ModIndex => (int)(FormId >> 24);
+}
+
+/// <summary>
 /// The player's <b>read notes</b> — the notes marked viewed in the Pip-Boy <i>Data → Notes</i> tab,
 /// decoded from the per-note "read" change-form markers (see <see cref="NoteEntry"/>). This is the set
 /// the save records explicitly; notes that have been acquired but never opened leave no marker and so are

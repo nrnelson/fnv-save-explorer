@@ -976,11 +976,16 @@ public sealed class FalloutSave
     private PlayerNotes? _readNotes;
 
     /// <summary>The form-type tag (low six bits of the change-form type byte) of a note "read" marker;
-    /// its high two bits are 0, so the marker's length field is a single byte (always 0 here).</summary>
+    /// its high two bits are 0, so the marker's length field is a single byte (always 0 here). Corpus-verified
+    /// (ROADMAP §4k.1 #2, <c>notescan</c>): <b>every</b> type-0x1F change form across 45,783 markers (vanilla +
+    /// base VNV + VNV Extended) resolves via the −1 index to a <c>NOTE</c> record — 0 non-NOTE, so this filter
+    /// neither misses nor over-matches.</summary>
     private const byte NoteReadMarkerType = 0x1F;
 
     /// <summary>The change-flags value the engine writes on a note's inventory reference when the note is
-    /// read/viewed in the Pip-Boy. The marker carries no payload — its mere presence is the read state.</summary>
+    /// read/viewed in the Pip-Boy. The marker carries no payload — its mere presence is the read state.
+    /// Corpus-verified (ROADMAP §4k.1 #1, <c>notescan</c>): the flag is <b>always exactly</b> this value across
+    /// all 45,783 markers — a single distinct value, never combined with other change bits.</summary>
     private const uint NoteReadMarkerFlags = 0x80000000;
 
     /// <summary>
@@ -1011,6 +1016,72 @@ public sealed class FalloutSave
             notes.Add(new NoteEntry(cf.Iref, cf.FormId, formId));
         }
         return new PlayerNotes(notes);
+    }
+
+    /// <summary>The player inventory change form (iref = PlayerRef + 1) — the reference record that holds the
+    /// item stacks (§4g) <em>and</em> the note ref-list (§4k.1 #4). Null if it can't be located.</summary>
+    private ChangeFormHeader? PlayerInventoryChangeForm
+    {
+        get
+        {
+            var iref = FindIref(0x14);
+            if (iref < 0)
+                return null;
+            foreach (var cf in EnumerateChangeForms())
+                if (cf.Iref == iref + 1)
+                    return cf;
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The player's <b>full Pip-Boy notes list</b> (read <em>and</em> unread), as opposed to <see cref="ReadNotes"/>
+    /// which is only the viewed markers. A note the player <i>has</i> appears as a <c>7C</c>-delimited 3-byte refID
+    /// inside the player inventory change form (iref = PlayerRef + 1) whose <c>FormIdArray[ref − 1]</c> resolves to a
+    /// <c>NOTE</c> record (ROADMAP §4k.1 #4 — located by the Saves 38→39→40 controlled triple). Because deciding
+    /// "is this FormID a NOTE record?" needs the game masters, which live outside <c>Core</c>, the caller injects that
+    /// test via <paramref name="isNoteForm"/> (e.g. <c>fid =&gt; db.RecordType(fid) == "NOTE"</c>) — exactly how
+    /// inventory name resolution is layered. Each note's <see cref="PipBoyNote.Read"/> is set from the read markers
+    /// (a marker's refID equals the note's ref-list entry, both = note base index + 1). Read markers whose note is no
+    /// longer referenced in the record are still included (read state persists). Deduplicated by FormID; empty when
+    /// the inventory record can't be found. Read-only.
+    /// </summary>
+    public IReadOnlyList<PipBoyNote> PipBoyNotes(Func<uint, bool> isNoteForm)
+    {
+        var acquired = ScanNoteRefs(isNoteForm);
+        var byFormId = new Dictionary<uint, PipBoyNote>();
+        foreach (var n in acquired)
+            byFormId[n.FormId] = n;
+        // Read markers are the authoritative read set; include any whose note isn't referenced in the record anymore.
+        foreach (var rn in ReadNotes.Notes)
+            if (!byFormId.ContainsKey(rn.FormId))
+                byFormId[rn.FormId] = new PipBoyNote(rn.MarkerIref, rn.FormId, Read: true);
+        return byFormId.Values.ToList();
+    }
+
+    private IReadOnlyList<PipBoyNote> ScanNoteRefs(Func<uint, bool> isNoteForm)
+    {
+        if (PlayerInventoryChangeForm is not { } cf)
+            return [];
+        // A note's ref-list entry refID equals its read marker's refID (both = note base FormID-array index + 1),
+        // so the read flag is a set-membership test against the markers' irefs.
+        var readRefs = ReadNotes.Notes.Select(n => n.MarkerIref).ToHashSet();
+        var seen = new HashSet<uint>();
+        var result = new List<PipBoyNote>();
+        var end = cf.DataOffset + cf.DataLength;
+        for (var i = cf.DataOffset; i + 4 < end; i++)
+        {
+            if (_raw[i] != 0x7C || _raw[i + 4] != 0x7C)
+                continue;
+            var refId = (_raw[i + 1] << 16) | (_raw[i + 2] << 8) | _raw[i + 3];
+            if (refId <= 0)
+                continue;
+            var formId = ResolveIref(refId - 1);
+            if (formId == 0 || !isNoteForm(formId) || !seen.Add(formId))
+                continue;
+            result.Add(new PipBoyNote(refId, formId, readRefs.Contains(refId)));
+        }
+        return result;
     }
 
     // ---- Editing (same-length splices only) --------------------------------

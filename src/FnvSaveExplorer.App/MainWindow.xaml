@@ -163,6 +163,8 @@
                                   CanUserAddRows="False" HeadersVisibility="Column" FontFamily="Consolas"
                                   Width="700" HorizontalAlignment="Left" MaxHeight="400">
                             <DataGrid.Columns>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="70"/>
+                                <DataGridTextColumn Header="Type" Binding="{Binding Media}" Width="60"/>
                                 <DataGridTextColumn Header="Note" Binding="{Binding Name}" Width="300"/>
                                 <DataGridTextColumn Header="FormID" Binding="{Binding Note}" Width="160"/>
                                 <DataGridTextColumn Header="Source (mod)" Binding="{Binding Source}" Width="200"/>

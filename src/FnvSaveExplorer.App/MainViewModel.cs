@@ -103,12 +103,19 @@ public sealed class InventoryRow : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 }
 
-/// <summary>One note the player has read (Pip-Boy Data → Notes); read-only display (ROADMAP §4k).</summary>
+/// <summary>One note in the player's Pip-Boy Data → Notes list; read-only display (ROADMAP §4k / §4k.1 #4).</summary>
 public sealed class NoteRow
 {
     public uint FormId { get; init; }
     public int ModIndex { get; init; }
     public string Note => $"0x{FormId:X8} (mod {ModIndex:X2})";
+
+    /// <summary>"Read" once viewed (a marker exists) or "Unread" (acquired but never opened — bold in-game).</summary>
+    public bool Read { get; init; }
+    public string Status => Read ? "Read" : "Unread";
+
+    /// <summary>The note's media type — Text / Voice / Sound / Image — read from the base form (§4k.1 #6).</summary>
+    public string Media { get; init; } = "";
 
     /// <summary>Display name resolved from the game masters; empty until/unless a Data folder is found.</summary>
     public string Name { get; init; } = "";
@@ -352,26 +359,39 @@ public sealed class MainViewModel : INotifyPropertyChanged
         InventoryInfo = DescribeInventory(Inventory.Count, db);
     }
 
-    /// <summary>Fills the Notes grid with the notes the player has read (Pip-Boy Data → Notes, §4k),
-    /// resolving names from the masters when available. Read-only — toggling read state is length-changing.</summary>
+    /// <summary>Fills the Notes grid with the player's full Pip-Boy Data → Notes list — read <em>and</em> unread
+    /// (§4k / §4k.1 #4) — resolving names from the masters. The unread set needs the masters (it's identified by
+    /// which references in the player inventory record are NOTE records), so without a Data folder we fall back to
+    /// just the read markers. Read-only — toggling read state is length-changing.</summary>
     private void PopulateNotes(FalloutSave save, PluginDatabase db)
     {
         Notes.Clear();
-        var read = save.ReadNotes;
-        foreach (var n in read.Notes
-                     .Select(n => (Note: n, Name: db.Count > 0 ? db.Resolve(n.FormId) : null))
-                     .OrderBy(x => x.Name ?? "￿", StringComparer.OrdinalIgnoreCase))
-            Notes.Add(new NoteRow
-            {
-                FormId = n.Note.FormId,
-                ModIndex = n.Note.ModIndex,
-                Name = n.Name ?? "",
-                Source = save.FriendlySourceForModIndex(n.Note.ModIndex) ?? "",
-            });
-        NotesInfo = db.Count > 0
-            ? $"{Notes.Count} note(s) read (Pip-Boy Data → Notes). Read-only — the save records read notes only " +
-              "(unopened notes leave no marker)."
-            : $"{Notes.Count} note(s) read. Names need the game's Data folder (FalloutNV.esm) — set it on the Edit tab.";
+        if (db.Count > 0)
+        {
+            var notes = save.PipBoyNotes(fid => db.RecordType(fid) == "NOTE");
+            foreach (var n in notes
+                         .OrderBy(n => n.Read)                                   // unread first
+                         .ThenBy(n => db.Resolve(n.FormId) ?? "￿", StringComparer.OrdinalIgnoreCase))
+                Notes.Add(new NoteRow
+                {
+                    FormId = n.FormId,
+                    ModIndex = n.ModIndex,
+                    Read = n.Read,
+                    Media = db.NoteMediaType(n.FormId) ?? "",
+                    Name = db.Resolve(n.FormId) ?? "",
+                    Source = save.FriendlySourceForModIndex(n.ModIndex) ?? "",
+                });
+            var unread = Notes.Count(r => !r.Read);
+            NotesInfo = $"{Notes.Count} note(s) — {Notes.Count - unread} read, {unread} unread (Pip-Boy Data → Notes). " +
+                        "Read-only — toggling read state is a length-changing edit.";
+        }
+        else
+        {
+            foreach (var n in save.ReadNotes.Notes)
+                Notes.Add(new NoteRow { FormId = n.FormId, ModIndex = n.ModIndex, Read = true });
+            NotesInfo = $"{Notes.Count} note(s) read. Names + the unread list need the game's Data folder " +
+                        "(FalloutNV.esm) — set it on the Edit tab.";
+        }
     }
 
     private static string DescribeInventory(int stacks, PluginDatabase db) =>

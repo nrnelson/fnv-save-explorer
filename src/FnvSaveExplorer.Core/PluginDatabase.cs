@@ -24,6 +24,7 @@ public sealed class PluginDatabase
 
     private readonly Dictionary<uint, string> _names;
     private readonly Dictionary<uint, string> _types; // FormID -> record signature (WEAP/ARMO/ALCH/AMMO/MISC/…)
+    private readonly Dictionary<uint, int> _noteTypes; // FormID -> NOTE media byte (0=Sound 1=Text 2=Image 3=Voice)
 
     /// <summary>The game <c>Data</c> folder the base/DLC names came from, or <c>null</c> when none was found.</summary>
     public string? DataFolder { get; }
@@ -39,17 +40,18 @@ public sealed class PluginDatabase
 
     public int Count => _names.Count;
 
-    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved)
+    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved)
     {
         _names = names;
         _types = types;
+        _noteTypes = noteTypes;
         DataFolder = dataFolder;
         ModsFolder = modsFolder;
         ResolvedPlugins = resolved;
     }
 
     /// <summary>An empty database; every <see cref="Resolve"/> returns <c>null</c>.</summary>
-    public static readonly PluginDatabase Empty = new([], [], null, null, []);
+    public static readonly PluginDatabase Empty = new([], [], [], null, null, []);
 
     /// <summary>
     /// Builds a database for <paramref name="save"/>, auto-detecting the game <c>Data</c> folder (or using an
@@ -75,6 +77,7 @@ public sealed class PluginDatabase
     {
         var names = new Dictionary<uint, string>();
         var types = new Dictionary<uint, string>();
+        var noteTypes = new Dictionary<uint, int>();
         var resolved = new List<string>();
 
         // Case-insensitive load-order index, for mapping a plugin's masters back to save indices.
@@ -105,7 +108,7 @@ public sealed class PluginDatabase
             if (plugin.Masters.Count < remap.Length)
                 remap[plugin.Masters.Count] = i; // the plugin's own forms
 
-            foreach (var (localFormId, name, type) in plugin.Forms)
+            foreach (var (localFormId, name, type, noteType) in plugin.Forms)
             {
                 var saveHigh = remap[(int)(localFormId >> 24)];
                 if (saveHigh < 0)
@@ -113,12 +116,14 @@ public sealed class PluginDatabase
                 var saveFormId = ((uint)saveHigh << 24) | (localFormId & 0x00FFFFFF);
                 names[saveFormId] = name; // later (load-order) plugin overrides win
                 types[saveFormId] = type;
+                if (noteType >= 0)
+                    noteTypes[saveFormId] = noteType;
             }
 
             resolved.Add(loadOrder[i]);
         }
 
-        return new PluginDatabase(names, types, dataFolder, modsFolder, resolved);
+        return new PluginDatabase(names, types, noteTypes, dataFolder, modsFolder, resolved);
     }
 
     /// <summary>
@@ -154,6 +159,14 @@ public sealed class PluginDatabase
     /// <summary>The base-form record signature for a save FormID (<c>WEAP</c>/<c>ARMO</c>/<c>ALCH</c>/
     /// <c>AMMO</c>/<c>MISC</c>/…), or <c>null</c> if unknown.</summary>
     public string? RecordType(uint formId) => _types.TryGetValue(formId, out var t) ? t : null;
+
+    /// <summary>The media type of a <c>NOTE</c> form — <c>Text</c> / <c>Voice</c> / <c>Sound</c> / <c>Image</c>
+    /// (the holodisk-vs-text distinction) — read from the base form's <c>DATA</c> byte, or <c>null</c> if the
+    /// FormID isn't a known note. This is base-form metadata: the save stores only which notes are held and
+    /// whether they're read, never the note's media type/text (ROADMAP §4k.1 #6).</summary>
+    public string? NoteMediaType(uint formId) => _noteTypes.TryGetValue(formId, out var t)
+        ? t switch { 0 => "Sound", 1 => "Text", 2 => "Image", 3 => "Voice", _ => $"Type{t}" }
+        : null;
 
     /// <summary>The Pip-Boy tab a save FormID's item appears under, or <c>null</c> if its record type is
     /// unknown. The category is a pure function of the base form's record type (it is not stored in the

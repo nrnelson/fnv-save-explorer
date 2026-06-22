@@ -26,7 +26,12 @@ if (args.Length < 2)
           fnvsave inventory <save.fos> [dataDir]   Show the player's inventory (resolves item names from
                                               the game masters; dataDir overrides Data-folder auto-detect)
           fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
-          fnvsave notes <save.fos> [dataDir]  List the notes the player has READ (Pip-Boy Data -> Notes, §4k)
+          fnvsave notes <save.fos> [dataDir]  List the player's Pip-Boy Data -> Notes — READ and UNREAD (§4k/§4k.1)
+          fnvsave notescan <dir>             Walk every .fos in a folder and aggregate the read-note markers:
+                                              changeFlags values + whether each type-0x1F marker resolves to a
+                                              NOTE record + inventory-reference confirmation (R&D §4k.1 #1-3)
+          fnvsave resolve <save.fos> <formId> [dataDir]   Look up a FormID: record type + name + source plugin,
+                                              and where it appears (FormID array iref / inventory / read note)
           fnvsave setcount <in.fos> <out.fos> <formId> <count>  Edit a stack count (writes a new file)
           fnvsave setcondition <in.fos> <out.fos> <formId> <value>  Edit a stack's condition/health (new file)
           fnvsave caps <save.fos>             Show the player's caps (the 0x0000000F inventory stack)
@@ -48,6 +53,8 @@ if (args.Length < 2)
                                               for byte-identical-decode checks across decoder changes (R&D §4i)
           fnvsave fdiff <a.fos> <b.fos> [delta] [tol]   Float-aware aligned diff: report change-form float32
                                               fields that changed by ≈delta (default 50) — finds XP/karma (R&D §7)
+          fnvsave idiff <a.fos> <b.fos> [clean]   Insertion-aware change-form diff (aligns by FormID across an
+                                              add/remove); 'clean' hides recurring game-time/havok churn (R&D §7)
         """);
     return 1;
 }
@@ -55,8 +62,8 @@ if (args.Length < 2)
 var command = args[0];
 var path = args[1];
 
-// Most commands take a save file; `edlscan`/`invsig` take a folder of saves.
-if (command is "edlscan" or "invsig")
+// Most commands take a save file; `edlscan`/`invsig`/`notescan` take a folder of saves.
+if (command is "edlscan" or "invsig" or "notescan")
 {
     if (!Directory.Exists(path))
     {
@@ -123,7 +130,7 @@ try
             InvSig(path);
             break;
         case "idiff":
-            IDiff(path, args[2]);
+            IDiff(path, args[2], args.Length > 3 ? args[3] : null);
             break;
         case "fdiff":
             FDiff(path, args[2], args.Length > 3 ? float.Parse(args[3]) : 50f, args.Length > 4 ? float.Parse(args[4]) : 0.05f);
@@ -152,6 +159,12 @@ try
             break;
         case "notes":
             Notes(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
+            break;
+        case "notescan":
+            NoteScan(path);
+            break;
+        case "resolve":
+            Resolve(FalloutSave.Load(path), path, ParseOffset(args[2]), args.Length > 3 ? args[3] : null);
             break;
         case "setcount":
             return SetCount(path, args[2], ParseOffset(args[3]), uint.Parse(args[4]));
@@ -480,21 +493,199 @@ static void Names(FalloutSave s, string savePath, string? dataDir)
 
 static void Notes(FalloutSave s, string savePath, string? dataDir)
 {
-    // The notes the player has READ/viewed (Pip-Boy Data -> Notes, non-bold). Each is a zero-length
-    // change-form marker on the note's inventory reference; the note's FormID is array-index + 1 -> NOTE
-    // (§4k). Names resolve from the masters, exactly like the inventory.
-    var notes = s.ReadNotes;
+    // The player's Pip-Boy Data -> Notes list. READ notes are zero-length change-form markers (§4k); UNREAD
+    // (bold) notes leave no marker but their reference sits in the player inventory record's note ref-list
+    // (§4k.1 #4). Identifying which references are NOTE records needs the masters, so we pass that test into
+    // PipBoyNotes; without masters we can only show the read markers (and not their names or the unread set).
     var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
-    Console.WriteLine($"Read notes ({notes.Count}):");
     if (db.Count == 0)
-        Console.WriteLine("  (note names unavailable — game Data folder not found; pass it as the 2nd argument)");
-    foreach (var n in notes.Notes
-                 .Select(n => (Note: n, Name: db.Count > 0 ? db.Resolve(n.FormId) : null))
-                 .OrderBy(x => x.Name ?? "￿", StringComparer.OrdinalIgnoreCase))
     {
-        var src = s.FriendlySourceForModIndex(n.Note.ModIndex) ?? "?";
-        Console.WriteLine($"  {n.Name ?? "?",-40}  0x{n.Note.FormId:X8} (mod {n.Note.ModIndex:X2})  {src}");
+        var read = s.ReadNotes;
+        Console.WriteLine($"Read notes ({read.Count}):  (names + the unread list need the game Data folder — pass it as the 2nd argument)");
+        foreach (var n in read.Notes)
+            Console.WriteLine($"  [read  ]  0x{n.FormId:X8} (mod {n.ModIndex:X2})");
+        return;
     }
+
+    var notes = s.PipBoyNotes(fid => db.RecordType(fid) == "NOTE");
+    var readCount = notes.Count(n => n.Read);
+    Console.WriteLine($"Pip-Boy notes ({notes.Count}: {readCount} read, {notes.Count - readCount} unread):");
+    foreach (var n in notes
+                 .OrderBy(n => n.Read)                                   // unread first
+                 .ThenBy(n => db.Resolve(n.FormId) ?? "￿", StringComparer.OrdinalIgnoreCase))
+    {
+        var src = s.FriendlySourceForModIndex(n.ModIndex) ?? "?";
+        var tag = n.Read ? "read  " : "UNREAD";
+        var media = db.NoteMediaType(n.FormId) ?? "?";
+        Console.WriteLine($"  [{tag}]  {db.Resolve(n.FormId) ?? "?",-40}  {media,-6}  0x{n.FormId:X8} (mod {n.ModIndex:X2})  {src}");
+    }
+}
+
+static void NoteScan(string dir)
+{
+    // R&D aggregate for ROADMAP §4k.1 #1-3: across every .fos in `dir`, enumerate the change forms and
+    // examine every type-0x1F record (the read-note marker form type). Answers, with corpus-wide data:
+    //   #1  Is changeFlags ALWAYS exactly 0x80000000 on a read marker? (tally the distinct values)
+    //   #2  Does every type-0x1F marker resolve (via the -1 index) to a NOTE record? (record-type tally)
+    //   #3  Is the marker's refID the note's INVENTORY reference? (does FormIdArray[iref-1] appear as an
+    //       inventory stack — i.e. some item's Iref == iref-1?)
+    // Record-type resolution needs the masters; ForSave re-indexes the 245 MB FalloutNV.esm per call, so we
+    // CACHE a database per distinct load order (saves in one profile usually share one, but an early save can
+    // have a different — e.g. vanilla — load order, which must NOT be reused for the modded ones). The FormID
+    // remap is a pure function of the load order, so a cached DB is valid for any save with the same one. Read-only.
+    var files = Directory.EnumerateFiles(dir, "*.fos").OrderBy(f => f, StringComparer.Ordinal).ToList();
+    Console.WriteLine($"Scanning {files.Count} .fos in {dir}\n");
+
+    var dbCache = new Dictionary<string, PluginDatabase?>();
+    int maxForms = 0;
+
+    PluginDatabase? DbFor(FalloutSave s, string file)
+    {
+        var key = string.Join("|", s.Plugins);
+        if (!dbCache.TryGetValue(key, out var db))
+        {
+            try { db = PluginDatabase.ForSave(s, null, GameDataLocator.FindMo2Mods(file)); }
+            catch { db = null; }
+            dbCache[key] = db;
+            if (db is { Count: > 0 } && db.Count > maxForms) maxForms = db.Count;
+        }
+        return db;
+    }
+
+    int scanned = 0, parseFail = 0, markers = 0, invalidIref = 0;
+    int noteType = 0, unknownType = 0, dbUnavailable = 0, inInventory = 0, invChecked = 0;
+    var flagValues = new SortedDictionary<uint, int>();
+    var otherTypes = new SortedDictionary<string, int>();
+    var nonNoteExamples = new List<string>();
+
+    foreach (var file in files)
+    {
+        FalloutSave s;
+        try { s = FalloutSave.Load(file); }
+        catch { parseFail++; continue; }
+        scanned++;
+        var name = Path.GetFileName(file);
+        var db = DbFor(s, file);
+
+        // The note FormIDs present in this save's inventory, by FormID-array index (item.Iref == array index).
+        HashSet<int>? invIrefs = null;
+        try
+        {
+            if (s.Inventory is { } inv)
+                invIrefs = inv.Items.Select(i => i.Iref).ToHashSet();
+        }
+        catch { /* inventory decode is best-effort here */ }
+
+        foreach (var cf in s.EnumerateChangeForms())
+        {
+            if (cf.FormType != 0x1F)
+                continue;
+            markers++;
+            flagValues[cf.ChangeFlags] = flagValues.GetValueOrDefault(cf.ChangeFlags) + 1;
+
+            if (cf.Iref <= 0)
+            {
+                invalidIref++;
+                continue;
+            }
+            var noteFormId = s.ResolveIref(cf.Iref - 1);
+            if (noteFormId == 0)
+            {
+                invalidIref++;
+                continue;
+            }
+
+            if (invIrefs is not null)
+            {
+                invChecked++;
+                if (invIrefs.Contains(cf.Iref - 1))
+                    inInventory++;
+            }
+
+            if (db is not { Count: > 0 })
+            {
+                dbUnavailable++;
+                continue;
+            }
+            var rt = db.RecordType(noteFormId);
+            if (rt == "NOTE")
+                noteType++;
+            else if (rt is null)
+                unknownType++;
+            else
+            {
+                otherTypes[rt] = otherTypes.GetValueOrDefault(rt) + 1;
+                if (nonNoteExamples.Count < 10)
+                    nonNoteExamples.Add($"  {name}: iref {cf.Iref} (marker 0x{cf.FormId:X8}) -> note 0x{noteFormId:X8} = {rt}");
+            }
+        }
+    }
+
+    Console.WriteLine($"Saves scanned: {scanned} ({parseFail} parse failures)");
+    Console.WriteLine($"Masters: {dbCache.Count} distinct load order(s); up to {maxForms} forms indexed"
+        + (maxForms == 0 ? " — record-type (#2) tally unavailable" : ""));
+    Console.WriteLine($"Type-0x1F markers: {markers}\n");
+
+    Console.WriteLine("#1  changeFlags values on type-0x1F markers:");
+    foreach (var (flag, n) in flagValues)
+        Console.WriteLine($"      0x{flag:X8}: {n}");
+    Console.WriteLine($"      -> {(flagValues.Count == 1 && flagValues.ContainsKey(0x80000000u) ? "ALWAYS exactly 0x80000000" : "MULTIPLE values — read marker is not a single flag")}\n");
+
+    Console.WriteLine("#2  note record type (via the -1 index):");
+    Console.WriteLine($"      NOTE:        {noteType}");
+    foreach (var (t, n) in otherTypes)
+        Console.WriteLine($"      {t,-12} {n}   <-- NOT a NOTE");
+    Console.WriteLine($"      unknown:     {unknownType}   (resolves to a FormID the masters don't index)");
+    Console.WriteLine($"      invalid iref:{invalidIref}   (iref<=0 or FormIdArray[iref-1] empty)");
+    if (dbUnavailable > 0)
+        Console.WriteLine($"      (masters unavailable for {dbUnavailable} markers)");
+    if (nonNoteExamples.Count > 0)
+    {
+        Console.WriteLine("    non-NOTE examples:");
+        foreach (var ex in nonNoteExamples)
+            Console.WriteLine(ex);
+    }
+    Console.WriteLine();
+
+    Console.WriteLine("#3  marker refID is the note's inventory reference:");
+    Console.WriteLine($"      note present as an inventory stack: {inInventory}/{invChecked} markers (FormIdArray[iref-1] is a player item)");
+}
+
+static void Resolve(FalloutSave s, string savePath, uint formId, string? dataDir)
+{
+    // One-shot FormID lookup (ROADMAP §4k.1 #3 scratch helper): what IS this form, and where does it appear
+    // in the save — the FormID array, the player inventory, the read-note markers? Read-only.
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    var modIndex = (int)(formId >> 24);
+    Console.WriteLine($"FormID 0x{formId:X8}  (mod index 0x{modIndex:X2})");
+    if (db.Count == 0)
+        Console.WriteLine("  masters unavailable — pass the game Data folder as the 3rd argument for names/types");
+    else
+        Console.WriteLine($"  name: {db.Resolve(formId) ?? "?"}   type: {db.RecordType(formId) ?? "?"}");
+    Console.WriteLine($"  source plugin: {s.PluginForModIndex(modIndex) ?? "?"}  ({s.FriendlySourceForModIndex(modIndex) ?? "?"})");
+
+    // FormID array: every iref whose entry equals this FormID.
+    var irefs = new List<int>();
+    var arr = s.FormIdArray;
+    for (var i = 0; i < arr.Count; i++)
+        if (arr[i] == formId)
+            irefs.Add(i);
+    Console.WriteLine($"  FormID array: {(irefs.Count == 0 ? "(absent)" : string.Join(", ", irefs.Take(8).Select(i => $"iref {i}")))}"
+        + (irefs.Count > 8 ? $" … (+{irefs.Count - 8})" : ""));
+
+    // Inventory: stacks of this base form (item.FormId == formId).
+    var stacks = s.Inventory?.Items.Where(i => i.FormId == formId).ToList() ?? [];
+    Console.WriteLine($"  inventory: {(stacks.Count == 0 ? "(not carried)" : string.Join(", ", stacks.Select(i => $"x{i.Count} (iref {i.Iref}, ref {i.Iref + 1})")))}");
+
+    // Read notes: is this form the note of a read marker (note == formId), or a marker's own refID form?
+    var asNote = s.ReadNotes.Notes.Where(n => n.FormId == formId).ToList();
+    var asMarker = s.ReadNotes.Notes.Where(n => n.MarkerFormId == formId).ToList();
+    if (asNote.Count > 0)
+        Console.WriteLine($"  read note: YES — read marker(s) at iref {string.Join(", ", asNote.Select(n => $"{n.MarkerIref} (own refID 0x{n.MarkerFormId:X8})"))}");
+    else
+        Console.WriteLine("  read note: no marker names this form as a read note");
+    if (asMarker.Count > 0)
+        Console.WriteLine($"  this FormID is itself a read marker's refID (note = 0x{asMarker[0].FormId:X8})");
 }
 
 static int SetCount(string inPath, string outPath, uint formId, uint count)
@@ -669,18 +860,31 @@ static void Find(FalloutSave s, string hex)
     Console.WriteLine($"{hits} hit(s) for [{Convert.ToHexString(pattern)}]");
 }
 
-static void IDiff(string pathA, string pathB)
+static void IDiff(string pathA, string pathB, string? mode = null)
 {
     // Insertion-aware change-form diff. Adding/removing an item shifts absolute offsets (a new change
     // form + a new FormID-array entry), so a positional byte diff is useless. Instead we walk both saves'
     // change forms and align them by record identity: records match until an insertion, after which B is
     // offset by one. This surfaces (1) the inserted/removed record and (2) the record whose DATA changed
     // in place — for a dropped stacked item that second record holds the inventory count.
+    //
+    // `clean` mode (ROADMAP §4k.1 #7): every save rewrites a recurring per-reference stamp (a game-time-like
+    // field) into thousands of records, swamping the real signal. Rather than decode the stamp, we detect it by
+    // FREQUENCY — a byte-run whose exact old→new value-pair recurs across many records is boilerplate — and hide
+    // any DATA-CHANGED record whose runs are ALL boilerplate. Insertions/removals/length changes are always shown.
+    var clean = string.Equals(mode, "clean", StringComparison.OrdinalIgnoreCase);
     var sa = FalloutSave.Parse(File.ReadAllBytes(pathA));
     var sb = FalloutSave.Parse(File.ReadAllBytes(pathB));
     var recsA = sa.EnumerateChangeForms().ToArray();
     var recsB = sb.EnumerateChangeForms().ToArray();
     Console.WriteLine($"A: {recsA.Length:N0} change forms   B: {recsB.Length:N0} change forms   (delta {recsB.Length - recsA.Length:+#;-#;0})");
+
+    // Buffer events so `clean` can suppress game-time/havok churn once run frequencies are known. Each churn record
+    // carries a few GLOBALLY-recurring stamp runs (identical old→new bytes in thousands of records) plus one
+    // per-reference float run bracketed between them. So a run is "churn" if its value-pair recurs, or if it sits
+    // adjacent to a recurring run (same cluster); a record is hidden only when every run is churn.
+    var output = new List<(string Header, List<(int Start, byte[] Old, byte[] New)>? Runs, bool AlwaysShow)>();
+    var valueCount = new Dictionary<string, int>();
 
     // Align by resolved FormID, not raw iref: creating a form (e.g. a dropped item) renumbers the FormID
     // array, so the same form can have a different iref in each save. FormIDs are stable, giving a clean
@@ -702,31 +906,87 @@ static void IDiff(string pathA, string pathB)
                 if (changes.Count > 0)
                 {
                     dataChanges++;
-                    Console.WriteLine($"\n~ DATA CHANGED  iref {ca.Iref} -> 0x{ca.FormId:X8}  type 0x{ca.TypeByte:X2}  len {ca.DataLength}  ({changes.Count} byte(s))");
-                    PrintDataChanges(sa, ca.DataOffset, sb, cb.DataOffset, changes);
+                    var runs = CoalesceRuns(sa, ca.DataOffset, sb, cb.DataOffset, changes);
+                    foreach (var r in runs)
+                        valueCount[RunSig(r.Old, r.New)] = valueCount.GetValueOrDefault(RunSig(r.Old, r.New)) + 1;
+                    output.Add(($"\n~ DATA CHANGED  iref {ca.Iref} -> 0x{ca.FormId:X8}  type 0x{ca.TypeByte:X2}  len {ca.DataLength}  ({changes.Count} byte(s))", runs, false));
                 }
             }
             else
-            {
-                Console.WriteLine($"\n~ LEN CHANGED   iref {ca.Iref} -> 0x{ca.FormId:X8}  type 0x{ca.TypeByte:X2}  {ca.DataLength} -> {cb.DataLength}");
-            }
+                output.Add(($"\n~ LEN CHANGED   iref {ca.Iref} -> 0x{ca.FormId:X8}  type 0x{ca.TypeByte:X2}  {ca.DataLength} -> {cb.DataLength}", null, true));
             ia++; ib++;
         }
         else if (ib + 1 < recsB.Length && recsB[ib + 1].FormId == ca.FormId)
         {
-            Console.WriteLine($"\n+ INSERTED in B  iref {cb.Iref} -> 0x{cb.FormId:X8}  type 0x{cb.TypeByte:X2}  flags 0x{cb.ChangeFlags:X8}  len {cb.DataLength}  @0x{cb.Offset:X}");
-            DumpRecord(sb, cb);
+            var bytes = sb.ReadAt(cb.DataOffset, Math.Min(cb.DataLength, 64));
+            output.Add(($"\n+ INSERTED in B  iref {cb.Iref} -> 0x{cb.FormId:X8}  type 0x{cb.TypeByte:X2}  flags 0x{cb.ChangeFlags:X8}  len {cb.DataLength}  @0x{cb.Offset:X}"
+                + $"\n    data: {HexBytes(bytes)}{(cb.DataLength > 64 ? " …" : "")}", null, true));
             ib++;
         }
         else if (ia + 1 < recsA.Length && recsA[ia + 1].FormId == cb.FormId)
         {
-            Console.WriteLine($"\n- REMOVED from B iref {ca.Iref} -> 0x{ca.FormId:X8}  type 0x{ca.TypeByte:X2}  len {ca.DataLength}  @0x{ca.Offset:X}");
+            output.Add(($"\n- REMOVED from B iref {ca.Iref} -> 0x{ca.FormId:X8}  type 0x{ca.TypeByte:X2}  len {ca.DataLength}  @0x{ca.Offset:X}", null, true));
             ia++;
         }
         else { ia++; ib++; } // unaligned single mismatch — skip both
     }
-    Console.WriteLine($"\n{dataChanges} record(s) changed data in place.");
+
+    // A run value-pair seen in this many records (≥0.5%, min 8) is a recurring game-time/havok stamp, not signal.
+    var threshold = Math.Max(8, dataChanges / 200);
+    const int adjacency = 0x40; // a non-recurring run within this many bytes of a recurring one is the same cluster
+    int shown = 0, suppressed = 0;
+    foreach (var (header, runs, always) in output)
+    {
+        if (clean && !always && runs is not null && AllChurn(runs))
+        {
+            suppressed++;
+            continue;
+        }
+        Console.WriteLine(header);
+        if (runs is not null)
+            foreach (var r in runs)
+                Console.WriteLine($"    data+0x{r.Start:X} ({r.Old.Length} B)  A: {HexBytes(r.Old)}  B: {HexBytes(r.New)}");
+        shown++;
+    }
+    Console.WriteLine($"\n{dataChanges} record(s) changed data in place."
+        + (clean ? $"  ({suppressed} hidden as recurring game-time/havok churn (≥{threshold}×); records with a unique change shown above)" : ""));
+    return;
+
+    // A record is pure churn when every run is either a globally-recurring stamp or sits next to one (same cluster).
+    bool AllChurn(List<(int Start, byte[] Old, byte[] New)> runs)
+    {
+        bool Recurring((int Start, byte[] Old, byte[] New) r) => valueCount[RunSig(r.Old, r.New)] >= threshold;
+        if (!runs.Any(Recurring))
+            return false; // no recurring stamp at all -> a genuine change, always show
+        foreach (var r in runs)
+            if (!Recurring(r) && !runs.Any(o => Recurring(o) && Math.Abs(o.Start - r.Start) <= adjacency))
+                return false; // a non-recurring run away from any stamp -> real signal
+        return true;
+    }
 }
+
+static List<(int Start, byte[] Old, byte[] New)> CoalesceRuns(FalloutSave sa, int aData, FalloutSave sb, int bData, List<int> changes)
+{
+    // Coalesce adjacent changed offsets into runs, capturing the actual A/B bytes (capped) for display + signature.
+    var runs = new List<(int, byte[], byte[])>();
+    var i = 0;
+    while (i < changes.Count)
+    {
+        var startK = changes[i];
+        var j = i;
+        while (j + 1 < changes.Count && changes[j + 1] == changes[j] + 1) j++;
+        var runLen = Math.Min(changes[j] - startK + 1, 16);
+        runs.Add((startK, sa.ReadAt(aData + startK, runLen), sb.ReadAt(bData + startK, runLen)));
+        i = j + 1;
+    }
+    return runs;
+}
+
+// A run's identity for the `clean`-mode frequency tally: its old→new byte values, ignoring the absolute offset
+// (the same game-time/havok stamp lands at different data offsets in different record types).
+static string RunSig(byte[] old, byte[] @new) => Convert.ToHexString(old) + ">" + Convert.ToHexString(@new);
+
+static string HexBytes(byte[] bytes) => string.Join(' ', bytes.Select(x => x.ToString("X2")));
 
 // R&D (§7): float-aware aligned diff. A scalar like XP/karma is likely a float32, and a float change
 // (e.g. 100.0 -> 150.0) only alters its high bytes — the low bytes stay 0 — so it never surfaces as a
@@ -773,30 +1033,6 @@ static void FDiff(string pathA, string pathB, float delta, float tol)
         else { ia++; ib++; }
     }
     Console.Error.WriteLine($"{hits} float field(s) changed by ≈{delta}.");
-}
-
-static void PrintDataChanges(FalloutSave sa, int aData, FalloutSave sb, int bData, List<int> changes)
-{
-    // Coalesce adjacent changed offsets into runs and print A/B bytes side by side with the data-relative offset.
-    var i = 0;
-    while (i < changes.Count)
-    {
-        var startK = changes[i];
-        var j = i;
-        while (j + 1 < changes.Count && changes[j + 1] == changes[j] + 1) j++;
-        var runLen = changes[j] - startK + 1;
-        var av = string.Join(' ', sa.ReadAt(aData + startK, Math.Min(runLen, 12)).Select(x => x.ToString("X2")));
-        var bv = string.Join(' ', sb.ReadAt(bData + startK, Math.Min(runLen, 12)).Select(x => x.ToString("X2")));
-        Console.WriteLine($"    data+0x{startK:X} ({runLen} B)  A: {av}  B: {bv}");
-        i = j + 1;
-    }
-}
-
-static void DumpRecord(FalloutSave s, FalloutSave.ChangeFormHeader cf)
-{
-    var bytes = s.ReadAt(cf.DataOffset, Math.Min(cf.DataLength, 64));
-    var hex = string.Join(' ', bytes.Select(x => x.ToString("X2")));
-    Console.WriteLine($"    data: {hex}{(cf.DataLength > 64 ? " …" : "")}");
 }
 
 static void Walk(FalloutSave s)

@@ -105,6 +105,25 @@ public class PluginDatabaseTests
         Assert.Null(PluginDatabase.Empty.Resolve(0x00012345));
     }
 
+    [Fact]
+    public void Note_media_type_is_read_from_the_base_form_DATA_byte()
+    {
+        // The holodisk-vs-text distinction (§4k.1 #6) is base-form metadata: the NOTE record's DATA byte
+        // (1=Text, 3=Voice), not anything stored per-save.
+        using var dir = new TempDataFolder();
+        dir.Write("FalloutNV.esm", EsmBuilder.Plugin([],
+            new TestRecord("NOTE", 0x00100001, Edid: "TextNote", Full: "A Letter", NoteData: 1),
+            new TestRecord("NOTE", 0x00100002, Edid: "AudioLog", Full: "A Holotape", NoteData: 3),
+            new TestRecord("WEAP", 0x00100003, Edid: "Rifle", Full: "A Rifle"))); // non-note → no media type
+
+        var db = PluginDatabase.Build(["FalloutNV.esm"], dir.Path);
+
+        Assert.Equal("Text", db.NoteMediaType(0x00100001));
+        Assert.Equal("Voice", db.NoteMediaType(0x00100002));
+        Assert.Null(db.NoteMediaType(0x00100003)); // a weapon has no note media type
+        Assert.Null(db.NoteMediaType(0x00999999)); // unknown form
+    }
+
     [Theory]
     [InlineData("FalloutNV.esm", "Fallout: New Vegas")]      // official table
     [InlineData("GunRunnersArsenal.esm", "Gun Runners' Arsenal")]
@@ -151,8 +170,9 @@ internal sealed class TempDataFolder : IDisposable
     }
 }
 
-/// <summary>One record to embed in a synthetic plugin (see <see cref="EsmBuilder"/>).</summary>
-internal sealed record TestRecord(string Type, uint FormId, string? Edid, string? Full, bool Compressed = false);
+/// <summary>One record to embed in a synthetic plugin (see <see cref="EsmBuilder"/>). <paramref name="NoteData"/>
+/// writes a <c>NOTE</c> <c>DATA</c> media byte (0=Sound,1=Text,2=Image,3=Voice) when set.</summary>
+internal sealed record TestRecord(string Type, uint FormId, string? Edid, string? Full, bool Compressed = false, byte? NoteData = null);
 
 /// <summary>
 /// Builds a minimal but structurally valid FO3/FNV TES4 plugin in memory: a <c>TES4</c> header (with an
@@ -190,6 +210,7 @@ internal static class EsmBuilder
         var fields = new List<byte>();
         if (rec.Edid is not null) fields.AddRange(Sub("EDID", ZStr(rec.Edid)));
         if (rec.Full is not null) fields.AddRange(Sub("FULL", ZStr(rec.Full)));
+        if (rec.NoteData is { } nd) fields.AddRange(Sub("DATA", [nd]));
         var data = (byte[])[.. fields];
         uint flags = 0;
         if (rec.Compressed)
