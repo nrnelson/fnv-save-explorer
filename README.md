@@ -211,3 +211,7 @@ record header/walker, SPECIAL, skills, inventory item stacks **and their per-sta
 - Vault-Tec Labs *FOS file format* (falloutmods wiki) — header + stats byte tables.
 - UESP *Oblivion / Skyrim Save File Format* — the change-record / FormID-array model FNV mirrors.
 - FNVEdit + the GECK — resolve FormIDs while reverse-engineering.
+
+### License
+
+[MIT](LICENSE) © Nathan Nelson.
