@@ -289,6 +289,19 @@ public class ReferenceChangeFormTests
     }
 
     [Fact]
+    public void RefIdType_and_value_split_the_3_byte_refid()
+    {
+        // A 3-byte big-endian refID = [2-bit type][22-bit value] (UESP §8a / ROADMAP §6 #15).
+        Assert.Equal(0, ReferenceChangeForm.RefIdType(0x000123));
+        Assert.Equal(0x000123, ReferenceChangeForm.RefIdValue(0x000123));
+
+        Assert.Equal(1, ReferenceChangeForm.RefIdType(0x401313)); // base-master (unused in FNV)
+        Assert.Equal(2, ReferenceChangeForm.RefIdType(0x801313)); // created (0xFF)
+        Assert.Equal(0x001313, ReferenceChangeForm.RefIdValue(0x801313));
+        Assert.Equal(3, ReferenceChangeForm.RefIdType(0xC01313)); // unspecified
+    }
+
+    [Fact]
     public void DescribeFlags_labels_the_confirmed_reference_bits()
     {
         var text = ReferenceChangeForm.DescribeFlags(

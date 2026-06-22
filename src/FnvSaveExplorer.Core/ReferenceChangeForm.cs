@@ -241,6 +241,20 @@ public static class ReferenceChangeForm
         };
     }
 
+    // ---- RefID 2-bit type (UESP §8a / ROADMAP §6 #15) ----------------------------------------------
+    // A 3-byte big-endian refID packs a 2-bit TYPE in the top bits of its first byte and a 22-bit VALUE in
+    // the rest. Confirmed by a corpus scan (all three sets): FNV uses only type 0 (a FormID-array index) and
+    // type 2 (a *created* form, plugin index 0xFF) — type 1 (base-master formID) and type 3 never appear.
+    // Type 2 occurs on change-form HEADERS (created references); inventory item refs + extra-data refs are
+    // always type 0. Resolution itself needs the save's FormID array, so it lives in FalloutSave.ResolveRefId.
+
+    /// <summary>The 2-bit type packed in the top of a 3-byte refID: 0 = FormID-array index, 1 = base-master
+    /// formID, 2 = created (plugin index 0xFF), 3 = unspecified. FNV uses only 0 and 2.</summary>
+    public static int RefIdType(int raw24) => (raw24 >> 22) & 3;
+
+    /// <summary>The lower 22 bits of a 3-byte refID — its index/formID value once the 2-bit type is stripped.</summary>
+    public static int RefIdValue(int raw24) => raw24 & 0x3FFFFF;
+
     /// <summary>
     /// The absolute offset at which to begin scanning for the inventory item list, by skipping the
     /// changeFlags-gated fixed-size preamble that precedes it: the 27-byte MOVE block (cell + position +

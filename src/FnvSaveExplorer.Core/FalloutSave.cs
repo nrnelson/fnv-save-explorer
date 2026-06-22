@@ -289,6 +289,23 @@ public sealed class FalloutSave
         iref >= 0 && iref < FormIdArray.Count ? FormIdArray[iref] : 0u;
 
     /// <summary>
+    /// Resolves a 3-byte change-form <b>refID</b> to its FormID, honouring its 2-bit RefID type
+    /// (<see cref="ReferenceChangeForm.RefIdType"/>, ROADMAP §6 #15). FNV uses only two types, both
+    /// corpus-confirmed: <c>0</c> = a FormID-array index (the change-form header convention — a 0-based index,
+    /// so straight <see cref="ResolveIref"/>) and <c>2</c> = a <b>created</b> form (plugin index <c>0xFF</c>,
+    /// i.e. <c>0xFF000000 | value</c>). Types 1 (base-master) and 3 (unspecified) <b>never occur in FNV</b>
+    /// (confirmed across all corpora), so they're left as <c>0</c> (unknown) rather than resolved on an
+    /// unverified Skyrim-spec guess — surfacing such a refID as unknown is honest and would flag the surprise.
+    /// Previously type-2 (created) headers indexed out of bounds and also resolved to 0.
+    /// </summary>
+    public uint ResolveRefId(int raw24) => ReferenceChangeForm.RefIdType(raw24) switch
+    {
+        0 => ResolveIref(ReferenceChangeForm.RefIdValue(raw24)),        // FormID-array index
+        2 => 0xFF000000u | (uint)ReferenceChangeForm.RefIdValue(raw24), // created (plugin index 0xFF)
+        _ => 0u, // types 1/3 are unused by FNV — leave unknown rather than guess
+    };
+
+    /// <summary>
     /// The plugin (ESM/ESP) that a FormID's <paramref name="modIndex"/> (high byte) refers to — its entry in
     /// the save's load order (<see cref="Plugins"/>). Returns null for a runtime-created <c>0xFF</c> index or
     /// any value past the load order. The mod index is just the FormID's top byte, so this is the canonical
@@ -370,7 +387,9 @@ public sealed class FalloutSave
             var dataOffset = at + 9 + lenWidth;
             if (length < 0 || dataOffset + length > end)
                 yield break;
-            yield return new ChangeFormHeader(at, iref, ResolveIref(iref), flags, type, version, dataOffset, length);
+            // FormId honours the refID's 2-bit type (§6 #15): type-0 = array index, type-2 = a created (0xFF)
+            // form. (Iref keeps the raw 3-byte value; for type-2 records it isn't an array index.)
+            yield return new ChangeFormHeader(at, iref, ResolveRefId(iref), flags, type, version, dataOffset, length);
             at = dataOffset + length;
         }
     }

@@ -205,6 +205,44 @@ public class PlayerInventoryTests
     }
 
     [Fact]
+    public void ResolveRefId_honours_the_2bit_type()
+    {
+        var save = FalloutSave.Parse(InventorySave.Build()); // FormID array index 2 -> 0x00AAAA02
+
+        // Type 0 = FormID-array index (the change-form header convention) -> straight ResolveIref.
+        Assert.Equal(save.ResolveIref(2), save.ResolveRefId(2));
+        Assert.Equal(0x00AAAA02u, save.ResolveRefId(2));
+        // Type 2 = created form (plugin index 0xFF): 0x80VVVV -> 0xFF00VVVV, no array lookup.
+        Assert.Equal(0xFF001313u, save.ResolveRefId(0x801313));
+        // Types 1 and 3 never occur in FNV, so they're left unknown (0) rather than resolved on a spec guess.
+        Assert.Equal(0u, save.ResolveRefId(0x401313));
+        Assert.Equal(0u, save.ResolveRefId(0xC01313));
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_resolve_created_change_form_refids(string path)
+    {
+        // Type-2 (created, 0xFF) refIDs occur on real change-form headers (corpus scan: vanilla 135, base VNV
+        // 26k, ext 186k); before §6 #15 they indexed out of bounds and resolved to FormId 0. Now each header's
+        // FormId must follow the refID's 2-bit type — type 2 -> 0xFF000000 | value, type 0 -> the array lookup.
+        var save = FalloutSave.Load(path);
+        foreach (var cf in save.EnumerateChangeForms())
+        {
+            switch (ReferenceChangeForm.RefIdType(cf.Iref))
+            {
+                case 2:
+                    Assert.Equal(0xFF000000u | (uint)ReferenceChangeForm.RefIdValue(cf.Iref), cf.FormId);
+                    Assert.Equal(0xFFu, cf.FormId >> 24); // surfaces as a created form
+                    break;
+                case 0:
+                    Assert.Equal(save.ResolveIref(cf.Iref), cf.FormId);
+                    break;
+            }
+        }
+    }
+
+    [Fact]
     public void Caps_is_null_and_TrySetCaps_fails_when_no_caps_stack()
     {
         // The synthetic inventory carries no 0x0000000F stack, so there are no caps to read or edit.

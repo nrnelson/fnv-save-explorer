@@ -759,9 +759,18 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     Animation(if bit28)) as the blueprint to decode the player record end-to-end, which would reach the item list
     with **zero heuristics** (retiring the §10 anchor + the residual over-read) and expose more per-record state.
     Verify field-by-field against FNV (delimiter-aware); this is the principled successor to the current locators.
-15. **RefID 2-bit type handling** (NEW — §8a). The 3-byte refID's top 2 bits are a type: 0 = formID-array index
-    (value−1, our existing `+1` rule), 1 = base ESM formID directly, 2 = created (`0xFF`), 3 = ?. Today we only
-    handle type 0; decoding 1/2 would resolve refIDs that currently show `?` (e.g. linked refs in extra data).
+15. ~~**RefID 2-bit type handling**~~ — ✅ **DONE.** The 3-byte refID's top 2 bits are a type
+    (`ReferenceChangeForm.RefIdType`/`RefIdValue`): 0 = FormID-array index, 1 = base-master formID, 2 = created
+    (`0xFF`), 3 = unspecified. **Corpus scan settled which occur in FNV:** only **type 0** (array index) and
+    **type 2** (created) — **type 1 and type 3 never appear** across vanilla + base VNV + VNV Extended, and
+    type 2 occurs only on change-form **headers** (inventory item refs + extra-data refs are all type 0). Type-2
+    (created) headers used to index out of bounds and resolve to `FormId 0`; **`FalloutSave.ResolveRefId`** now
+    maps them to `0xFF000000 | value` (≈213k headers across the corpus: vanilla 135, base VNV 26k, ext 186k), so
+    `EnumerateChangeForms` surfaces created references correctly — e.g. `refdump` of refID `0x801313` now reads
+    `0xFF001313 (created)` instead of unknown. **Only types 0 and 2 are resolved** (the ones FNV uses); types 1/3
+    are deliberately left as `0`/unknown rather than resolved on an unverified Skyrim-spec guess — per the repo's
+    "don't guess" rule, surfacing an unseen type as unknown is honest and would flag the surprise. Unit + real-save
+    tests pin the split and the created-form resolution. 768 green.
 
 ---
 
