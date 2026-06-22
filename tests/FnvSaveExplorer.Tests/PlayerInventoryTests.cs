@@ -191,6 +191,36 @@ public class PlayerInventoryTests
         Assert.True(walk.Vsval <= inv.Items.Count); // the engine count never exceeds the decoded chain (no under-read)
     }
 
+    [Fact]
+    public void Caps_is_null_and_TrySetCaps_fails_when_no_caps_stack()
+    {
+        // The synthetic inventory carries no 0x0000000F stack, so there are no caps to read or edit.
+        var save = FalloutSave.Parse(InventorySave.Build());
+
+        Assert.Null(save.Caps);
+        Assert.False(save.TrySetCaps(500));
+        Assert.False(save.HasPendingEdits);
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_read_and_safely_edit_caps(string path)
+    {
+        var save = FalloutSave.Load(path);
+        // Caps are an ordinary inventory stack (FormID 0x0000000F, §6.4) — present only once the player
+        // has any. Skip saves without a caps stack; where present, Caps must equal that stack's count.
+        if (save.Inventory?.Items.FirstOrDefault(i => i.FormId == FalloutSave.CapsFormId) is not { } capStack)
+            return;
+
+        Assert.Equal(capStack.Count, save.Caps);
+
+        // Editing caps is a same-length count splice: it must not shift the file and must re-parse.
+        Assert.True(save.TrySetCaps(99_999));
+        var edited = save.ToBytes();
+        Assert.Equal(save.FileLength, edited.Length);
+        Assert.Equal(99_999u, FalloutSave.Parse(edited).Caps);
+    }
+
     [Theory]
     [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
     public void Real_saves_decode_and_safely_edit_inventory(string path)

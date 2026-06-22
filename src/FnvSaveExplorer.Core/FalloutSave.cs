@@ -894,6 +894,84 @@ public sealed class FalloutSave
         return true;
     }
 
+    // ---- Player karma + XP (floats in the player reference's actor-value array, §4j) ---------------
+
+    private ChangeFormHeader? _playerStatRecord;
+    private bool _playerStatRecordLocated;
+
+    /// <summary>The player reference change form (iref = PlayerRef iref + 1) — the record that carries the
+    /// inventory (§4g) and, in its post-MOVE actor-value array, the player's karma and XP (§4j). Null when
+    /// the PlayerRef iref isn't found or the +1 record isn't reached.</summary>
+    private ChangeFormHeader? PlayerStatRecord
+    {
+        get
+        {
+            if (!_playerStatRecordLocated)
+            {
+                _playerStatRecordLocated = true;
+                var iref = FindIref(0x14);
+                if (iref >= 0)
+                    foreach (var cf in EnumerateChangeForms())
+                        if (cf.Iref == iref + 1) { _playerStatRecord = cf; break; }
+            }
+            return _playerStatRecord;
+        }
+    }
+
+    /// <summary>Absolute file offset of the float32 player-stat slot, or null if the record/slot can't be
+    /// located safely (see <see cref="ReferenceChangeForm.PlayerStatSlotOffset"/>).</summary>
+    private int? PlayerStatOffset(int slot)
+    {
+        if (PlayerStatRecord is not { } cf)
+            return null;
+        var off = ReferenceChangeForm.PlayerStatSlotOffset(
+            _raw.AsSpan(cf.DataOffset, cf.DataLength), cf.DataOffset, cf.ChangeFlags, slot);
+        return off < 0 ? null : off;
+    }
+
+    private float? ReadStatSingle(int slot) =>
+        PlayerStatOffset(slot) is { } off ? BinaryPrimitives.ReadSingleLittleEndian(_raw.AsSpan(off, 4)) : null;
+
+    private bool TrySetStat(int slot, float value)
+    {
+        if (PlayerStatOffset(slot) is not { } off)
+            return false;
+        StageSingle(off, value);
+        return true;
+    }
+
+    /// <summary>The player's karma — a float32 in the player reference's actor-value array (§4j), or null
+    /// when that record/slot wasn't located (e.g. a bit2/bit10 havok-physics player record). Editing it is
+    /// a safe same-length float splice via <see cref="TrySetKarma"/>.</summary>
+    public float? Karma => ReadStatSingle(ReferenceChangeForm.PlayerKarmaSlot);
+
+    /// <summary>The player's experience points — a float32 just after karma in the same array (§4j), or
+    /// null when not locatable. Editing it is a safe same-length float splice via <see cref="TrySetXp"/>.</summary>
+    public float? Xp => ReadStatSingle(ReferenceChangeForm.PlayerXpSlot);
+
+    /// <summary>Stages a same-length edit to the player's karma (a fixed-width float). Returns false if the
+    /// player reference record / karma slot wasn't located.</summary>
+    public bool TrySetKarma(float karma) => TrySetStat(ReferenceChangeForm.PlayerKarmaSlot, karma);
+
+    /// <summary>Stages a same-length edit to the player's XP (a fixed-width float). Returns false if the
+    /// player reference record / XP slot wasn't located.</summary>
+    public bool TrySetXp(float xp) => TrySetStat(ReferenceChangeForm.PlayerXpSlot, xp);
+
+    /// <summary>The base FormID of bottle caps — the FNV currency. Caps are not a standalone save field;
+    /// the engine stores them as an ordinary inventory stack of this form, so they decode and edit through
+    /// the inventory path (confirmed: a real save's inventory carries an <c>0x0000000F</c> "Bottle Cap"
+    /// stack whose count is the player's caps). ROADMAP §6.4.</summary>
+    public const uint CapsFormId = 0x0000000F;
+
+    /// <summary>The player's caps (currency): the stack count of <see cref="CapsFormId"/> in the inventory,
+    /// or null if the inventory wasn't located or carries no caps stack.</summary>
+    public uint? Caps => Inventory?.Items.FirstOrDefault(i => i.FormId == CapsFormId)?.Count;
+
+    /// <summary>Stages a same-length edit to the player's caps — a thin wrapper over
+    /// <see cref="TrySetItemCount"/> for the caps stack (caps are an inventory stack, §6.4). Returns false
+    /// if the inventory wasn't located or no caps stack is present.</summary>
+    public bool TrySetCaps(uint caps) => TrySetItemCount(CapsFormId, caps);
+
     // ---- Editing (same-length splices only) --------------------------------
     public void SetPlayerLevel(uint level) => StageUInt32(_playerLevelOffset, level);
 

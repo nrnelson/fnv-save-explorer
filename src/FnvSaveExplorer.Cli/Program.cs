@@ -28,6 +28,12 @@ if (args.Length < 2)
           fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
           fnvsave setcount <in.fos> <out.fos> <formId> <count>  Edit a stack count (writes a new file)
           fnvsave setcondition <in.fos> <out.fos> <formId> <value>  Edit a stack's condition/health (new file)
+          fnvsave caps <save.fos>             Show the player's caps (the 0x0000000F inventory stack)
+          fnvsave setcaps <in.fos> <out.fos> <caps>  Edit the player's caps (writes a new file)
+          fnvsave karma <save.fos>            Show the player's karma   (§4j)
+          fnvsave xp <save.fos>               Show the player's XP      (§4j)
+          fnvsave setkarma <in.fos> <out.fos> <value>  Edit the player's karma (writes a new file)
+          fnvsave setxp <in.fos> <out.fos> <value>     Edit the player's XP    (writes a new file)
           fnvsave diff <a.fos> <b.fos> [body|cf]   Byte-diff two saves (best on controlled pairs); 'body'
                                               hides header/screenshot churn, 'cf' restricts to change forms
                                               and names the containing record for each differing run
@@ -39,6 +45,8 @@ if (args.Length < 2)
                                               typed-entry grammar + per-stack extra-data types (R&D §4i ◑)
           fnvsave invsig <dir>              Print a per-save decoded-inventory signature (stack count + hash)
                                               for byte-identical-decode checks across decoder changes (R&D §4i)
+          fnvsave fdiff <a.fos> <b.fos> [delta] [tol]   Float-aware aligned diff: report change-form float32
+                                              fields that changed by ≈delta (default 50) — finds XP/karma (R&D §7)
         """);
     return 1;
 }
@@ -116,6 +124,9 @@ try
         case "idiff":
             IDiff(path, args[2]);
             break;
+        case "fdiff":
+            FDiff(path, args[2], args.Length > 3 ? float.Parse(args[3]) : 50f, args.Length > 4 ? float.Parse(args[4]) : 0.05f);
+            break;
         case "find":
             Find(FalloutSave.Load(path), args[2]);
             break;
@@ -142,6 +153,21 @@ try
             return SetCount(path, args[2], ParseOffset(args[3]), uint.Parse(args[4]));
         case "setcondition":
             return SetCondition(path, args[2], ParseOffset(args[3]), float.Parse(args[4]));
+        case "caps":
+            Caps(FalloutSave.Load(path));
+            break;
+        case "setcaps":
+            return SetCaps(path, args[2], uint.Parse(args[3]));
+        case "karma":
+            PlayerStat(FalloutSave.Load(path), "Karma", s => s.Karma);
+            break;
+        case "xp":
+            PlayerStat(FalloutSave.Load(path), "XP", s => s.Xp);
+            break;
+        case "setkarma":
+            return SetPlayerStat(path, args[2], "Karma", float.Parse(args[3]), (s, v) => s.TrySetKarma(v), s => s.Karma);
+        case "setxp":
+            return SetPlayerStat(path, args[2], "XP", float.Parse(args[3]), (s, v) => s.TrySetXp(v), s => s.Xp);
         default:
             Console.Error.WriteLine($"Unknown command: {command}");
             return 1;
@@ -489,6 +515,63 @@ static int SetCondition(string inPath, string outPath, uint formId, float value)
     return ok ? 0 : 4;
 }
 
+static void Caps(FalloutSave s)
+{
+    if (s.Caps is { } caps)
+        Console.WriteLine($"Caps: {caps:N0}");
+    else
+        Console.WriteLine("Caps: (no caps stack found — inventory not located, or this save carries no caps)");
+}
+
+static int SetCaps(string inPath, string outPath, uint caps)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+    var old = save.Caps;
+    if (!save.TrySetCaps(caps))
+    {
+        Console.WriteLine("FAIL: no caps stack in this inventory (or inventory not located).");
+        return 4;
+    }
+    save.Save(outPath, backup: false);
+
+    var after = File.ReadAllBytes(outPath);
+    var now = FalloutSave.Parse(after).Caps;
+    Console.WriteLine($"Caps: {old} -> {now};  size {before.Length:N0} -> {after.Length:N0}");
+    var ok = now == caps && before.Length == after.Length;
+    Console.WriteLine(ok ? "OK: caps edit applied, size unchanged, re-parses." : "FAIL: did not verify.");
+    return ok ? 0 : 4;
+}
+
+static void PlayerStat(FalloutSave s, string label, Func<FalloutSave, float?> read)
+{
+    if (read(s) is { } v)
+        Console.WriteLine($"{label}: {v:0.###}");
+    else
+        Console.WriteLine($"{label}: (not located — player reference record/slot not found in this save)");
+}
+
+static int SetPlayerStat(string inPath, string outPath, string label, float value,
+                         Func<FalloutSave, float, bool> set, Func<FalloutSave, float?> read)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+    var old = read(save);
+    if (!set(save, value))
+    {
+        Console.WriteLine($"FAIL: {label} not located in this save (player reference record/slot not found).");
+        return 4;
+    }
+    save.Save(outPath, backup: false);
+
+    var after = File.ReadAllBytes(outPath);
+    var now = read(FalloutSave.Parse(after));
+    Console.WriteLine($"{label}: {old:0.###} -> {now:0.###};  size {before.Length:N0} -> {after.Length:N0}");
+    var ok = now == value && before.Length == after.Length;
+    Console.WriteLine(ok ? $"OK: {label} edit applied, size unchanged, re-parses." : "FAIL: did not verify.");
+    return ok ? 0 : 4;
+}
+
 static void FindPlayer(FalloutSave s)
 {
     foreach (var (formId, label) in new (uint, string)[] { (0x07u, "Player base (TESNPC_)"), (0x14u, "PlayerRef (ACHR)") })
@@ -620,6 +703,53 @@ static void IDiff(string pathA, string pathB)
         else { ia++; ib++; } // unaligned single mismatch — skip both
     }
     Console.WriteLine($"\n{dataChanges} record(s) changed data in place.");
+}
+
+// R&D (§7): float-aware aligned diff. A scalar like XP/karma is likely a float32, and a float change
+// (e.g. 100.0 -> 150.0) only alters its high bytes — the low bytes stay 0 — so it never surfaces as a
+// clean byte-run delta in `idiff`. This aligns change forms by FormID (as `idiff` does) and, for every
+// same-length aligned record, reads the FULL 4 bytes at each offset from both saves and reports offsets
+// where the float32 changed by ≈ <delta>. Emits machine-parseable "iref|formid|data+off|fa|fb" lines so
+// two transitions can be intersected.
+static void FDiff(string pathA, string pathB, float delta, float tol)
+{
+    var sa = FalloutSave.Parse(File.ReadAllBytes(pathA));
+    var sb = FalloutSave.Parse(File.ReadAllBytes(pathB));
+    var recsA = sa.EnumerateChangeForms().ToArray();
+    var recsB = sb.EnumerateChangeForms().ToArray();
+    Console.Error.WriteLine($"A: {recsA.Length:N0} CF   B: {recsB.Length:N0} CF   target float delta {delta} ±{tol}");
+
+    int ia = 0, ib = 0, hits = 0;
+    while (ia < recsA.Length && ib < recsB.Length)
+    {
+        var ca = recsA[ia];
+        var cb = recsB[ib];
+        if (ca.FormId == cb.FormId && ca.TypeByte == cb.TypeByte)
+        {
+            if (ca.DataLength == cb.DataLength)
+            {
+                for (var k = 0; k + 4 <= ca.DataLength; k++)
+                {
+                    var fa = BitConverter.ToSingle(sa.ReadAt(ca.DataOffset + k, 4));
+                    var fb = BitConverter.ToSingle(sb.ReadAt(cb.DataOffset + k, 4));
+                    if (!float.IsFinite(fa) || !float.IsFinite(fb) || fa == fb)
+                        continue;
+                    if (Math.Abs(fb - fa) > 1e12f)
+                        continue;
+                    if (Math.Abs((fb - fa) - delta) <= tol)
+                    {
+                        hits++;
+                        Console.WriteLine($"{ca.Iref}|0x{ca.FormId:X8}|data+0x{k:X}|{fa:R}|{fb:R}");
+                    }
+                }
+            }
+            ia++; ib++;
+        }
+        else if (ib + 1 < recsB.Length && recsB[ib + 1].FormId == ca.FormId) ib++;
+        else if (ia + 1 < recsA.Length && recsA[ia + 1].FormId == cb.FormId) ia++;
+        else { ia++; ib++; }
+    }
+    Console.Error.WriteLine($"{hits} float field(s) changed by ≈{delta}.");
 }
 
 static void PrintDataChanges(FalloutSave sa, int aData, FalloutSave sb, int bData, List<int> changes)

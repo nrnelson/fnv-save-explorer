@@ -93,6 +93,12 @@
                         <TextBox Text="{Binding EditLevel, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" Width="120" HorizontalAlignment="Left"/>
                         <TextBlock Text="Save number"/>
                         <TextBox Text="{Binding EditSaveNumber, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" Width="120" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Caps"/>
+                        <TextBox Text="{Binding EditCaps, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" Width="120" HorizontalAlignment="Left"/>
+                        <TextBlock Text="Karma"/>
+                        <TextBox Text="{Binding EditKarma, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" Width="120" HorizontalAlignment="Left"/>
+                        <TextBlock Text="XP"/>
+                        <TextBox Text="{Binding EditXp, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" Width="120" HorizontalAlignment="Left"/>
                         <TextBlock Text="SPECIAL" Margin="0,4,0,2"/>
                         <DataGrid ItemsSource="{Binding Special}" AutoGenerateColumns="False" CanUserAddRows="False"
                                   HeadersVisibility="Column" Width="240" HorizontalAlignment="Left" Margin="0,0,0,10">

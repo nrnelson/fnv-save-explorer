@@ -36,7 +36,8 @@ quicksave). The test theory auto-discovers them (and a local `samples/`) and ski
 
 CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setstat`, `formids`,
 `findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `inventory`, `setcount`,
-`setcondition`, `names`, `setlevel`, `diff`, plus R&D helpers `walk`, `refdump`, `edlscan`, `invsig`, `idiff`, `find`, `irefscan`.
+`setcondition`, `names`, `setlevel`, `caps`, `setcaps`, `karma`, `xp`, `setkarma`, `setxp`, `diff`, plus R&D
+helpers `walk`, `refdump`, `edlscan`, `invsig`, `idiff`, `fdiff`, `find`, `irefscan`.
 Run with no args to list them. (`edlscan <dir>` aggregates the modded ExtraDataList grammar + a deterministic-path
 tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory signature for byte-identical-decode checks — §4i.)
 
@@ -253,8 +254,9 @@ The list **start** is now anchored by `changeFlags` and a sized preamble, not by
 record. The walk (`ReferenceChangeForm.InventorySearchStart` + `FalloutSave.WalkInventory`) skips **two
 deterministic sections** before scanning:
 1. the `changeFlags`-gated 27-byte **MOVE** block (`CHANGE_REFR_MOVE`, bit 1 — cell ref + position + rotation), then
-2. a **fixed 1160-byte havok/float array** — exactly **232** `[u32][7C]` delimited slots (the reference's zeroed
-   havok/animation arrays). This size is an **empirical invariant** across all 30 real saves (both characters,
+2. a **fixed 1160-byte havok/float array** — exactly **232** `[u32][7C]` delimited slots (mostly the reference's
+   zeroed havok/animation arrays, but **some slots cache actor values** — slots 100/101 are the player's karma/XP,
+   §4j). This size is an **empirical invariant** across all 30 real saves (both characters,
    fresh→4 h) and is **independent of bit 22** (flags `0xB0400832` and `0xB0000832` land identically), so it is a
    structural skip, not a scan. `InventorySearchStart` validates the exact 232-slot shape before skipping (a
    delimiter at every 5th byte) and falls back to just-past-MOVE otherwise, so it can never mis-skip.
@@ -340,6 +342,37 @@ window); **`edlscan <dir>`** aggregates the grammar + the per-save deterministic
 byte-identical-decode checks across decoder changes (used with `git stash` to diff before/after).
 `PlayerInventory.DeterministicStart` records, per save, whether the start was located deterministically.
 
+### 4j. Player karma + XP — two floats in the player reference's actor-value array
+The fixed array between the MOVE block and the ExtraDataList (the "232-slot havok/float array" of §4i) is **not**
+all zeroed havok state — specific slots cache the player reference's **actor values**. Two of them are the
+player's **karma** and **experience points**, stored as adjacent little-endian **float32** `[f32][7C]` slots in
+the player **reference** change form (the iref = PlayerRef + 1 record — the same record that carries the
+inventory, §4g):
+```
+… [karma : f32][7C] [xp : f32][7C] …      array slot 100 = karma, slot 101 = XP (0-indexed, 5 bytes/slot)
+```
+**Cracked by a controlled diff via the new `fdiff` helper.** A scalar like XP/karma is a float, and a float
+change (e.g. `100.0 → 150.0`) only alters its high bytes — the low bytes stay `00` — so it never surfaces as a
+clean byte-run delta in `diff`/`idiff` (this is why the first pass found nothing). `fdiff <a> <b> [delta]` aligns
+change forms by FormID (like `idiff`) and reads the **full 4 bytes** at every offset of each same-length record,
+reporting offsets whose float32 changed by ≈`delta`. On the controlled pairs it pinned a single field in each
+case: **XP** `10→60→110` (vanilla Saves 33/34/35, `rewardxp 50` twice) at slot 101, **karma** `0→100→200` (Saves
+35/36/37, `rewardkarma 100` twice) at slot 100. The two are **cross-stable** (XP unchanged across the karma saves
+and vice-versa), and the **slot indices were confirmed on a second character** (Mace Windu: karma 35, XP 338 —
+both sane), so they're structural, not character-specific.
+
+**Locator (`ReferenceChangeForm.PlayerStatSlotOffset`):** skip the gated 27-byte MOVE block, require the full
+vanilla 232-slot delimited array (which guarantees the slot is a real `[f32][7C]` and **excludes** the bit2/bit10
+havok-physics records whose pre-list region isn't a slot array — there it declines, returning null karma/XP, the
+graceful path like the SPECIAL/skills locators), then index the slot. `FalloutSave.Karma`/`Xp` read it,
+`TrySetKarma`/`TrySetXp` edit it as same-length float splices (karma may be negative). Surfaced in CLI
+(`karma`/`xp`/`setkarma`/`setxp`) and the GUI Edit tab. **Verified:** reads match the controlled deltas exactly on
+all six pairs + the second character; edits round-trip same-length. Tooling: CLI **`fdiff`** (§7).
+
+> **Note:** only two slots of this actor-value array are decoded so far. The rest (and the array's per-slot
+> meaning generally) stay labelled as the undecoded havok/float array — more controlled diffs can graduate
+> further slots (e.g. carry weight, action points) the same way.
+
 ---
 
 ## 5. Completed (with verification)
@@ -361,15 +394,18 @@ byte-identical-decode checks across decoder changes (used with `git stash` to di
 | FormID → display name (§4h / §6.3) | ✅ custom TES4 reader over the ESM/ESP masters; 10/10 plugins of a real save parse, 3,985 named forms; DLC renumbering + compressed records handled; inventory CLI + GUI show names + source mod (friendly name) |
 | Mod Organizer 2 / modded saves (§4h) | ✅ auto-detects the MO2 `mods\` folder from an MO2 save path; a 43-plugin Viva New Vegas save resolves 43/43; large fragmented inventories reunited (a dropped 1,414-count stack recovered) |
 | Pip-Boy item category / tab (§4h) | ✅ from the base form's record type (read from the masters, not the save): `RecordType`/`Category`/`PipBoyTab`; verified in-game (WEAP/ARMO/AMMO; ALCH+BOOK→Aid; KEYM→Misc/"Keyring"; NOTE→Data) |
-| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory edit) | ✅ launches + builds |
+| Caps decode + edit (§6.4) | ✅ caps are an inventory stack (FormID `0x0000000F`); `Caps`/`TrySetCaps` wrap the inventory path; CLI `caps`/`setcaps` + GUI Edit field; same-length edit round-trips |
+| Karma + XP decode + edit (§4j) | ✅ two float32 actor-values in the player reference record (slot 100 = karma, slot 101 = XP), cracked via the new `fdiff` float-aware diff on controlled pairs (XP `10→60→110`, karma `0→100→200`) + confirmed on a 2nd character; `Karma`/`Xp` + `TrySetKarma`/`TrySetXp`; CLI `karma`/`xp`/`setkarma`/`setxp` + GUI; same-length float edit round-trips |
+| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory + caps + karma/XP edit) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion |
-| Tests | ✅ 347 xUnit, all green |
+| Tests | ✅ 457 xUnit, all green |
 | Deterministic inventory decoder + condition edit (§4i) | ✅ window removed; condition (`0x25`) editable + equipped/`0x21` surfaced in CLI + GUI; condition edit round-trips |
 | Deterministic inventory list *start* (§4i) | ✅ **deterministic on all 607 real saves** (vanilla 30/30, base VNV 98/98, VNV Extended 479/479): MOVE-skip + the typed-entry ExtraDataList walk (variable order + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor** for bit2/bit10 havok-physics records → the **`vsval` stack count** → first item. The §4g scan is now an unused safety net. vsval self-validates (decoded ≥ vsval, **0 under-reads**); verified **display byte-identical** across all 607 except **35 endgame inventories this *fixed* (empty → full)** |
 | Modded inventory start — **deterministic on all 3 corpora** (§4i) | ✅ the typed-entry walk is now the **live decoder**: variable-order entries (`0x18/0x74/0x5E/0x60` + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor scan** for bit2/bit10 `CHANGE_REFR_HAVOK_MOVE` records (whose pre-list region is a variable-length Havok physics blob, not a sized slot array) + a `vsval` sanity cap. Deterministic list start on **vanilla 30/30, base VNV 98/98, VNV Extended 479/479**; the §4g scan is now an unused safety net. **0 under-reads**; display **byte-identical** across all 607 except **35 VNV Extended endgame inventories that this *fixed* from decoding-empty → full** (the §4g scan had latched onto havok-blob garbage). New: `PlayerInventory.DeterministicStart`, CLI `invsig` (decode-signature cross-check). 347 tests green |
 
 **Editable today:** level, save number, name (same-length), Misc Stats, full SPECIAL, stored skill
-modifications (§4e), inventory stack counts (§4g), **item condition/health (§4i)** — all safe same-length splices.
+modifications (§4e), inventory stack counts (§4g), **item condition/health (§4i)**, **caps (§6.4 — the
+`0x0000000F` stack)**, **karma + XP (§4j)** — all safe same-length splices.
 
 ---
 
@@ -447,8 +483,17 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
    Vault 21 Jumpsuit / … resolve). No off-the-shelf C# lib covers FNV (Mutagen is Skyrim/FO4/Starfield).
    (Note: early on a few inventory stacks showed `?` as placed references — that was the inventory
    reference off-by-one, since fixed in §4g; the player inventory now resolves completely.)
-4. **Caps / karma / XP** — single values; controlled-diff to locate, then same-length edit. (Caps may
-   simply be an inventory stack — check the inventory list first.)
+4. ~~**Caps / karma / XP**~~ — ✅ **DONE** (§4j for karma/XP).
+   - **Caps** — confirmed (as predicted) to be an ordinary inventory stack, base FormID `0x0000000F`
+     ("Bottle Cap"), not a standalone field. `FalloutSave.Caps` reads the stack count, `TrySetCaps` edits it
+     (a thin wrapper over `TrySetItemCount`). CLI `caps`/`setcaps`, GUI `EditCaps`. Verified on real saves.
+   - **Karma & XP** — two adjacent **float32** actor-values in the player **reference** change form
+     (iref = PlayerRef + 1), inside its post-MOVE array (§4j): **karma = slot 100, XP = slot 101**. Cracked by
+     the new `fdiff` R&D helper (float-aware aligned diff) on controlled pairs — vanilla Saves 33/34/35 (XP
+     `10→60→110`, +50 each via `rewardxp`) and 35/36/37 (karma `0→100→200`, +100 each via `rewardkarma`); the
+     two are cross-stable (XP unchanged across the karma saves and vice-versa). Slot indices confirmed on a
+     second character (Mace Windu: karma 35, XP 338). `FalloutSave.Karma`/`Xp` + `TrySetKarma`/`TrySetXp`
+     (same-length float splices), CLI `karma`/`xp`/`setkarma`/`setxp`, GUI `EditKarma`/`EditXp`.
 5. **Notes / message log (Pip-Boy "Data → Notes")** — the collected notes/holotapes shown under Pip-Boy
    *Data → Notes* are **not inventory items**. The player's inventory change form (iref = PlayerRef+1)
    holds at most a stray carried holotape: a 40 h VNV save (Save 335) decodes only **one** `NOTE` stack
@@ -484,9 +529,12 @@ Diagnostics already available for RE: `probe` (FLT + what offsets point to), `he
 `findplayer`, `playerdump` (player change-form anchors + hex; `diff` also reports `playerBase±0x..` /
 `playerRef±0x..` / `special±0x..` for change-form runs), `formids`, `globals`, `special`, `skills`,
 `inventory`, `walk` (walk every change form + form-type histogram), `find <hexbytes>` (locate a byte
-pattern + name the containing record), `irefscan <off> <len>` (resolve iref+count sites), and two `diff`
+pattern + name the containing record), `irefscan <off> <len>` (resolve iref+count sites), two `diff`
 modes: `diff a b cf` annotates each differing run with the change form that contains it, and
-`idiff a b` aligns records by FormID across an insertion (drop/pickup) to surface the exact data change.
+`idiff a b` aligns records by FormID across an insertion (drop/pickup) to surface the exact data change;
+and `fdiff a b [delta]` — a **float-aware** aligned diff that reads the full 4 bytes at every offset of each
+same-length record and reports float32 fields that changed by ≈`delta` (a float change touches only its high
+bytes, so it never shows as a clean byte-run delta in `diff`/`idiff`). `fdiff` is how karma/XP were found (§4j).
 
 ---
 

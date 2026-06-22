@@ -80,6 +80,40 @@ public static class ReferenceChangeForm
     /// <summary>Upper bound on havok-array slots the variable sizer will walk before giving up (runaway guard).</summary>
     public const int GatedArrayMaxSlots = 512;
 
+    // ---- Player karma + XP: two floats in the post-MOVE actor-value array (ROADMAP §4j) ------------
+    // The fixed array after the MOVE block isn't all zeroed havok state — specific slots cache the
+    // player reference's actor values. A controlled in-game diff (vanilla Saves 33/34/35 for XP, 35/36/37
+    // for karma) pinned two adjacent [f32][7C] slots: karma at slot 100, XP (experience points) at slot
+    // 101 (0-indexed within the array). Verified the slot indices on a second character (Mace Windu: karma
+    // 35, XP 338, both sane). Both are same-length float edits.
+
+    /// <summary>0-indexed slot of the player's karma (a float32) within the post-MOVE actor-value array.</summary>
+    public const int PlayerKarmaSlot = 100;
+
+    /// <summary>0-indexed slot of the player's experience points (a float32) — the slot right after karma.</summary>
+    public const int PlayerXpSlot = 101;
+
+    /// <summary>
+    /// Absolute file offset of the float32 in the player reference's post-MOVE actor-value array at
+    /// 0-indexed <paramref name="slot"/> (e.g. <see cref="PlayerKarmaSlot"/> / <see cref="PlayerXpSlot"/>),
+    /// or -1 when it can't be located safely. Requires the MOVE block (its trailing delimiter present) and
+    /// the full vanilla fixed array (<see cref="GatedArraySlotCount"/> delimited <c>[4-byte][7C]</c> slots),
+    /// which guarantees the slot is a real delimited float and excludes the variable-length Havok-physics
+    /// records (bit2/bit10, ROADMAP §4i) whose pre-list region isn't a slot array — there the caller
+    /// declines gracefully (null karma/XP), matching the SPECIAL/skills locators.
+    /// <para><paramref name="data"/> is the record payload, <paramref name="dataOffset"/> its absolute offset,
+    /// <paramref name="changeFlags"/> the record's flags.</para>
+    /// </summary>
+    public static int PlayerStatSlotOffset(ReadOnlySpan<byte> data, int dataOffset, uint changeFlags, int slot)
+    {
+        if (slot < 0 || (changeFlags & ChangeRefrMove) == 0 || MoveBlockLength >= data.Length || data[MoveBlockLength] != Delimiter)
+            return -1;
+        var afterMove = MoveBlockLength + 1;
+        if (slot >= GatedArraySlotCount || !IsDelimitedSlotRun(data, afterMove, GatedArraySlotCount))
+            return -1;
+        return dataOffset + afterMove + slot * GatedArraySlotStride;
+    }
+
     /// <summary>
     /// Splits a record's payload into <c>0x7C</c>-delimited fields. <paramref name="data"/> is the payload
     /// bytes; <paramref name="dataOffset"/> is its absolute file offset (so each field carries its real

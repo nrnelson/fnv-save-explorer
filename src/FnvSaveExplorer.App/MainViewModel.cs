@@ -171,6 +171,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _editSaveNumber = "";
     public string EditSaveNumber { get => _editSaveNumber; set => Set(ref _editSaveNumber, value); }
 
+    private string _editCaps = "";
+    /// <summary>The player's caps (the <c>0x0000000F</c> inventory stack, §6.4). Blank when the save carries
+    /// no caps stack; editing it is a same-length count splice via <see cref="FalloutSave.TrySetCaps"/>.</summary>
+    public string EditCaps { get => _editCaps; set => Set(ref _editCaps, value); }
+
+    private string _editKarma = "";
+    /// <summary>The player's karma (a float in the player reference's actor-value array, §4j). Blank when
+    /// not locatable; edited same-length via <see cref="FalloutSave.TrySetKarma"/>.</summary>
+    public string EditKarma { get => _editKarma; set => Set(ref _editKarma, value); }
+
+    private string _editXp = "";
+    /// <summary>The player's XP (a float, §4j). Blank when not locatable; edited same-length via
+    /// <see cref="FalloutSave.TrySetXp"/>.</summary>
+    public string EditXp { get => _editXp; set => Set(ref _editXp, value); }
+
     private string _editDataFolder = "";
     /// <summary>Optional override for the game Data folder used to resolve item names.</summary>
     public string EditDataFolder { get => _editDataFolder; set => Set(ref _editDataFolder, value); }
@@ -199,6 +214,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             EditName = save.PlayerName;
             EditLevel = save.PlayerLevel.ToString();
             EditSaveNumber = save.SaveNumber.ToString();
+            EditCaps = save.Caps?.ToString() ?? "";
+            EditKarma = save.Karma?.ToString("0.###") ?? "";
+            EditXp = save.Xp?.ToString("0.###") ?? "";
 
             Screenshot = BuildScreenshot(save.Screenshot);
 
@@ -368,6 +386,38 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (row.Condition is { } c && !Nullable.Equals(row.Condition, row.OriginalCondition)
                 && !_save.TrySetItemCondition(row.FormId, c))
                 messages.Add($"could not apply condition for 0x{row.FormId:X8}");
+        }
+
+        // Caps (the 0x0000000F stack) — staged after the inventory loop so the dedicated field wins if the
+        // same stack was also edited in the grid. Only when changed and the save actually carries caps.
+        if (!string.IsNullOrWhiteSpace(EditCaps))
+        {
+            if (uint.TryParse(EditCaps, out var caps))
+            {
+                if (caps != _save.Caps && !_save.TrySetCaps(caps))
+                    messages.Add("could not apply caps (no caps stack in this inventory)");
+            }
+            else messages.Add("caps must be a whole number");
+        }
+
+        // Karma / XP (floats in the player reference record, §4j) — staged only when changed and parseable.
+        if (!string.IsNullOrWhiteSpace(EditKarma))
+        {
+            if (float.TryParse(EditKarma, out var k))
+            {
+                if (k != _save.Karma && !_save.TrySetKarma(k))
+                    messages.Add("could not apply karma (player reference record/slot not located)");
+            }
+            else messages.Add("karma must be a number");
+        }
+        if (!string.IsNullOrWhiteSpace(EditXp))
+        {
+            if (float.TryParse(EditXp, out var xp))
+            {
+                if (xp != _save.Xp && !_save.TrySetXp(xp))
+                    messages.Add("could not apply XP (player reference record/slot not located)");
+            }
+            else messages.Add("XP must be a number");
         }
 
         Status = messages.Count == 0
