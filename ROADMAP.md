@@ -241,8 +241,10 @@ property = [type:u8][7C] [payload][7C]   (the trailing [7C] only when the payloa
 ```
 Property type → payload catalog (**confirmed by a controlled 3-save diff** — vanilla Saves 31/32/33: equip a
 9mm pistol then repair it with a Weapon Repair Kit):
-- `0x25` **ExtraCondition** — 4-byte LE float (weapon/armor health). The repair moved exactly this float
-  `52.5 → 67.5`; it appears only on degradable gear. **Editable** as a same-length splice (`TrySetItemCondition`).
+- `0x25` **ExtraCondition** — 4-byte LE float = the item's **absolute current health** (NOT a 0–100 %). The repair
+  moved exactly this float `52.5 → 67.5`; it appears only on degradable gear. Values differ per item (real save:
+  9mm Pistol 45, SMG 205, Metal Armor 497.2, Grenade Rifle 99.9); the **max is the base-form Health** stat, not
+  yet decoded — see §6 #11. **Editable** as a same-length splice (`TrySetItemCondition`).
 - `0x16` **ExtraEquipped** — 0-byte flag; its presence means the stack is equipped/worn. It *appeared* on the
   pistol when equipped (Save 31→32), and is present on the always-worn Pip-Boy / worn armor.
 - `0x21` — a 3-byte BE refID. On a weapon this is an attached **weapon mod**; the type is reused for other
@@ -323,9 +325,13 @@ vanilla path assumed turned out to be Extended-specific — each now closed:
    aren't individually sized; instead `TryInventoryItemsStart` does a **bounded resync** (`PostEntryResyncWindow`)
    forward to the self-validating vsval. **Closed.**
 2. **The pre-list region on bit2/bit10 records is NOT a sized slot array — it's a variable-length Havok physics
-   blob.** Late-game records set `changeFlags` bit2 (`CHANGE_REFR_HAVOK_MOVE`) and/or bit10, and the region
+   blob.** Some records set `changeFlags` bit2 (`CHANGE_REFR_HAVOK_MOVE`) and/or bit10, and the region
    between MOVE and the ExtraDataList is then **active physics state**, not the vanilla 232-slot `[u32][7C]` array
-   (the "~214 slots" first guess was wrong). **Grammar now confirmed by corpus alignment over all 113 bit2/bit10
+   (the "~214 slots" first guess was wrong). **It is situational, not a "late-game" rule** (see §6 #12): present
+   **only in VNV Extended** (113 records) and **absent from base VNV — even at level 31 / 39 h — and vanilla**;
+   within Extended it appears on *some* later/auto/quick saves but not on others at the same level (L16–18 manual
+   saves lack it), consistent with the player reference being in active Havok sim at the moment of saving.
+   **Grammar now confirmed by corpus alignment over all 113 bit2/bit10
    records (VNV Extended ONLY — base VNV + vanilla have zero):** a **7-byte preamble** `[u16][7C][u8][7C][u8][7C]`
    (two families seen: `E1 10 7C 04 7C 4C 7C` and `49 11 7C 05 7C 4C 7C`), then **N × 58-byte entries**
    `[pos:3×f32][7C][quat:4×f32][7C][03][7C][vel:3×f32][7C][angvel:3×f32][7C]` (delimiters at offsets 12/29/31/44/57,
@@ -699,6 +705,36 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
    caps total — both anchor the alignment. (A few slots are vestigial FO3 names the engine still tracks under the
    same index, e.g. "Bobbleheads Found"; the label matches what the save stores.)
 9. **GUI/UX polish:** screenshot export (PNG), a raw hex viewer tab, backup management.
+10. **Quest log + objectives decode** (NEW — not started). Surface the player's quests — **completed / active /
+    failed** — and, within each, the **individual objectives/stages** (including *optional* ones that can be
+    skipped while the quest still completes). Where it lives in the save is not yet decoded; the likely homes are
+    `QUST` change forms (per-quest stage flags + objective completion bitsets) and/or a quest-state global-data
+    table (§4c types 7–11 are still unlabeled). Names/objective text come from the masters (the `QUST` records,
+    via an extension of `TesPlugin`, which today only indexes item record types). **Method:** controlled diff —
+    advance one objective in-game, save before/after, `idiff … clean` to isolate the changed bytes (mirrors how
+    notes §4k were cracked). Read-only first; editing quest state is likely same-length (flag/stage bytes).
+11. **Item condition maximums (base-form Health)** (NEW — not started). Condition (`0x25`, §4i) is the item's
+    **absolute current health**, not a percentage — verified on a real save: 9mm Pistol 45, 9mm SMG 205, Metal
+    Armor 497.2, Grenade Rifle 99.9 (values differ per item). The **max** is the base form's **Health** stat,
+    which differs per item and is **not yet decoded** — it lives in the `WEAP`/`ARMO`/… record's `DATA`
+    subrecord, which `TesPlugin` already walks for the name (`FULL`) and could also read. Decoding it would let
+    the tool show `cond X / max` (a true % bar), reject/clamp over-max edits, and offer "repair to full." **Open
+    question (needs an in-game test):** what does the engine do with a stored condition *above* max — display
+    >100%, clamp on load, or accept it? (We never write to originals, so this is a deliberate experiment, not an
+    assumption.)
+12. **Havok blob — "mod vs. situation" determination** (NEW follow-up to §4i / §10). The bit2/bit10
+    `CHANGE_REFR_HAVOK_MOVE` pre-list physics blob appears **only in VNV Extended** (113 records), **never** in
+    base VNV (98 saves, up to **level 31 / 39 h**) or vanilla. Within Extended it is **not** a clean
+    progression threshold — early saves (L2/8/14) lack it, but it appears on some later ones (a L23 manual save,
+    the L29 quicksave/autosaves) and **not** on others at similar levels (L16–18 manual saves) — so it reads as
+    **situational**: the player reference is in **active Havok simulation at the instant of saving** (mid-jump /
+    fall / ragdoll / moving surface), captured more often by autosaves/quicksaves. Yet base VNV at L31 *never*
+    triggers it, which points at an **Extended-specific mod** keeping the player ref havok-active. The corpus
+    alone can't separate "a mod causes it" from "the situation causes it." **Method:** controlled test — in base
+    VNV *and* Extended, save while standing still vs. immediately after a jump/knockdown, manual vs. autosave,
+    and compare the player-ref `changeFlags`. (Decode value is low — the list is already located correctly via
+    the self-validating anchor, §10 — but it would settle the cause and could retire the anchor for a structural
+    skip.)
 
 ---
 
