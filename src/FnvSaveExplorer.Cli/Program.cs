@@ -262,7 +262,10 @@ static void Stats(FalloutSave s)
     Console.WriteLine($"Misc Stats ({stats.Stats.Count} counters; non-zero shown):");
     foreach (var st in stats.Stats)
         if (st.Value != 0)
-            Console.WriteLine($"  [{st.Index,2}] = {st.Value,12:N0}   (edit offset 0x{st.ValueOffset:X})");
+        {
+            var name = MiscStatNames.Get(st.Index) ?? $"[{st.Index}]";
+            Console.WriteLine($"  [{st.Index,2}] {name,-26} = {st.Value,12:N0}   (edit offset 0x{st.ValueOffset:X})");
+        }
 }
 
 static void FormIds(FalloutSave s, int n)

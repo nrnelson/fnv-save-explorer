@@ -517,6 +517,7 @@ one-shot lookup (record type + name + source plugin, and where the FormID appear
 | File Location Table decode | ✅ verified across 16 saves |
 | Global data tables (12 records) | ✅ enumerated |
 | Misc Stats decode + edit | ✅ (e.g. stat 1→999 = 2-byte diff) |
+| Misc Stat index names (§6.8) | ✅ 43 positional counters labelled from the FO3/FNV engine misc-stat array (`MiscStatNames`); CLI `stats` + GUI Misc Stats tab show names. Verified vs corpus: count = 43, and idx 35 "Total Things Killed" = idx 2 + idx 3 on every save (test-pinned) |
 | FormID array + iref resolution | ✅ locates player change forms in all 16 |
 | Player SPECIAL decode + edit | ✅ all 16 sum to 40; edit round-trips |
 | Player skills decode + edit (ACHR actor-value block, §4e) | ✅ format + index map verified; same-length float edit round-trips; sparse (modified-only) |
@@ -535,7 +536,7 @@ one-shot lookup (record type + name + source plugin, and where the FormID appear
 | Game-time-stamp churn suppression (§4k.1 #7) | ✅ `idiff … clean` auto-hides the recurring per-reference game-time/havok churn (value-frequency + adjacency clustering), collapsing the notes diff 3,314 → 11 and surfacing the inserted read marker; characterised as per-`REFR` time/havok float updates |
 | WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory + caps + karma/XP edit + full notes read/unread + media type) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion, `idiff … clean` hides game-time churn (§4k.1 #7) |
-| Tests | ✅ 495 xUnit, all green |
+| Tests | ✅ 681 xUnit, all green |
 | Deterministic inventory decoder + condition edit (§4i) | ✅ window removed; condition (`0x25`) editable + equipped/`0x21` surfaced in CLI + GUI; condition edit round-trips |
 | Deterministic inventory list *start* (§4i) | ✅ **deterministic on all 607 real saves** (vanilla 30/30, base VNV 98/98, VNV Extended 479/479): MOVE-skip + the typed-entry ExtraDataList walk (variable order + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor** for bit2/bit10 havok-physics records → the **`vsval` stack count** → first item. The §4g scan is now an unused safety net. vsval self-validates (decoded ≥ vsval, **0 under-reads**); verified **display byte-identical** across all 607 except **35 endgame inventories this *fixed* (empty → full)** |
 | Modded inventory start — **deterministic on all 3 corpora** (§4i) | ✅ the typed-entry walk is now the **live decoder**: variable-order entries (`0x18/0x74/0x5E/0x60` + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor scan** for bit2/bit10 `CHANGE_REFR_HAVOK_MOVE` records (whose pre-list region is a variable-length Havok physics blob, not a sized slot array) + a `vsval` sanity cap. Deterministic list start on **vanilla 30/30, base VNV 98/98, VNV Extended 479/479**; the §4g scan is now an unused safety net. **0 under-reads**; display **byte-identical** across all 607 except **35 VNV Extended endgame inventories that this *fixed* from decoding-empty → full** (the §4g scan had latched onto havok-blob garbage). New: `PlayerInventory.DeterministicStart`, CLI `invsig` (decode-signature cross-check). 347 tests green |
@@ -647,8 +648,14 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
    all records exactly; CLI `walk` validates. Enables a future full change-form browser.
 7. **Length-changing edits** (arbitrary rename, add/remove plugins, add/remove items) — requires rewriting every
    absolute offset in the File Location Table (and any internal absolute offsets). Deferred.
-8. **Quick win (no new saves):** label the 43 Misc Stat indices by name (diff an early vs late save
-   of the same character) so the GUI reads "Quests Completed: 4" instead of "[0]: 4".
+8. ~~**Quick win** — label the 43 Misc Stat indices by name~~ — ✅ **DONE**. The Misc Stats record stores
+   exactly **43** positional counters; they're the fixed FO3/FNV engine misc-stat array, so each index has a
+   canonical name (`Core/MiscStatNames.cs`, surfaced in CLI `stats` + the GUI Misc Stats tab). Names taken from
+   the FNV `MiscStatEnum` (matortheeternal/esp.json) + a C# save-stats decoder, **verified against the corpus**:
+   the count is exactly 43, and index 35 **"Total Things Killed"** = index 2 "People Killed" + index 3 "Creatures
+   Killed" on every real save (pinned in a test), with index 39 "Barter Amount Traded" the large fast-growing
+   caps total — both anchor the alignment. (A few slots are vestigial FO3 names the engine still tracks under the
+   same index, e.g. "Bobbleheads Found"; the label matches what the save stores.)
 9. **GUI/UX polish:** screenshot export (PNG), a raw hex viewer tab, backup management.
 
 ---

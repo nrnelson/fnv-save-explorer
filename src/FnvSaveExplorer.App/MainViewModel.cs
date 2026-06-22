@@ -18,6 +18,7 @@ public sealed class FltRow
 public sealed class MiscStatRow
 {
     public int Index { get; init; }
+    public string? Name { get; init; }
     public uint Value { get; init; }
 }
 
@@ -287,7 +288,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             MiscStats.Clear();
             if (save.MiscStats is { } ms)
                 foreach (var stat in ms.Stats)
-                    MiscStats.Add(new MiscStatRow { Index = stat.Index, Value = stat.Value });
+                    MiscStats.Add(new MiscStatRow { Index = stat.Index, Name = MiscStatNames.Get(stat.Index), Value = stat.Value });
 
             var bodyBytes = save.FileLength - save.BodyOffset;
             BodyInfo =

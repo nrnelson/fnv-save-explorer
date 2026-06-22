@@ -46,4 +46,31 @@ public class GlobalDataTests
         Assert.Equal(save.FileLength, edited.Length);
         Assert.Equal(12345u, FalloutSave.Parse(edited).MiscStats!.Stats[0].Value);
     }
+
+    [Fact]
+    public void MiscStatNames_maps_known_indices_and_is_null_out_of_range()
+    {
+        Assert.Equal(43, MiscStatNames.Count); // FO3/FNV misc-stat array size
+        Assert.Equal("Quests Completed", MiscStatNames.Get(0));
+        Assert.Equal("Total Things Killed", MiscStatNames.Get(35));
+        Assert.Equal("Slots Games Played", MiscStatNames.Get(42));
+        Assert.Null(MiscStatNames.Get(-1));
+        Assert.Null(MiscStatNames.Get(43));
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_misc_stat_names_align_with_the_corpus(string path)
+    {
+        var stats = FalloutSave.Load(path).MiscStats!.Stats;
+
+        // Every stored index must have a name (the corpus has exactly 43 counters).
+        foreach (var st in stats)
+            Assert.NotNull(MiscStatNames.Get(st.Index));
+
+        // The decisive alignment anchor (ROADMAP §6.8): index 35 "Total Things Killed" is the sum of
+        // index 2 "People Killed" and index 3 "Creatures Killed" on every save. This pins the ordering.
+        uint Stat(int i) => stats.FirstOrDefault(s => s.Index == i)?.Value ?? 0u;
+        Assert.Equal(Stat(2) + Stat(3), Stat(35));
+    }
 }

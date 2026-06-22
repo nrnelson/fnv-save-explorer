@@ -15,7 +15,7 @@ a CLI — and validated against real saves.
 | Safe in-place edits (level, save #, same-length rename) | ✅ proven (1-byte diff, file size unchanged) |
 | **File Location Table** (offsets/counts into the body) | ✅ decoded & verified on all 16 saves |
 | **Global data tables** (Player Location, Global Variables, Weather…) | ✅ 12 records (types 0–11) enumerated |
-| **Misc Stats** counters (quests, kills, locations…) | ✅ decoded **and safely editable** (stat 1→999 = 2-byte diff) |
+| **Misc Stats** counters (quests, kills, locations…) | ✅ decoded, **named** (43 indices), **and safely editable** (stat 1→999 = 2-byte diff) |
 | **FormID array** + iref resolution | ✅ decoded; locates the **player change forms** in all 16 saves |
 | **Player SPECIAL** (S P E C I A L) | ✅ decoded **and safely editable** — verified on all 16 saves (each sums to 40) |
 | **Player skills** (actor-value block in the PlayerRef change form) | ✅ decoded **and safely editable** — format + 13-skill index map verified; storage is sparse (modified-only) |
@@ -80,7 +80,10 @@ edits (arbitrary rename, plugin changes) need full offset rewriting and are not 
 
 **Misc Stats** (type 0) = `u32 count, 0x7C, then count × (u32 value, 0x7C)` — the Pip-Boy
 counters (quests completed, kills, locations discovered…). Positional: the game maps each index
-to a name. These are decoded and **safely editable** in place.
+to a name. The save stores only values; the 43 indices are labelled from the fixed FO3/FNV engine
+misc-stat array (`MiscStatNames`, verified against the corpus — index 35 "Total Things Killed" =
+"People Killed" + "Creatures Killed" on every save), so `stats` and the GUI read "Quests Completed: 4"
+rather than "[0]: 4". These are decoded and **safely editable** in place.
 
 ### Change forms: player located, SPECIAL decoded
 
