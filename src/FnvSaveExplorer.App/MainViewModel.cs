@@ -125,6 +125,28 @@ public sealed class NoteRow
     public string Source { get; init; } = "";
 }
 
+/// <summary>One quest in the read-only quest-log view (ROADMAP §6 #10). Its decoded stages and objectives
+/// are flattened into <see cref="Lines"/> for the master-detail row, with summary columns alongside.</summary>
+public sealed class QuestRow
+{
+    public uint FormId { get; init; }
+    public string FormIdHex => $"0x{FormId:X8}";
+    public string Name { get; init; } = "";
+
+    /// <summary>Active / Completed / Unknown — see <see cref="QuestState"/>.</summary>
+    public string State { get; init; } = "";
+
+    public int StageCount { get; init; }
+    public int DoneStageCount { get; init; }
+
+    /// <summary>"3/6 stages" when the quest stores a decoded stage list, else blank (state lives in the
+    /// undecoded packed form, ROADMAP §6 #10).</summary>
+    public string Progress => StageCount > 0 ? $"{DoneStageCount}/{StageCount} stages" : "";
+
+    /// <summary>The quest's stage + objective detail lines, shown in the expandable row-details panel.</summary>
+    public IReadOnlyList<string> Lines { get; init; } = [];
+}
+
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private FalloutSave? _save;
@@ -136,6 +158,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<SkillRow> Skills { get; } = [];
     public ObservableCollection<InventoryRow> Inventory { get; } = [];
     public ObservableCollection<NoteRow> Notes { get; } = [];
+    public ObservableCollection<QuestRow> Quests { get; } = [];
     public ObservableCollection<MiscStatRow> MiscStats { get; } = [];
 
     private static readonly string[] SpecialNames =
@@ -186,6 +209,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private string _notesInfo = "";
     public string NotesInfo { get => _notesInfo; private set => Set(ref _notesInfo, value); }
+
+    private string _questsInfo = "";
+    public string QuestsInfo { get => _questsInfo; private set => Set(ref _questsInfo, value); }
 
     // ---- Edit fields (two-way bound) --------------------------------------
     private string _editName = "";
@@ -284,6 +310,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 EditModsFolder = invDb.ModsFolder;
             PopulateInventory(save, invDb);
             PopulateNotes(save, invDb);
+            PopulateQuests(save, invDb);
 
             MiscStats.Clear();
             if (save.MiscStats is { } ms)
@@ -326,6 +353,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             EditModsFolder = db.ModsFolder;
         PopulateInventory(_save, db);
         PopulateNotes(_save, db);
+        PopulateQuests(_save, db);
     }
 
     /// <summary>
@@ -393,6 +421,55 @@ public sealed class MainViewModel : INotifyPropertyChanged
             NotesInfo = $"{Notes.Count} note(s) read. Names + the unread list need the game's Data folder " +
                         "(FalloutNV.esm) — set it on the Edit tab.";
         }
+    }
+
+    /// <summary>Fills the read-only Quests grid with the player's quest log (ROADMAP §6 #10): each tracked quest
+    /// with its decoded stages (done + completion time) and objectives (active state + target enable-state),
+    /// flattened into per-quest detail lines. Classifying a change form as a quest, and naming its stages and
+    /// objectives, all need the masters, so without a Data folder the grid stays empty.</summary>
+    private void PopulateQuests(FalloutSave save, PluginDatabase db)
+    {
+        Quests.Clear();
+        if (db.Count == 0)
+        {
+            QuestsInfo = "The quest log needs the game's Data folder (FalloutNV.esm) to classify and name " +
+                         "quests — set it on the Edit tab.";
+            return;
+        }
+
+        var log = QuestLog.Read(save, db);
+        foreach (var q in log.Quests
+                     .OrderBy(q => q.State == QuestState.Unknown)                  // decoded-progress quests first
+                     .ThenBy(q => q.Name ?? "￿", StringComparer.OrdinalIgnoreCase))
+        {
+            var lines = new List<string>();
+            foreach (var s in q.Stages.OrderBy(s => s.Index))
+            {
+                var when = s.CompletionTime is { } t ? $"  (t={t})" : "";
+                var text = s.LogText is { Length: > 0 } ? $"  {s.LogText}" : "";
+                lines.Add($"stage {s.Index,-3} {(s.Done ? "[x]" : "[ ]")}{when}{text}");
+            }
+            foreach (var o in q.Objectives.OrderBy(o => o.Index))
+            {
+                var mark = o.Active switch { true => "active", false => "inactive", null => "—" };
+                lines.Add($"obj {o.Index,-3} [{mark}]  {o.Text ?? "?"}");
+            }
+
+            Quests.Add(new QuestRow
+            {
+                FormId = q.FormId,
+                Name = q.Name ?? "",
+                State = q.State.ToString(),
+                StageCount = q.Stages.Count,
+                DoneStageCount = q.Stages.Count(s => s.Done),
+                Lines = lines,
+            });
+        }
+
+        var decoded = Quests.Count(q => q.State != nameof(QuestState.Unknown));
+        QuestsInfo = $"{Quests.Count} quest(s) tracked — {decoded} with decoded stage progress. Quests whose " +
+                     "state lives in the undecoded packed form show their objectives but state \"Unknown\" " +
+                     "(ROADMAP §6 #10). Read-only — quest edits are length-changing.";
     }
 
     private static string DescribeInventory(int stacks, PluginDatabase db) =>

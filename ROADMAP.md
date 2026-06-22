@@ -708,8 +708,15 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
    same index, e.g. "Bobbleheads Found"; the label matches what the save stores.)
 9. **GUI/UX polish:** screenshot export (PNG), a raw hex viewer tab, backup management.
 10. **Quest log + objectives decode** (◑ IN PROGRESS — masters QUST reader **fixed & verified**; both storage
-    mechanisms **decoded** — normal quests' formType-9/7 stage lists *and* freeform quests' objective-target
-    enable-state; a generic quest-log *reader* not yet built). Surface the player's quests — **completed /
+    mechanisms **decoded**; a generic quest-log **reader is now built** (`Core/QuestLog.cs`, surfaced in the
+    CLI `quests` command + a read-only WPF **Quests** tab). It walks every QUST change form (classified by
+    refID → FormID → masters type `QUST`), parses the delimited stage list, joins each stage to its masters
+    `INDX`/`QSDT`/`CNAM` definition, and resolves each objective's `QSTA` target refs to their save-side
+    enable-state. **Honesty boundary:** stage progress is read only for quests that use the *delimited* stage
+    list (the **packed formType-7 bitmask stays undecoded**, so major story quests show their objectives but
+    state `Unknown`); objective enable-state is `Unknown` unless a target ref recorded its form-flags. Verified
+    on a real level-26 save: "Climb Ev'ry Mountain" → Completed with per-stage completion times, "Bye Bye Love"
+    → Active, both with correct log text.) Surface the player's quests — **completed /
     active / failed** — and, within each, the **individual objectives/stages** (incl. *optional* ones).
     **Masters QUST reader — ✅ FIXED & VERIFIED (the committed step-1).** Root cause was **not** a misaligned
     group read: `TesPlugin.ItemTypes` simply **did not list `QUST`**, so the QUST top-level group was
@@ -766,11 +773,18 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       save**. (The console `setstage` zero-churn captures missed this: setstage skips the result-script
       `Enable`/`SetObjectiveCompleted` calls — why objectives there displayed but never checked off.) Stage
       *sequence* is logged in parallel by tracker quests (`NVDLC04Ending`, formType-9).
-    **Remaining work:** attribute a stage-list entry to its owning quest (real QUST forms like `NVDLC04Ending` own
-    their list via the change form's refID; freeform "Back in the Saddle" routes through `0x00174BC0`/created forms
-    with no inline quest FormID seen yet); decode the formType-7 packed array; give QUST `changeFlags` their own
-    labels (bit31 STAGES / bit30 SCRIPT / bit29 OBJECTIVES) — the §6 #13 follow-up; and build a generic reader that
-    walks target-ref enable-state + tracker stage-lists into a quest-log view.
+    **Done since:** QUST `changeFlags` now have their own labels (bit31 STAGES / bit30 SCRIPT / bit29 OBJECTIVES —
+    `ReferenceChangeForm.QuestFlagBitLabels`/`DescribeQuestFlags`, the §6 #13 follow-up); the masters QUST reader
+    parses stage (`INDX`/`QSDT`/`CNAM`) and objective (`QOBJ`/`NNAM`/`QSTA`) subrecords (`TesPlugin.QuestDefinition`,
+    re-keyed into save space by `PluginDatabase.Quest`); and the generic reader (`QuestLog`) walks target-ref
+    enable-state + stage lists into a quest-log view (CLI + GUI). A stage-list entry is attributed to its owning
+    quest via the change form's refID (resolves for real QUST forms).
+    **Remaining work:** decode the formType-7 **packed bitmask array** (the major story quests' stage state — until
+    then those quests read as `Unknown`); attribute the *freeform* "Back in the Saddle" stage state, which routes
+    through `0x00174BC0`/created forms with no inline quest FormID seen yet; and pin the `QSDT` flag bit semantics
+    by a controlled diff (the reader currently classifies *Completed* via the documented FO3/FNV "Complete Quest"
+    bit `0x02`, corroborated on a real save but not yet FNV-controlled-diff-verified; quest **failure** has no
+    distinct decoded signal yet, so it is not reported as a separate state).
     **Dataset note (ephemeral):** the `zc0`–`zc4` captures and the natural Saves 43→47 used above are a **temporary**
     dataset and will likely be deleted. The byte-level findings here — FormIDs, offsets, flag bits, the
     formType-7/9 layouts, and the exact capture method — are recorded to **stand alone**, so the decode is

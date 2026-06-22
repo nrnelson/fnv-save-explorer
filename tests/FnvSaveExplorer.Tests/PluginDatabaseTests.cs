@@ -190,7 +190,7 @@ internal sealed class TempDataFolder : IDisposable
 
 /// <summary>One record to embed in a synthetic plugin (see <see cref="EsmBuilder"/>). <paramref name="NoteData"/>
 /// writes a <c>NOTE</c> <c>DATA</c> media byte (0=Sound,1=Text,2=Image,3=Voice) when set.</summary>
-internal sealed record TestRecord(string Type, uint FormId, string? Edid, string? Full, bool Compressed = false, byte? NoteData = null);
+internal sealed record TestRecord(string Type, uint FormId, string? Edid, string? Full, bool Compressed = false, byte? NoteData = null, IReadOnlyList<(string Type, byte[] Data)>? Subs = null);
 
 /// <summary>
 /// Builds a minimal but structurally valid FO3/FNV TES4 plugin in memory: a <c>TES4</c> header (with an
@@ -229,6 +229,9 @@ internal static class EsmBuilder
         if (rec.Edid is not null) fields.AddRange(Sub("EDID", ZStr(rec.Edid)));
         if (rec.Full is not null) fields.AddRange(Sub("FULL", ZStr(rec.Full)));
         if (rec.NoteData is { } nd) fields.AddRange(Sub("DATA", [nd]));
+        if (rec.Subs is { } subs)
+            foreach (var (subType, subData) in subs)
+                fields.AddRange(Sub(subType, subData));
         var data = (byte[])[.. fields];
         uint flags = 0;
         if (rec.Compressed)

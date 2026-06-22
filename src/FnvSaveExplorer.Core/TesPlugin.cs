@@ -59,11 +59,21 @@ public sealed class TesPlugin
     /// </summary>
     public IReadOnlyList<(uint LocalFormId, string Name, string Type, int NoteType)> Forms { get; }
 
-    private TesPlugin(string fileName, IReadOnlyList<string> masters, IReadOnlyList<(uint, string, string, int)> forms)
+    /// <summary>The <c>QUST</c> records' decoded stage/objective structure, keyed by <b>plugin-local</b>
+    /// FormID (re-keyed into save space by <see cref="PluginDatabase"/>) — the masters side of the quest-log
+    /// reader (ROADMAP §6 #10). Empty unless the plugin defines quests.</summary>
+    public IReadOnlyList<QuestDefinition> Quests { get; }
+
+    private TesPlugin(
+        string fileName,
+        IReadOnlyList<string> masters,
+        IReadOnlyList<(uint, string, string, int)> forms,
+        IReadOnlyList<QuestDefinition> quests)
     {
         FileName = fileName;
         Masters = masters;
         Forms = forms;
+        Quests = quests;
     }
 
     public static TesPlugin Load(string path)
@@ -92,6 +102,7 @@ public sealed class TesPlugin
 
         // ---- top-level groups ----
         var forms = new List<(uint, string, string, int)>();
+        var quests = new List<QuestDefinition>();
         while (true)
         {
             var gsig = ReadSignature(fs);
@@ -110,16 +121,18 @@ public sealed class TesPlugin
 
             var labelType = Encoding.ASCII.GetString(label);
             if (groupType == 0 && NamedTypes.Contains(labelType))
-                ReadRecords(fs, contentSize, localized, forms);
+                ReadRecords(fs, contentSize, localized, forms, quests);
             else
                 fs.Seek(contentSize, SeekOrigin.Current); // skip the whole group without reading its bytes
         }
 
-        return new TesPlugin(fileName, masters, forms);
+        return new TesPlugin(fileName, masters, forms, quests);
     }
 
     /// <summary>Reads the records (and defensively skips any nested groups) inside one top-level item group.</summary>
-    private static void ReadRecords(Stream fs, long contentSize, bool localized, List<(uint, string, string, int)> forms)
+    private static void ReadRecords(
+        Stream fs, long contentSize, bool localized,
+        List<(uint, string, string, int)> forms, List<QuestDefinition> quests)
     {
         var end = fs.Position + contentSize;
         while (fs.Position < end)
@@ -142,9 +155,10 @@ public sealed class TesPlugin
             if ((flags & CompressedFlag) != 0)
                 data = Decompress(data);
 
+            var subs = ParseSubrecords(data);
             string? edid = null, full = null;
             var noteType = -1;
-            foreach (var (type, sub) in ParseSubrecords(data))
+            foreach (var (type, sub) in subs)
             {
                 if (type == "EDID") edid = ZString(sub);
                 else if (type == "FULL" && !localized) full = ZString(sub);
@@ -153,7 +167,90 @@ public sealed class TesPlugin
             var name = full ?? edid;
             if (!string.IsNullOrEmpty(name))
                 forms.Add((formId, name, sig, noteType)); // sig is the record type (WEAP/ARMO/ALCH/AMMO/MISC/…)
+            if (sig == "QUST")
+                quests.Add(ParseQuest(formId, subs, localized));
         }
+    }
+
+    /// <summary>
+    /// Decodes a <c>QUST</c> record's ordered subrecords into its <see cref="QuestDefinition"/> (ROADMAP §6 #10).
+    /// FO3/FNV lay out a quest as a <b>stages block</b> then an <b>objectives block</b>:
+    /// <list type="bullet">
+    /// <item>A stage begins with <c>INDX</c> (the stage index); its <c>QSDT</c> carries the stage flag byte and
+    /// <c>CNAM</c> the Pip-Boy log-entry text. (The exact <c>QSDT</c> bit meaning is kept raw — see
+    /// <see cref="QuestStageDef.Flags"/>.)</item>
+    /// <item>An objective begins with <c>QOBJ</c> (the objective index), <c>NNAM</c> is its display text, and
+    /// one or more <c>QSTA</c> name its target reference(s) — the placed refs whose enable-state encodes
+    /// objective progress in the save (ROADMAP §6 #10). A <c>QSTA</c>'s leading u32 is the target FormID.</item>
+    /// </list>
+    /// Parsing is defensive: a malformed/short subrecord is skipped rather than throwing.
+    /// </summary>
+    private static QuestDefinition ParseQuest(uint formId, List<(string Type, byte[] Data)> subs, bool localized)
+    {
+        var stages = new List<QuestStageDef>();
+        var objectives = new List<QuestObjectiveDef>();
+
+        int? pendingStage = null;
+        byte pendingFlags = 0;
+        string? pendingLog = null;
+
+        void FlushStage()
+        {
+            if (pendingStage is { } idx)
+                stages.Add(new QuestStageDef(idx, pendingFlags, pendingLog));
+            pendingStage = null;
+            pendingFlags = 0;
+            pendingLog = null;
+        }
+
+        int curObjIndex = 0;
+        string? curObjText = null;
+        var curTargets = new List<uint>();
+        var inObjective = false;
+
+        void FlushObjective()
+        {
+            if (inObjective)
+                objectives.Add(new QuestObjectiveDef(curObjIndex, curObjText, curTargets));
+            curObjIndex = 0;
+            curObjText = null;
+            curTargets = [];
+            inObjective = false;
+        }
+
+        foreach (var (type, sub) in subs)
+        {
+            switch (type)
+            {
+                case "INDX":
+                    FlushStage();
+                    pendingStage = sub.Length >= 2 ? BinaryPrimitives.ReadInt16LittleEndian(sub) : sub.Length == 1 ? sub[0] : 0;
+                    break;
+                case "QSDT" when pendingStage is not null && sub.Length >= 1:
+                    pendingFlags = sub[0];
+                    break;
+                case "CNAM" when pendingStage is not null && !localized:
+                    pendingLog ??= ZString(sub);
+                    break;
+                case "QOBJ":
+                    FlushStage();
+                    FlushObjective();
+                    inObjective = true;
+                    curObjIndex = sub.Length >= 4 ? BinaryPrimitives.ReadInt32LittleEndian(sub)
+                        : sub.Length >= 2 ? BinaryPrimitives.ReadInt16LittleEndian(sub) : 0;
+                    break;
+                case "NNAM" when inObjective && !localized:
+                    curObjText ??= ZString(sub);
+                    break;
+                case "QSTA" when inObjective && sub.Length >= 4:
+                    curTargets.Add(BinaryPrimitives.ReadUInt32LittleEndian(sub)); // leading u32 = target reference FormID
+                    break;
+            }
+        }
+        FlushStage();
+        FlushObjective();
+
+        return new QuestDefinition(formId, stages, objectives);
     }
 
     /// <summary>
@@ -243,3 +340,19 @@ public sealed class TesPlugin
         return buf;
     }
 }
+
+/// <summary>One stage of a <c>QUST</c> definition: its <paramref name="Index"/> (the <c>INDX</c> stage index),
+/// the raw <c>QSDT</c> <paramref name="Flags"/> byte (kept raw — its completion/fail bit semantics are not yet
+/// FNV-verified, ROADMAP §6 #10), and the Pip-Boy log-entry text (<c>CNAM</c>), or null when none.</summary>
+public sealed record QuestStageDef(int Index, byte Flags, string? LogText);
+
+/// <summary>One objective of a <c>QUST</c> definition: its <paramref name="Index"/> (<c>QOBJ</c>), display
+/// <paramref name="Text"/> (<c>NNAM</c>), and the FormIDs of its target reference(s) (<c>QSTA</c>) — the placed
+/// refs whose save-side enable-state encodes whether the objective is active (ROADMAP §6 #10).</summary>
+public sealed record QuestObjectiveDef(int Index, string? Text, IReadOnlyList<uint> TargetFormIds);
+
+/// <summary>A <c>QUST</c> record's decoded structure: its FormID (plugin-local as read from a
+/// <see cref="TesPlugin"/>, re-keyed into save space by <see cref="PluginDatabase"/>) plus its stages and
+/// objectives. This is the static quest <i>definition</i> from the masters; the player's progress against it
+/// lives in the save's change forms (read by <c>QuestLog</c>).</summary>
+public sealed record QuestDefinition(uint FormId, IReadOnlyList<QuestStageDef> Stages, IReadOnlyList<QuestObjectiveDef> Objectives);

@@ -222,6 +222,49 @@ public static class ReferenceChangeForm
         return l;
     }
 
+    // ---- QUST change-form flags (ROADMAP §6 #10 / §6 #13) -------------------------------------------
+    // A QUST change form is NOT a reference, so the REFR/ACHR bit table above does not apply: bit31 is
+    // CHANGE_QUEST_STAGES here, not GAME_ONLY. The top three bits are FNV-corroborated by the §6 #10
+    // controlled diff (chargen "Ain't That a Kick" 0x80000000→0xC0000000 grew a script field; the active
+    // formType-9 forms carry 0xE0000002): bit31 STAGES, bit30 SCRIPT, bit29 OBJECTIVES. bit0 FORM_FLAGS is
+    // the shared CHANGE_FORM_FLAGS; bit1 QUEST_FLAGS is spec-derived (UESP) and shown for readability.
+
+    /// <summary>changeFlags bit → label for a <c>QUST</c> change form (distinct from the REFR/ACHR tables —
+    /// see <see cref="DescribeQuestFlags"/>). null = not identified.</summary>
+    public static readonly string?[] QuestFlagBitLabels = BuildQuestLabels();
+
+    /// <summary>CHANGE_QUEST_STAGES (bit 31): the record carries the quest's stage list / packed stage state.</summary>
+    public const uint ChangeQuestStages = 0x80000000;
+
+    /// <summary>CHANGE_QUEST_SCRIPT (bit 30): the record carries quest-script state (a <c>[u32 script]</c> field).</summary>
+    public const uint ChangeQuestScript = 0x40000000;
+
+    /// <summary>CHANGE_QUEST_OBJECTIVES (bit 29): the record carries quest-objective state.</summary>
+    public const uint ChangeQuestObjectives = 0x20000000;
+
+    static string?[] BuildQuestLabels()
+    {
+        var l = new string?[32];
+        l[0] = "FORM_FLAGS";        // CHANGE_FORM_FLAGS (shared)
+        l[1] = "QUEST_FLAGS";       // CHANGE_QUEST_FLAGS (spec-derived)
+        l[29] = "QUEST_OBJECTIVES"; // CHANGE_QUEST_OBJECTIVES (§6 #10)
+        l[30] = "QUEST_SCRIPT";     // CHANGE_QUEST_SCRIPT     (§6 #10)
+        l[31] = "QUEST_STAGES";     // CHANGE_QUEST_STAGES     (§6 #10)
+        return l;
+    }
+
+    /// <summary>Describes a <c>QUST</c> change form's <c>changeFlags</c> using the quest bit table
+    /// (<see cref="QuestFlagBitLabels"/>) — the counterpart to <see cref="DescribeFlags"/> for reference
+    /// records, which would mislabel bit31 as <c>GAME_ONLY</c> on a quest (ROADMAP §6 #13).</summary>
+    public static string DescribeQuestFlags(uint flags)
+    {
+        var parts = new List<string>();
+        for (var b = 0; b < 32; b++)
+            if ((flags & (1u << b)) != 0)
+                parts.Add(QuestFlagBitLabels[b] is { } name ? $"bit{b}({name})" : $"bit{b}");
+        return parts.Count == 0 ? "(none)" : string.Join(' ', parts);
+    }
+
     /// <summary>The label for one set <c>changeFlags</c> bit given the record <paramref name="kind"/>: the shared
     /// label, or — for a context-dependent bit — the actor/object label (or both, <c>actor|object</c>, when
     /// <paramref name="kind"/> is <see cref="RefKind.Unknown"/>). Returns null when the bit isn't named.</summary>

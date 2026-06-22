@@ -27,6 +27,9 @@ if (args.Length < 2)
                                               the game masters; dataDir overrides Data-folder auto-detect)
           fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
           fnvsave notes <save.fos> [dataDir]  List the player's Pip-Boy Data -> Notes — READ and UNREAD (§4k/§4k.1)
+          fnvsave quests <save.fos> [dataDir] [--raw]   List the player's quests (§6 #10): each tracked quest
+                                              with its stages (done/time) and objectives (active + target
+                                              enable-state). --raw hex-dumps each quest change form (R&D)
           fnvsave notescan <dir>             Walk every .fos in a folder and aggregate the read-note markers:
                                               changeFlags values + whether each type-0x1F marker resolves to a
                                               NOTE record + inventory-reference confirmation (R&D §4k.1 #1-3)
@@ -159,6 +162,11 @@ try
             break;
         case "notes":
             Notes(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
+            break;
+        case "quests":
+            Quests(FalloutSave.Load(path), path,
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path),
+                args.Contains("--raw"));
             break;
         case "notescan":
             NoteScan(path);
@@ -522,6 +530,53 @@ static void Notes(FalloutSave s, string savePath, string? dataDir)
         var media = db.NoteMediaType(n.FormId) ?? "?";
         Console.WriteLine($"  [{tag}]  {db.Resolve(n.FormId) ?? "?",-40}  {media,-6}  0x{n.FormId:X8} (mod {n.ModIndex:X2})  {src}");
     }
+}
+
+static void Quests(FalloutSave s, string savePath, string? dataDir, bool raw)
+{
+    // The player's quest log (ROADMAP §6 #10). Classifying a change form as a quest needs the masters
+    // (refID -> FormID -> QUST), as do stage/objective names, so the database is required.
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    if (db.Count == 0)
+    {
+        Console.WriteLine("Quest log needs the game Data folder to classify quest change forms — pass it as the 2nd argument.");
+        return;
+    }
+
+    if (raw)
+    {
+        // R&D: dump each quest change form's flags + bytes, to verify the stage-list layout against a save.
+        foreach (var cf in s.EnumerateChangeForms())
+        {
+            if (db.RecordType(cf.FormId) != "QUST") continue;
+            Console.WriteLine($"\n0x{cf.FormId:X8} {db.Resolve(cf.FormId) ?? "?"}  type 0x{cf.TypeByte:X2} (form 0x{cf.FormType:X2})  len {cf.DataLength}");
+            Console.WriteLine($"  changeFlags 0x{cf.ChangeFlags:X8} = {ReferenceChangeForm.DescribeQuestFlags(cf.ChangeFlags)}");
+            var bytes = s.ReadAt(cf.DataOffset, Math.Min(cf.DataLength, 256));
+            Console.WriteLine("  " + Convert.ToHexString(bytes));
+        }
+        return;
+    }
+
+    var log = QuestLog.Read(s, db);
+    Console.WriteLine($"Quests tracked: {log.Quests.Count}\n");
+    foreach (var q in log.Quests.OrderBy(q => q.Name ?? "￿", StringComparer.OrdinalIgnoreCase))
+    {
+        Console.WriteLine($"{q.Name ?? "?",-44} [{q.State}]  0x{q.FormId:X8}");
+        foreach (var stage in q.Stages.OrderBy(st => st.Index))
+        {
+            var when = stage.CompletionTime is { } t ? $"  @t={t}" : "";
+            var log2 = stage.LogText is { Length: > 0 } ? $"  \"{Truncate(stage.LogText, 70)}\"" : "";
+            Console.WriteLine($"    stage {stage.Index,-3} {(stage.Done ? "[x]" : "[ ]")}{when}{log2}");
+        }
+        foreach (var o in q.Objectives.OrderBy(o => o.Index))
+        {
+            var mark = o.Active switch { true => "[active]  ", false => "[inactive]", null => "[unknown] " };
+            var targets = o.Targets.Count == 0 ? "" : "  targets: " + string.Join(", ", o.Targets.Select(t => $"0x{t.FormId:X8}={t.State}"));
+            Console.WriteLine($"    obj {o.Index,-3} {mark} {Truncate(o.Text ?? "?", 60)}{targets}");
+        }
+    }
+
+    static string Truncate(string v, int max) => v.Length <= max ? v : v[..(max - 1)] + "…";
 }
 
 static void NoteScan(string dir)

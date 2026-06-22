@@ -173,6 +173,34 @@
                     </StackPanel>
                 </TabItem>
 
+                <TabItem Header="Quests">
+                    <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10" Text="{Binding QuestsInfo}"/>
+                        <DataGrid ItemsSource="{Binding Quests}" AutoGenerateColumns="False" IsReadOnly="True"
+                                  CanUserAddRows="False" HeadersVisibility="Column" FontFamily="Consolas"
+                                  Width="780" HorizontalAlignment="Left" MaxHeight="460"
+                                  RowDetailsVisibilityMode="VisibleWhenSelected">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Quest" Binding="{Binding Name}" Width="320"/>
+                                <DataGridTextColumn Header="State" Binding="{Binding State}" Width="90"/>
+                                <DataGridTextColumn Header="Progress" Binding="{Binding Progress}" Width="100"/>
+                                <DataGridTextColumn Header="FormID" Binding="{Binding FormIdHex}" Width="120"/>
+                            </DataGrid.Columns>
+                            <DataGrid.RowDetailsTemplate>
+                                <DataTemplate>
+                                    <ItemsControl ItemsSource="{Binding Lines}" Margin="24,4,0,8">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding}" FontFamily="Consolas" Foreground="#333"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </DataTemplate>
+                            </DataGrid.RowDetailsTemplate>
+                        </DataGrid>
+                    </StackPanel>
+                </TabItem>
+
                 <TabItem Header="Misc Stats">
                     <DataGrid ItemsSource="{Binding MiscStats}" AutoGenerateColumns="False" IsReadOnly="True"
                               HeadersVisibility="Column" FontFamily="Consolas" Margin="2">

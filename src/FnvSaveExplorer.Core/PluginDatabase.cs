@@ -25,6 +25,7 @@ public sealed class PluginDatabase
     private readonly Dictionary<uint, string> _names;
     private readonly Dictionary<uint, string> _types; // FormID -> record signature (WEAP/ARMO/ALCH/AMMO/MISC/…)
     private readonly Dictionary<uint, int> _noteTypes; // FormID -> NOTE media byte (0=Sound 1=Text 2=Image 3=Voice)
+    private readonly Dictionary<uint, QuestDefinition> _quests; // FormID -> QUST stage/objective structure (§6 #10)
 
     /// <summary>The game <c>Data</c> folder the base/DLC names came from, or <c>null</c> when none was found.</summary>
     public string? DataFolder { get; }
@@ -40,18 +41,19 @@ public sealed class PluginDatabase
 
     public int Count => _names.Count;
 
-    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved)
+    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved)
     {
         _names = names;
         _types = types;
         _noteTypes = noteTypes;
+        _quests = quests;
         DataFolder = dataFolder;
         ModsFolder = modsFolder;
         ResolvedPlugins = resolved;
     }
 
     /// <summary>An empty database; every <see cref="Resolve"/> returns <c>null</c>.</summary>
-    public static readonly PluginDatabase Empty = new([], [], [], null, null, []);
+    public static readonly PluginDatabase Empty = new([], [], [], [], null, null, []);
 
     /// <summary>
     /// Builds a database for <paramref name="save"/>, auto-detecting the game <c>Data</c> folder (or using an
@@ -78,6 +80,7 @@ public sealed class PluginDatabase
         var names = new Dictionary<uint, string>();
         var types = new Dictionary<uint, string>();
         var noteTypes = new Dictionary<uint, int>();
+        var quests = new Dictionary<uint, QuestDefinition>();
         var resolved = new List<string>();
 
         // Case-insensitive load-order index, for mapping a plugin's masters back to save indices.
@@ -110,20 +113,44 @@ public sealed class PluginDatabase
 
             foreach (var (localFormId, name, type, noteType) in plugin.Forms)
             {
-                var saveHigh = remap[(int)(localFormId >> 24)];
-                if (saveHigh < 0)
+                if (Remap(localFormId, remap) is not { } saveFormId)
                     continue; // references a master that isn't in this save's load order
-                var saveFormId = ((uint)saveHigh << 24) | (localFormId & 0x00FFFFFF);
                 names[saveFormId] = name; // later (load-order) plugin overrides win
                 types[saveFormId] = type;
                 if (noteType >= 0)
                     noteTypes[saveFormId] = noteType;
             }
 
+            // QUST definitions: re-key the quest's own FormID AND each objective's target-ref FormIDs through
+            // the same remap, so a target ref looks up directly against the save's change forms (§6 #10).
+            foreach (var q in plugin.Quests)
+            {
+                if (Remap(q.FormId, remap) is not { } questFormId)
+                    continue;
+                var objectives = new List<QuestObjectiveDef>(q.Objectives.Count);
+                foreach (var o in q.Objectives)
+                {
+                    var targets = new List<uint>(o.TargetFormIds.Count);
+                    foreach (var t in o.TargetFormIds)
+                        if (Remap(t, remap) is { } st)
+                            targets.Add(st);
+                    objectives.Add(new QuestObjectiveDef(o.Index, o.Text, targets));
+                }
+                quests[questFormId] = new QuestDefinition(questFormId, q.Stages, objectives);
+            }
+
             resolved.Add(loadOrder[i]);
         }
 
-        return new PluginDatabase(names, types, noteTypes, dataFolder, modsFolder, resolved);
+        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved);
+    }
+
+    /// <summary>Re-keys a plugin-local FormID into save space using the plugin's high-byte → save-index
+    /// <paramref name="remap"/>, or null when its master isn't in this save's load order.</summary>
+    private static uint? Remap(uint localFormId, int[] remap)
+    {
+        var saveHigh = remap[(int)(localFormId >> 24)];
+        return saveHigh < 0 ? null : ((uint)saveHigh << 24) | (localFormId & 0x00FFFFFF);
     }
 
     /// <summary>
@@ -159,6 +186,13 @@ public sealed class PluginDatabase
     /// <summary>The base-form record signature for a save FormID (<c>WEAP</c>/<c>ARMO</c>/<c>ALCH</c>/
     /// <c>AMMO</c>/<c>MISC</c>/…), or <c>null</c> if unknown.</summary>
     public string? RecordType(uint formId) => _types.TryGetValue(formId, out var t) ? t : null;
+
+    /// <summary>The decoded <c>QUST</c> definition (stages + objectives + target refs) for a save FormID, or
+    /// <c>null</c> if the FormID isn't a known quest. The masters side of the quest-log reader (ROADMAP §6 #10).</summary>
+    public QuestDefinition? Quest(uint formId) => _quests.TryGetValue(formId, out var q) ? q : null;
+
+    /// <summary>All known quest definitions, keyed by save FormID.</summary>
+    public IReadOnlyDictionary<uint, QuestDefinition> Quests => _quests;
 
     /// <summary>The media type of a <c>NOTE</c> form — <c>Text</c> / <c>Voice</c> / <c>Sound</c> / <c>Image</c>
     /// (the holodisk-vs-text distinction) — read from the base form's <c>DATA</c> byte, or <c>null</c> if the
