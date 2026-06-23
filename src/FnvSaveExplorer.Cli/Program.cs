@@ -175,6 +175,10 @@ try
             QuestDebug(FalloutSave.Load(path), path,
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
             break;
+        case "pipboy":
+            Pipboy(FalloutSave.Load(path), path,
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
+            break;
         case "qscript":
             QuestScriptDump(FalloutSave.Load(path), path, args[2],
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path && a != args[2]));
@@ -648,6 +652,27 @@ static void QuestDebug(FalloutSave s, string savePath, string? dataDir)
 // R&D (ROADMAP §6 #16): for one quest, print its masters definition (EDID/name/SGE) and, per stage, the
 // parsed quest-script effects (QuestScript.Parse over the stage's SCTX). Validates the whole extraction
 // pipeline end-to-end on real masters data: TesPlugin SCTX -> QuestDefinition -> QuestScript effects.
+// The computed in-game Pip-Boy quest list (ROADMAP §6 #16): masters quest-script interpretation.
+static void Pipboy(FalloutSave s, string savePath, string? dataDir)
+{
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    if (db.Count == 0) { Console.WriteLine("Quest list needs the game Data folder — pass it as the 2nd argument."); return; }
+
+    var pip = QuestPipboy.Compute(s, db);
+    var active = pip.Quests.Count(q => q.State == PipboyQuestState.Active);
+    var done = pip.Quests.Count(q => q.State == PipboyQuestState.Completed);
+    var failed = pip.Quests.Count(q => q.State == PipboyQuestState.Failed);
+    Console.WriteLine($"Computed Pip-Boy quests: {pip.Quests.Count} ({active} active, {done} completed, {failed} failed)");
+    Console.WriteLine("Computed from masters quest scripts (ROADMAP §6 #16) — a high-coverage approximation, not yet a guaranteed mirror.\n");
+    foreach (var q in pip.Quests)
+    {
+        var tag = q.State switch { PipboyQuestState.Completed => "[completed]", PipboyQuestState.Failed => "[failed]   ", _ => "[active]   " };
+        Console.WriteLine($"{tag} {q.Name ?? "?",-44} 0x{q.FormId:X8}{(q.StartGameEnabled ? "  (SGE)" : "")}");
+        foreach (var o in q.Objectives)
+            Console.WriteLine($"      {(o.Completed ? "[x]" : "[ ]")} {(o.Optional ? "(opt) " : "")}{o.Text}");
+    }
+}
+
 static void QuestScriptDump(FalloutSave s, string savePath, string formIdArg, string? dataDir)
 {
     var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));

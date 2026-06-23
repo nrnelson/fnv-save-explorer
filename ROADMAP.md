@@ -922,10 +922,37 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       will over-fire. This is the accuracy ceiling of Phase A and the concrete reason a faithful result may still need
       light condition evaluation (Phase B) for the propagated cases. Decoding the formType-7 packed bitmask (1 quest)
       and finding where VMQ01's running-stage actually persists are the two specific unknowns to close next.
-    - **Scaffolding shipped this session (uncommitted, kept):** `QuestDefinition.{DataFlags,Name,StartGameEnabled,
+    - **Scaffolding shipped this session:** `QuestDefinition.{DataFlags,Name,StartGameEnabled,
       IsPlayerFacing}` (QUST `DATA` bit0 = Start Game Enabled; player-facing = FULL name + ≥1 objective — the first-order
       filter: 194 player-facing / 67 SGE / only 7 shown on Save 57), `TesPlugin.DumpQust`, CLI `qrec` + `qdbg`
       (masters × SGE × change-form-presence × decoded-objective correlation).
+    **PROGRESS 2026-06-23 (cont.) — the Phase-A interpreter is BUILT (`Core/QuestPipboy.cs`, CLI `pipboy`), and the
+    Save-57 validation pins down EXACTLY where it stands.** The pipeline `TesPlugin SCTX → QuestScript.Parse →
+    QuestPipboy.Compute` runs: it seeds Start-Game-Enabled quests at their lowest stage, fixpoint-propagates
+    **non-conditional** `SetStage`/`StartQuest` across quests, applies reached-stage objective effects, and assembles
+    "player-facing + running/completed + has a displayed objective". **Two real wins, one real miss, measured on Save 57
+    (ground truth = 7):**
+    - ✅ **The running-gate correctly EXCLUDES the background-init quests** that a raw save read wrongly surfaces —
+      "Welcome to the Big Empty"/"Supply Train"/`NVDLC04*` are gone (they're not SGE and nothing started them), even
+      though the save records a displayed objective for them. This is the single biggest correctness win over the old
+      `QuestLog.Read` anti-set, and it's locked by a synthetic test (`Quest_that_is_never_started_is_excluded…`).
+    - ✅ The 4 SGE DLC-intro quests come out right (Sierra Madre / Happy Trails Expedition / Midnight / The Reunion,
+      Active with the correct objective).
+    - ❌ **Precision is poor: 42 computed vs 7 actual.** Seeding *every* SGE quest at its lowest stage over-fires —
+      ~37 SGE quests (Ring-a-Ding-Ding!, Still in the Dark, Climb Ev'ry Mountain, …) have a displayable first-stage
+      objective in the masters but the player **hasn't reached that stage**, and the masters alone can't say so. And
+      the 3 Goodsprings quests (Ain't That a Kick, Back in the Saddle, They Went That-a-Way) are **missed** — their
+      reached stage lives only in the undecoded formType-7 bitmask (VCG01) or a script chain with no save anchor.
+    **Root cause, now precise:** "is stage N reached" is *runtime* state. For the shown quests it is **neither in the
+    save** (empty ref-style template / no change form) **nor in the masters** (a startup TRIGGER sets it — a GameMode
+    `if`-gated `SetStage`, a dialogue/activator result, a level/time condition). So pure masters+SGE cannot reach the
+    right precision. **The two candidate next levers:** (a) parse the quest's **own GameMode script** (`SCRI`→`SCPT`
+    `SCTX`) and follow its self-`SetStage` calls condition-blind — may include the DLC intros' real start and exclude
+    the externally-triggered quests; risk: GameMode `SetStage`s are heavily `if`-gated so this may still over/under-fire;
+    (b) **gate on a save signal** — require a computed-displayed objective to be corroborated by the save (an enabled
+    objective-target ref, §6 #10, or a `CHANGE_QUEST_OBJECTIVES` status), which won't help the no-delta intros but
+    would prune the 37 false positives. Plus the standalone **formType-7 decode** to recover the Goodsprings chain.
+    `QuestPipboy` + `pipboy` + 4 synthetic tests are the validated framework; the seed is the open problem.
 
 ---
 
