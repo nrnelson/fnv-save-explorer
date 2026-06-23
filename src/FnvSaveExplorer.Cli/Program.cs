@@ -27,9 +27,12 @@ if (args.Length < 2)
                                               the game masters; dataDir overrides Data-folder auto-detect)
           fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
           fnvsave notes <save.fos> [dataDir]  List the player's Pip-Boy Data -> Notes — READ and UNREAD (§4k/§4k.1)
+          fnvsave pipboy <save.fos> [dataDir]   The COMPUTED in-game Pip-Boy quest list (§6 #16): interprets the
+                                              masters' quest scripts (SGE startup + reached-stage effects + guard eval).
+                                              active/completed + displayed objectives. (Goodsprings chargen chain omitted.)
           fnvsave quests <save.fos> [dataDir] [--raw]   List quests whose state the save records (§6 #10): stages
                                               (done/time) + objectives ([active]/[done], from CHANGE_QUEST_OBJECTIVES).
-                                              NOT the Pip-Boy list (see the command's note). --raw hex-dumps each form
+                                              NOT the Pip-Boy list (use `pipboy` for that). --raw hex-dumps each form
           fnvsave notescan <dir>             Walk every .fos in a folder and aggregate the read-note markers:
                                               changeFlags values + whether each type-0x1F marker resolves to a
                                               NOTE record + inventory-reference confirmation (R&D §4k.1 #1-3)

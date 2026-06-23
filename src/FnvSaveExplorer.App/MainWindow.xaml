@@ -180,10 +180,23 @@
                                   CanUserAddRows="False" HeadersVisibility="Column" FontFamily="Consolas"
                                   Width="780" HorizontalAlignment="Left" MaxHeight="460"
                                   RowDetailsVisibilityMode="VisibleWhenSelected">
+                            <DataGrid.RowStyle>
+                                <Style TargetType="DataGridRow">
+                                    <Style.Triggers>
+                                        <!-- Completed quests show greyed, matching the in-game Pip-Boy. -->
+                                        <DataTrigger Binding="{Binding State}" Value="Completed">
+                                            <Setter Property="Foreground" Value="Gray"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding State}" Value="Failed">
+                                            <Setter Property="Foreground" Value="#B00020"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </DataGrid.RowStyle>
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Quest" Binding="{Binding Name}" Width="320"/>
                                 <DataGridTextColumn Header="State" Binding="{Binding State}" Width="90"/>
-                                <DataGridTextColumn Header="Progress" Binding="{Binding Progress}" Width="100"/>
+                                <DataGridTextColumn Header="Objectives" Binding="{Binding Progress}" Width="100"/>
                                 <DataGridTextColumn Header="FormID" Binding="{Binding FormIdHex}" Width="120"/>
                             </DataGrid.Columns>
                             <DataGrid.RowDetailsTemplate>

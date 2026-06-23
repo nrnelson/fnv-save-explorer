@@ -133,17 +133,17 @@ public sealed class QuestRow
     public string FormIdHex => $"0x{FormId:X8}";
     public string Name { get; init; } = "";
 
-    /// <summary>Active / Completed / Unknown — see <see cref="QuestState"/>.</summary>
+    /// <summary>Active / Completed / Failed — see <see cref="PipboyQuestState"/>.</summary>
     public string State { get; init; } = "";
 
+    /// <summary>Displayed objective count and how many are ticked (the Pip-Boy task list).</summary>
     public int StageCount { get; init; }
     public int DoneStageCount { get; init; }
 
-    /// <summary>"3/6 stages" when the quest stores a decoded stage list, else blank (state lives in the
-    /// undecoded packed form, ROADMAP §6 #10).</summary>
-    public string Progress => StageCount > 0 ? $"{DoneStageCount}/{StageCount} stages" : "";
+    /// <summary>"2/4 done" — completed vs displayed objectives — or blank when the quest shows none.</summary>
+    public string Progress => StageCount > 0 ? $"{DoneStageCount}/{StageCount} done" : "";
 
-    /// <summary>The quest's stage + objective detail lines, shown in the expandable row-details panel.</summary>
+    /// <summary>The quest's displayed objectives, shown in the expandable row-details panel.</summary>
     public IReadOnlyList<string> Lines { get; init; } = [];
 }
 
@@ -423,64 +423,47 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Fills the read-only Quests grid with the player's quest log (ROADMAP §6 #10): each tracked quest
-    /// with its decoded stages (done + completion time) and objectives (active state + target enable-state),
-    /// flattened into per-quest detail lines. Classifying a change form as a quest, and naming its stages and
-    /// objectives, all need the masters, so without a Data folder the grid stays empty.</summary>
+    /// <summary>Fills the read-only Quests grid with the <b>computed Pip-Boy quest list</b> (ROADMAP §6 #16):
+    /// <see cref="QuestPipboy"/> reconstructs which quests the in-game Pip-Boy shows by interpreting the masters'
+    /// quest scripts (Start-Game-Enabled startup, reached-stage effects, condition-evaluated guards), not by
+    /// reading the save's recorded progress (which over- and under-includes). Each shown quest is flattened to its
+    /// displayed objectives. Needs the masters, so without a Data folder the grid stays empty.</summary>
     private void PopulateQuests(FalloutSave save, PluginDatabase db)
     {
         Quests.Clear();
         if (db.Count == 0)
         {
-            QuestsInfo = "The quest log needs the game's Data folder (FalloutNV.esm) to classify and name " +
-                         "quests — set it on the Edit tab.";
+            QuestsInfo = "The computed Pip-Boy quest list needs the game's Data folder (FalloutNV.esm) to read the " +
+                         "quest scripts — set it on the Edit tab.";
             return;
         }
 
-        var log = QuestLog.Read(save, db);
-        foreach (var q in log.Quests
-                     .OrderBy(q => q.State == QuestState.Unknown)                  // decoded-progress quests first
-                     .ThenBy(q => q.Name ?? "￿", StringComparer.OrdinalIgnoreCase))
+        var pip = QuestPipboy.Compute(save, db); // already ordered: active first, then completed/failed, by name
+        foreach (var q in pip.Quests)
         {
-            var lines = new List<string>();
-            foreach (var s in q.Stages.OrderBy(s => s.Index))
-            {
-                var when = s.CompletionTime is { } t ? $"  (t={t})" : "";
-                var text = s.LogText is { Length: > 0 } ? $"  {s.LogText}" : "";
-                lines.Add($"stage {s.Index,-3} {(s.Done ? "[x]" : "[ ]")}{when}{text}");
-            }
-            foreach (var o in q.Objectives.OrderBy(o => o.Index))
-            {
-                // Save-side display/complete status (bit0/bit1); skip objectives the save marks not-displayed.
-                var mark = (o.Displayed, o.Completed) switch
-                {
-                    (true, true) => "done",
-                    (true, _) => "active",
-                    (false, true) => "done*",
-                    (false, _) => (string?)null,
-                    (null, _) => "—",
-                };
-                if (mark is null) continue;
-                lines.Add($"obj {o.Index,-3} [{mark}]  {o.Text ?? "?"}");
-            }
+            var lines = q.Objectives
+                .Select(o => $"{(o.Completed ? "[x]" : "[ ]")} {(o.Optional ? "(optional) " : "")}{o.Text ?? "?"}")
+                .ToList();
 
             Quests.Add(new QuestRow
             {
                 FormId = q.FormId,
                 Name = q.Name ?? "",
                 State = q.State.ToString(),
-                StageCount = q.Stages.Count,
-                DoneStageCount = q.Stages.Count(s => s.Done),
+                StageCount = q.Objectives.Count,
+                DoneStageCount = q.Objectives.Count(o => o.Completed),
                 Lines = lines,
             });
         }
 
-        QuestsInfo = $"{Quests.Count} quest(s) whose stage/objective state this save records. ⚠ This is NOT your " +
-                     "Pip-Boy quest list and can't be made into one from the save alone: it includes quests the game " +
-                     "background-initialized but you haven't started (e.g. DLC main quests like “Welcome to the Big " +
-                     "Empty” before you enter the DLC — identical save bytes to a started quest), and omits quests " +
-                     "shown from masters defaults (no save delta). The real Pip-Boy list needs the quest-script " +
-                     "interpreter (ROADMAP §6 #16). Read-only — quest edits are length-changing.";
+        var active = pip.Quests.Count(q => q.State == PipboyQuestState.Active);
+        var done = pip.Quests.Count(q => q.State == PipboyQuestState.Completed);
+        QuestsInfo = $"Computed Pip-Boy quest list: {Quests.Count} quest(s) — {active} active, {done} completed. " +
+                     "Reconstructed by interpreting the masters' quest scripts (ROADMAP §6 #16), not just read from " +
+                     "the save — so it excludes background-initialized quests the save records but the Pip-Boy doesn't " +
+                     "show. Known gap: the Goodsprings character-creation quests (e.g. Ain't That a Kick / Back in the " +
+                     "Saddle / They Went That-a-Way) are omitted — their state isn't stored in any decodable save " +
+                     "field. Read-only.";
     }
 
     private static string DescribeInventory(int stacks, PluginDatabase db) =>
