@@ -303,7 +303,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             var mods = GameDataLocator.FindMo2Mods(path, string.IsNullOrWhiteSpace(EditModsFolder) ? null : EditModsFolder);
-            var invDb = PluginDatabase.ForSave(save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder, mods);
+            // withDialogue: the Pip-Boy quest interpreter needs INFO result scripts (Phase B) — otherwise
+            // dialogue-started quests (e.g. Ghost Town Gunfight) are missing on first load. ~120 ms once.
+            var invDb = PluginDatabase.ForSave(save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder, mods, withDialogue: true);
             if (invDb.DataFolder is not null && string.IsNullOrWhiteSpace(EditDataFolder))
                 EditDataFolder = invDb.DataFolder;
             if (invDb.ModsFolder is not null && string.IsNullOrWhiteSpace(EditModsFolder))
