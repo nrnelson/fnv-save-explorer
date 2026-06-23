@@ -346,7 +346,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (_save is null)
             return;
         var mods = GameDataLocator.FindMo2Mods(_loadedPath, string.IsNullOrWhiteSpace(EditModsFolder) ? null : EditModsFolder);
-        var db = PluginDatabase.ForSave(_save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder, mods);
+        // withDialogue: the Pip-Boy quest interpreter needs INFO result scripts (Phase B); ~120 ms once on load.
+        var db = PluginDatabase.ForSave(_save, string.IsNullOrWhiteSpace(EditDataFolder) ? null : EditDataFolder, mods, withDialogue: true);
         if (db.DataFolder is not null)
             EditDataFolder = db.DataFolder;
         if (db.ModsFolder is not null)

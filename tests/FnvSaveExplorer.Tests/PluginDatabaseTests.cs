@@ -278,14 +278,14 @@ internal static class EsmBuilder
     /// <summary>Builds a plugin with a <c>DIAL</c> top-level group that holds a <c>DIAL</c> topic record plus a
     /// nested "Topic Children" group (groupType 7) of <c>INFO</c> records, each carrying one result-script
     /// <c>SCTX</c> — exercising the Phase B dialogue reader's GRUP recursion (ROADMAP §6 #16).</summary>
-    public static byte[] PluginWithDialogue(IEnumerable<string> masters, IEnumerable<TestRecord> records, params string[] infoScripts)
+    public static byte[] PluginWithDialogue(IEnumerable<string> masters, IEnumerable<TestRecord> records, params (uint FormId, string Script)[] infoScripts)
     {
         var b = new List<byte>();
         b.AddRange(Header(masters));
         foreach (var group in records.GroupBy(r => r.Type))
             b.AddRange(Group(group.Key, group.Select(Record)));
 
-        var infos = infoScripts.Select(s => Record(new TestRecord("INFO", 0, null, null, Subs: [("SCTX", ZStr(s))])));
+        var infos = infoScripts.Select(s => Record(new TestRecord("INFO", s.FormId, null, null, Subs: [("SCTX", ZStr(s.Script))])));
         var topicChildren = GroupRaw(U32(0x00009999), 7, infos); // groupType 7 = Topic Children, label = parent DIAL formId
         var dialContent = new List<byte>();
         dialContent.AddRange(Record(new TestRecord("DIAL", 0x00009999, Edid: "TestTopic", Full: null)));

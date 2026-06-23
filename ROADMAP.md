@@ -1151,6 +1151,29 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     DLC worldspace's is not). Step 1 is the data layer; the gate is Step 2. Shipped: `TesPlugin.DialogueEffects`,
     `PluginDatabase.DialogueStartedQuests`, `qaudit` dialogue reclassification (+`[dlg]` in `--list`), 2 tests
     (`QuestDialogueTests`). All quest/script/dialogue tests green.
+    **PROGRESS 2026-06-23 — Phase B STEP 2 cracked + integrated: the SAID-INFO change form is the "dialogue actually
+    fired" save signal, and active dialogue-started quests now surface (validated).** When the player says a dialogue
+    line, the engine writes a change form for that **INFO** record. So an INFO that (a) carries a quest-affecting
+    result script (Step 1) and (b) is **present as a change form in the save** is a trigger that genuinely fired.
+    `TesPlugin.DialogueInfos` now keys effects by INFO FormID; `PluginDatabase.DialogueInfoEffects` maps save-space
+    INFO FormID → its effects; `QuestPipboy.Compute` adds a **save-gated dialogue seed**: for each said-INFO present
+    in the save, apply its `StartQuest`/non-conditional `SetStage` effects (then the existing fixpoint + objective
+    application run). New CLI `qfired` probes the raw signal. **Validation:**
+    - **q11 (the q8–q11 "Ghost Town Gunfight" ground truth): now surfaces VMS16 "Ghost Town Gunfight" ACTIVE** with
+      "Talk to Sunny" ticked + "Return to Ringo" active — matching the recorded progression. First dialogue-started
+      quest the interpreter recovers, confirmed against ground truth.
+    - **Save 57 oracle: stays 6/6 correct, 0 false positives** — the background-init anti-set (Welcome to the Big
+      Empty / Supply Train / NVDLC04*) is correctly NOT added, because their start dialogue was never said (no said-
+      INFO change form), even though they're dialogue-*targetable*. This is the precise gate Step 1 lacked.
+    - `qfired` on Save 57 shows VCG02 "Back in the Saddle" DID fire (said-INFO `0x0010A1E6` present), but it still
+      doesn't surface: its only non-conditional dialogue effect is `SetStage VCG02 10`, and stage 10 displays no
+      objective (it just `SetStage CGTutorial 54`); VCG02's later progression + completion are StopQuest/CGTutorial-
+      driven, not via a VCG02-targeting said-INFO. So **Save 57 is still 6/7** — VCG02 remains the lone gap, now
+      precisely characterised. The big win is that the **dialogue-started-quest mechanism is proven and live**; recall
+      on mid/late saves (dominated by such quests) should rise substantially — a mid-game Pip-Boy oracle is the next
+      thing needed to measure it. Shipped: `TesPlugin.DialogueInfos`, `PluginDatabase.DialogueInfoEffects`, the
+      QuestPipboy dialogue seed, CLI `qfired`, wired into `pipboy` + the GUI; 4 new tests. Full suite green except the
+      pre-existing chargen inventory edge case.
 
 ---
 

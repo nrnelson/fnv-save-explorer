@@ -16,7 +16,7 @@ public class QuestDialogueTests
             [],
             [new TestRecord("QUST", 0x00104EAE, Edid: "VMS16", Full: "Ghost Town Gunfight",
                 Subs: [("DATA", Data(0x00))])],
-            "StartQuest VMS16\nSetStage VMS16 10");
+            (0x00104C54u, "StartQuest VMS16\nSetStage VMS16 10"));
 
         using var off = new MemoryStream(bytes);
         Assert.Empty(TesPlugin.Read(off, "A.esm").DialogueEffects); // default: dialogue not read
@@ -37,7 +37,7 @@ public class QuestDialogueTests
                 new TestRecord("QUST", 0x00104EAE, Edid: "VMS16", Full: "Ghost Town Gunfight", Subs: [("DATA", Data(0x00))]),
                 new TestRecord("QUST", 0x00104C1C, Edid: "VCG01", Full: "Ain't That a Kick", Subs: [("DATA", Data(0x01))]),
             ],
-            "SetStage VMS16 10")); // only VMS16 is dialogue-started
+            (0x00104C54u, "SetStage VMS16 10"))); // only VMS16 is dialogue-started
 
         var withoutDlg = PluginDatabase.Build(["A.esm"], dir.Path);
         Assert.Empty(withoutDlg.DialogueStartedQuests);

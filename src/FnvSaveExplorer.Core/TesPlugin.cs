@@ -64,25 +64,30 @@ public sealed class TesPlugin
     /// reader (ROADMAP §6 #10). Empty unless the plugin defines quests.</summary>
     public IReadOnlyList<QuestDefinition> Quests { get; }
 
-    /// <summary>The quest-affecting calls (<c>StartQuest</c>/<c>SetStage</c>/<c>SetObjective…</c>) found in
-    /// dialogue <c>INFO</c> result-script source text (<c>SCTX</c>), each naming its target quest by editor id
-    /// (ROADMAP §6 #16 Phase B). Empty unless the plugin was read with <c>readDialogue: true</c> — dialogue is the
-    /// largest group, so it is parsed only when the Pip-Boy interpreter needs it. These are the start/advance
-    /// triggers that live OUTSIDE quest scripts (the "external-only" / dialogue-started class).</summary>
-    public IReadOnlyList<QuestScriptEffect> DialogueEffects { get; }
+    /// <summary>Each dialogue <c>INFO</c> record (by <b>plugin-local</b> FormID) whose result-script source text
+    /// (<c>SCTX</c>) carries quest-affecting calls (<c>StartQuest</c>/<c>SetStage</c>/<c>SetObjective…</c>),
+    /// naming target quests by editor id (ROADMAP §6 #16 Phase B). Empty unless the plugin was read with
+    /// <c>readDialogue: true</c> — dialogue is the largest group, so it is parsed only when the Pip-Boy interpreter
+    /// needs it. The <b>INFO's FormID matters</b>: when the player says that line the engine writes a change form
+    /// for the INFO, so its presence in the save is the "this dialogue actually fired" signal that distinguishes a
+    /// truly-started quest from a background-initialized one (Phase B step 2).</summary>
+    public IReadOnlyList<(uint InfoFormId, IReadOnlyList<QuestScriptEffect> Effects)> DialogueInfos { get; }
+
+    /// <summary>All dialogue result-script quest effects, flattened across <see cref="DialogueInfos"/>.</summary>
+    public IEnumerable<QuestScriptEffect> DialogueEffects => DialogueInfos.SelectMany(i => i.Effects);
 
     private TesPlugin(
         string fileName,
         IReadOnlyList<string> masters,
         IReadOnlyList<(uint, string, string, int)> forms,
         IReadOnlyList<QuestDefinition> quests,
-        IReadOnlyList<QuestScriptEffect> dialogueEffects)
+        IReadOnlyList<(uint, IReadOnlyList<QuestScriptEffect>)> dialogueInfos)
     {
         FileName = fileName;
         Masters = masters;
         Forms = forms;
         Quests = quests;
-        DialogueEffects = dialogueEffects;
+        DialogueInfos = dialogueInfos;
     }
 
     public static TesPlugin Load(string path, bool readDialogue = false)
@@ -114,7 +119,7 @@ public sealed class TesPlugin
         // ---- top-level groups ----
         var forms = new List<(uint, string, string, int)>();
         var quests = new List<QuestDefinition>();
-        var dialogueEffects = new List<QuestScriptEffect>();
+        var dialogueInfos = new List<(uint, IReadOnlyList<QuestScriptEffect>)>();
         // SCPT FormID -> (GameMode block source, declared local-variable names) (ROADMAP §6 #16)
         var scripts = new Dictionary<uint, (string GameMode, List<string> Locals)>();
         while (true)
@@ -137,7 +142,7 @@ public sealed class TesPlugin
             if (groupType == 0 && (NamedTypes.Contains(labelType) || labelType == "SCPT"))
                 ReadRecords(fs, contentSize, localized, forms, quests, scripts);
             else if (groupType == 0 && labelType == "DIAL" && readDialogue)
-                ReadInfoEffects(fs, contentSize, dialogueEffects); // descend DIAL -> Topic Children -> INFO (Phase B)
+                ReadInfoEffects(fs, contentSize, dialogueInfos); // descend DIAL -> Topic Children -> INFO (Phase B)
             else
                 fs.Seek(contentSize, SeekOrigin.Current); // skip the whole group without reading its bytes
         }
@@ -149,14 +154,14 @@ public sealed class TesPlugin
                 if (quests[i].ScriptFormId != 0 && scripts.TryGetValue(quests[i].ScriptFormId, out var s))
                     quests[i] = quests[i] with { GameModeScript = s.GameMode, LocalVars = s.Locals };
 
-        return new TesPlugin(fileName, masters, forms, quests, dialogueEffects);
+        return new TesPlugin(fileName, masters, forms, quests, dialogueInfos);
     }
 
     /// <summary>Descends a dialogue (<c>DIAL</c>) group — which nests <c>INFO</c> records inside per-topic
     /// "Topic Children" sub-groups — collecting the quest-affecting calls in each <c>INFO</c>'s result-script
     /// source text (<c>SCTX</c>). Recurses through nested <c>GRUP</c>s and skips non-<c>INFO</c> records (the
     /// <c>DIAL</c> topics themselves). ROADMAP §6 #16 Phase B.</summary>
-    private static void ReadInfoEffects(Stream fs, long contentSize, List<QuestScriptEffect> effects)
+    private static void ReadInfoEffects(Stream fs, long contentSize, List<(uint, IReadOnlyList<QuestScriptEffect>)> infos)
     {
         var end = fs.Position + contentSize;
         while (fs.Position < end)
@@ -168,20 +173,24 @@ public sealed class TesPlugin
             if (sig == "GRUP")
             {
                 ReadExactly(fs, 16); // rest of the 24-byte group header
-                ReadInfoEffects(fs, (long)size - HeaderSize, effects); // recurse into the nested (Topic Children) group
+                ReadInfoEffects(fs, (long)size - HeaderSize, infos); // recurse into the nested (Topic Children) group
                 continue;
             }
 
             var flags = ReadU32(fs);
-            ReadExactly(fs, 12); // formId(4) + version-control / form-version(8)
+            var formId = ReadU32(fs);
+            ReadExactly(fs, 8); // version-control / form-version
             var data = ReadExactly(fs, (int)size);
             if (sig != "INFO")
                 continue; // a DIAL topic (or other) record — only INFO carries the result scripts
             if ((flags & CompressedFlag) != 0)
                 data = Decompress(data);
+            var effects = new List<QuestScriptEffect>();
             foreach (var (type, sub) in ParseSubrecords(data))
                 if (type == "SCTX" && ZString(sub) is { Length: > 0 } src)
                     effects.AddRange(QuestScript.Parse(src));
+            if (effects.Count > 0)
+                infos.Add((formId, effects)); // keyed by INFO FormID so the save's said-INFO change form can be matched
         }
     }
 

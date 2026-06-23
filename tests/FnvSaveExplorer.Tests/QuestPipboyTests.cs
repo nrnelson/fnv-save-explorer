@@ -26,6 +26,46 @@ public class QuestPipboyTests
         return QuestPipboy.Compute(save, db);
     }
 
+    // Builds masters that include dialogue INFO result scripts (Phase B) and computes against the given save.
+    private static QuestPipboy ComputeWithDialogue(byte[] saveBytes, IEnumerable<TestRecord> records, params (uint FormId, string Script)[] infos)
+    {
+        using var dir = new TempDataFolder();
+        dir.Write("A.esm", EsmBuilder.PluginWithDialogue([], records, infos));
+        var save = FalloutSave.Parse(saveBytes);
+        var db = PluginDatabase.Build(save.Plugins, dir.Path, withDialogue: true);
+        return QuestPipboy.Compute(save, db);
+    }
+
+    private static TestRecord DialogueQuest() => new("QUST", 0x00100010, Edid: "QDLG", Full: "Dialogue Quest", Subs:
+    [
+        ("DATA", Data(0x00)),                                          // not SGE, not a QUST-propagation target
+        ("INDX", I16(5)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QDLG 5 1")),
+        ("QOBJ", I16(5)), ("NNAM", Z("Do the dialogue thing")),
+    ]);
+
+    [Fact]
+    public void Dialogue_started_quest_shows_when_its_said_info_is_present_in_the_save()
+    {
+        // ROADMAP §6 #16 Phase B step 2: INFO 0x0010A050 (which SetStages QDLG) is present as a change form in
+        // QuestSave.Build() — i.e. the player said that line — so the save-gated dialogue seed starts QDLG.
+        var pip = ComputeWithDialogue(QuestSave.Build(), [DialogueQuest()], (0x0010A050u, "SetStage QDLG 5"));
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Dialogue Quest");
+        Assert.Equal(PipboyQuestState.Active, q.State);
+        Assert.Equal(5, Assert.Single(q.Objectives).Index);
+    }
+
+    [Fact]
+    public void Dialogue_started_quest_is_excluded_when_its_info_is_absent_from_the_save()
+    {
+        // The precision guarantee: INFO 0x0010A099 is NOT a change form in the save (the line was never said), so the
+        // quest is NOT surfaced — this is what keeps background-initialized quests (whose start dialogue never fired)
+        // out of the computed Pip-Boy list.
+        var pip = ComputeWithDialogue(QuestSave.Build(), [DialogueQuest()], (0x0010A099u, "SetStage QDLG 5"));
+
+        Assert.DoesNotContain(pip.Quests, x => x.Name == "Dialogue Quest");
+    }
+
     // The Goodsprings chargen quest VCG01 "Ain't That a Kick" is FormId 0x0010A001 here, matching the formType-7
     // change form QuestSave can emit. Its completing stage 200 hands off to the chained quest VMQ01.
     private const uint ChargenFormId = 0x0010A001;

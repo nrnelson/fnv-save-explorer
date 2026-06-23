@@ -139,6 +139,10 @@ try
         case "q7corpus":
             Q7Corpus(path, args.Length > 2 ? args[2] : null);
             break;
+        case "qfired":
+            QuestFired(FalloutSave.Load(path), path,
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
+            break;
         case "qaudit":
         {
             var whoIdx = Array.IndexOf(args, "--who");
@@ -676,7 +680,7 @@ static void QuestDebug(FalloutSave s, string savePath, string? dataDir)
 // The computed in-game Pip-Boy quest list (ROADMAP §6 #16): masters quest-script interpretation.
 static void Pipboy(FalloutSave s, string savePath, string? dataDir)
 {
-    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath), withDialogue: true);
     if (db.Count == 0) { Console.WriteLine("Quest list needs the game Data folder — pass it as the 2nd argument."); return; }
 
     var pip = QuestPipboy.Compute(s, db);
@@ -1292,6 +1296,42 @@ static void Walk(FalloutSave s)
     Console.WriteLine("\n12 largest change forms:");
     foreach (var cf in s.EnumerateChangeForms().OrderByDescending(c => c.DataLength).Take(12))
         Console.WriteLine($"   @0x{cf.Offset:X}  iref {cf.Iref,6} -> 0x{cf.FormId:X8}  type 0x{cf.TypeByte:X2}  flags 0x{cf.ChangeFlags:X8}  len {cf.DataLength,7:N0}");
+}
+
+static void QuestFired(FalloutSave s, string savePath, string? dataDir)
+{
+    // ROADMAP §6 #16 Phase B step 2 probe: a dialogue INFO the player has said gets a change form in the save, so
+    // intersecting the save's change-form FormIDs with the masters' quest-starting INFOs yields the quests whose
+    // dialogue trigger ACTUALLY FIRED — the candidate "genuinely started (not background-init)" signal.
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath), withDialogue: true);
+    if (db.Count == 0) { Console.WriteLine("Needs the game Data folder."); return; }
+
+    var byEdid = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+    foreach (var q in db.Quests.Values)
+        if (q.Edid is { } e) byEdid[e] = q.FormId;
+
+    var present = s.EnumerateChangeForms().Select(cf => cf.FormId).ToHashSet();
+    // quest FormId -> the said-INFO FormIds in this save that start/advance it
+    var firedBy = new Dictionary<uint, List<uint>>();
+    var effectDetail = new Dictionary<uint, List<string>>(); // quest -> "verb arg [?cond]" summaries
+    foreach (var (infoFormId, effects) in db.DialogueInfoEffects)
+        if (present.Contains(infoFormId))
+            foreach (var e in effects)
+                if (e.Verb is QuestScriptVerb.StartQuest or QuestScriptVerb.SetStage && byEdid.TryGetValue(e.TargetQuestEdid, out var q))
+                {
+                    (firedBy.TryGetValue(q, out var l) ? l : firedBy[q] = []).Add(infoFormId);
+                    (effectDetail.TryGetValue(q, out var d) ? d : effectDetail[q] = [])
+                        .Add($"{e.Verb}{(e.Verb == QuestScriptVerb.SetStage ? $" {e.Arg1}" : "")}{(e.Conditional ? " ?" : "")}");
+                }
+
+    Console.WriteLine($"Quest-starting INFOs in masters: {db.DialogueInfoEffects.Count}; change forms in save: {present.Count}.");
+    Console.WriteLine($"Quests whose dialogue trigger FIRED (said-INFO present in save): {firedBy.Count}\n");
+    foreach (var (questId, infos) in firedBy.OrderBy(kv => db.Quest(kv.Key)?.Name, StringComparer.OrdinalIgnoreCase))
+    {
+        var q = db.Quest(questId);
+        var pf = q is { IsPlayerFacing: true } ? "" : "  (not player-facing)";
+        Console.WriteLine($"  0x{questId:X8}  \"{q?.Name ?? "?"}\"{pf}  [{string.Join(", ", effectDetail[questId].Distinct())}]  <- INFO {string.Join(", ", infos.Distinct().Select(i => $"0x{i:X8}"))}");
+    }
 }
 
 static void QuestAudit(FalloutSave s, string savePath, string? dataDir, bool list, string? who = null)

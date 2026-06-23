@@ -146,6 +146,34 @@ public sealed class QuestPipboy
                 Reach(st, sd.Index);
         }
 
+        // ---- Save-gated dialogue seed (ROADMAP §6 #16 Phase B): a dialogue INFO the player has SAID gets a change
+        // form written for it in the save, so an INFO that (a) carries a quest-affecting result script and (b) is
+        // present in the save is a trigger that ACTUALLY FIRED. Apply those effects to start/advance the freeform &
+        // dialogue-started quests that no quest script ever references (e.g. "Back in the Saddle"). Gating on the
+        // save's said-INFOs is what keeps this precise: a background-initialized quest whose starting dialogue was
+        // never said (e.g. "Welcome to the Big Empty" before Old World Blues is entered) has no such change form, so
+        // it is NOT added. Like the fixpoint, only non-conditional SetStage is followed (StartQuest always). ----
+        if (db.DialogueInfoEffects.Count > 0)
+        {
+            var saidInfoPresent = new HashSet<uint>();
+            foreach (var cf in save.EnumerateChangeForms())
+                saidInfoPresent.Add(cf.FormId);
+            foreach (var (infoFormId, effects) in db.DialogueInfoEffects)
+            {
+                if (!saidInfoPresent.Contains(infoFormId))
+                    continue;
+                foreach (var e in effects)
+                {
+                    if (Resolve(e.TargetQuestEdid) is not { } target)
+                        continue;
+                    if (e.Verb == QuestScriptVerb.StartQuest)
+                        target.Running = true;
+                    else if (e.Verb == QuestScriptVerb.SetStage && !e.Conditional)
+                        Reach(target, e.Arg1);
+                }
+            }
+        }
+
         // ---- Fixpoint: run reached-stage scripts; non-conditional SetStage/StartQuest expand the running set. ----
         while (work.Count > 0)
         {

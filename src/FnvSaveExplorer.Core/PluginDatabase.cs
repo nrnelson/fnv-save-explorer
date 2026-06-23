@@ -42,8 +42,9 @@ public sealed class PluginDatabase
     public int Count => _names.Count;
 
     private readonly HashSet<uint> _dialogueStarted; // quest FormIDs an INFO StartQuest/SetStage-targets (Phase B)
+    private readonly Dictionary<uint, IReadOnlyList<QuestScriptEffect>> _dialogueInfoEffects; // INFO FormID -> its result-script effects
 
-    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null)
+    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null)
     {
         _names = names;
         _types = types;
@@ -53,12 +54,20 @@ public sealed class PluginDatabase
         ModsFolder = modsFolder;
         ResolvedPlugins = resolved;
         _dialogueStarted = dialogueStarted ?? [];
+        _dialogueInfoEffects = dialogueInfoEffects ?? [];
     }
 
     /// <summary>Quest FormIDs (save-space) that a dialogue <c>INFO</c> result script <c>StartQuest</c>/<c>SetStage</c>
     /// targets — the quests the player triggers through conversation rather than a quest script (ROADMAP §6 #16
     /// Phase B). Empty unless the database was built with <c>withDialogue: true</c>.</summary>
     public IReadOnlySet<uint> DialogueStartedQuests => _dialogueStarted;
+
+    /// <summary>Dialogue <c>INFO</c> FormIDs (save-space) → that INFO's result-script quest effects (targeting quests
+    /// by editor id). The save writes a change form for an INFO the player has said, so an INFO from this map that is
+    /// also present in the save is a dialogue trigger that ACTUALLY FIRED — the Phase B step-2 "genuinely started
+    /// (not background-init)" signal the Pip-Boy interpreter seeds from. Empty unless built with
+    /// <c>withDialogue: true</c>.</summary>
+    public IReadOnlyDictionary<uint, IReadOnlyList<QuestScriptEffect>> DialogueInfoEffects => _dialogueInfoEffects;
 
     /// <summary>An empty database; every <see cref="Resolve"/> returns <c>null</c>.</summary>
     public static readonly PluginDatabase Empty = new([], [], [], [], null, null, []);
@@ -91,6 +100,7 @@ public sealed class PluginDatabase
         var quests = new Dictionary<uint, QuestDefinition>();
         var resolved = new List<string>();
         var dialogueTargetEdids = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // INFO StartQuest/SetStage targets
+        var infoEffects = new Dictionary<uint, IReadOnlyList<QuestScriptEffect>>(); // save-space INFO FormID -> effects
 
         // Case-insensitive load-order index, for mapping a plugin's masters back to save indices.
         var indexOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -150,22 +160,27 @@ public sealed class PluginDatabase
             }
 
             // Dialogue INFO result-script effects target quests by editor id; collect the StartQuest/SetStage
-            // targets so they can be resolved to FormIDs once every plugin's quests are known (Phase B).
-            foreach (var e in plugin.DialogueEffects)
-                if (e.Verb is QuestScriptVerb.StartQuest or QuestScriptVerb.SetStage && !string.IsNullOrEmpty(e.TargetQuestEdid))
-                    dialogueTargetEdids.Add(e.TargetQuestEdid);
+            // targets (per INFO, re-keying the INFO's FormID into save space) so they resolve to quest FormIDs once
+            // every plugin's quests are known (Phase B).
+            foreach (var (infoFormId, effects) in plugin.DialogueInfos)
+            {
+                foreach (var e in effects)
+                    if (e.Verb is QuestScriptVerb.StartQuest or QuestScriptVerb.SetStage && !string.IsNullOrEmpty(e.TargetQuestEdid))
+                        dialogueTargetEdids.Add(e.TargetQuestEdid);
+                if (Remap(infoFormId, remap) is { } saveInfoFormId)
+                    infoEffects[saveInfoFormId] = effects; // later (load-order) plugin overrides win, like names
+            }
 
             resolved.Add(loadOrder[i]);
         }
 
-        // Resolve dialogue start/advance targets (by editor id) to quest FormIDs in save space.
+        // Resolve dialogue start/advance targets (by editor id) to quest FormIDs in save space (for diagnostics).
         var dialogueStarted = new HashSet<uint>();
-        if (dialogueTargetEdids.Count > 0)
-            foreach (var q in quests.Values)
-                if (q.Edid is { } edid && dialogueTargetEdids.Contains(edid))
-                    dialogueStarted.Add(q.FormId);
+        foreach (var q in quests.Values)
+            if (q.Edid is { } edid && dialogueTargetEdids.Contains(edid))
+                dialogueStarted.Add(q.FormId);
 
-        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted);
+        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects);
     }
 
     /// <summary>Re-keys a plugin-local FormID into save space using the plugin's high-byte → save-index
