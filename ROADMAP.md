@@ -972,6 +972,24 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     the 4 FPs (e.g. honour `GetStage <self> == 0` / `GetQuestRunning`), and **(b) formType-7 decode** to recover the 3
     Goodsprings quests. Pinned by a new synthetic test (`Sge_quest_whose_gamemode_only_catcher_sets_a_late_stage…`);
     1109 tests green.
+    **PROGRESS 2026-06-23 (cont.) — lever (a) DONE: startup condition evaluation cuts ALL 4 false positives; Save 57 is
+    now 4 computed = 4 correct (perfect precision, 0 FP).** Added the quest **GameMode local-variable** decode
+    (`QuestDefinition.LocalVars` from the SCPT's `short`/`float`/… declarations) and `ScriptStartup` — a tiny
+    satisfiability evaluator that decides whether a startup `SetStage`'s `if`-guards hold **at game start**. Model:
+    each **local variable**'s reachable startup value SET is computed by running the GameMode block's `set var to const`
+    assignments to a fixpoint (applying one only while its own guards are satisfiable); **timers/counters** (`set T to
+    (T - GetSecondsPassed)`) become dynamic (any value); **world state** (query functions, `Ref.Method`, non-local
+    globals) is its game-start default of **0**. A guard fires iff it is *satisfiable* under those — so the intro
+    radio quests' do-once+timer guard `DoOnceMessage == 1 && StartTimer <= 0` holds (flag reaches 1, timer reaches 0,
+    nested `RNVTARef.GetDisabled == 0` is a default-enabled ref → `0==0`), while the FPs fail: `GetReputationThreshold …
+    >= 2` → `0>=2`, `vStoryEventBennyKilledCasino == 1` → global `0==1`, and Don't Tread on the Bear!'s `iHouseObjective
+    == 1` → that local is only bumped under world guards so it stays `{0}`. The earlier "lowest-stage" / "all-zero"
+    heuristics were both wrong (one over-fired catchers, the other missed do-once flags + rejected default-enabled-ref
+    guards); the satisfiability model handles all three families. **Remaining: only lever (b)** — decode the packed
+    **formType-7** stage bitmask (Ain't That a Kick) to anchor the Goodsprings chain (VCG01 stage 200 → `StartQuest
+    VMQ01` + `SetStage VMQ01 10` → They Went That-a-Way; VCG02 Back in the Saddle). `ScriptStartup` pinned by
+    `ScriptStartupTests` (do-once / world-default / world-guarded-local / timer / and-or); 1115 tests green. Tooling:
+    CLI `qscript` prints `LocalVars` + per-effect `fires=`.
 
 ---
 

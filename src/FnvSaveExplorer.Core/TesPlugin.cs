@@ -103,7 +103,8 @@ public sealed class TesPlugin
         // ---- top-level groups ----
         var forms = new List<(uint, string, string, int)>();
         var quests = new List<QuestDefinition>();
-        var scripts = new Dictionary<uint, string>(); // SCPT FormID -> its GameMode block source (ROADMAP §6 #16)
+        // SCPT FormID -> (GameMode block source, declared local-variable names) (ROADMAP §6 #16)
+        var scripts = new Dictionary<uint, (string GameMode, List<string> Locals)>();
         while (true)
         {
             var gsig = ReadSignature(fs);
@@ -127,12 +128,12 @@ public sealed class TesPlugin
                 fs.Seek(contentSize, SeekOrigin.Current); // skip the whole group without reading its bytes
         }
 
-        // Link each quest to its SCPT script's GameMode block (the startup code; ROADMAP §6 #16). The QUST and
-        // its SCPT live in the same plugin, so this is a plain plugin-local lookup — no FormID remap needed.
+        // Link each quest to its SCPT script's GameMode block + local-variable names (the startup code; ROADMAP
+        // §6 #16). The QUST and its SCPT live in the same plugin, so this is a plain plugin-local lookup.
         if (scripts.Count > 0)
             for (var i = 0; i < quests.Count; i++)
-                if (quests[i].ScriptFormId != 0 && scripts.TryGetValue(quests[i].ScriptFormId, out var gm))
-                    quests[i] = quests[i] with { GameModeScript = gm };
+                if (quests[i].ScriptFormId != 0 && scripts.TryGetValue(quests[i].ScriptFormId, out var s))
+                    quests[i] = quests[i] with { GameModeScript = s.GameMode, LocalVars = s.Locals };
 
         return new TesPlugin(fileName, masters, forms, quests);
     }
@@ -140,7 +141,8 @@ public sealed class TesPlugin
     /// <summary>Reads the records (and defensively skips any nested groups) inside one top-level item group.</summary>
     private static void ReadRecords(
         Stream fs, long contentSize, bool localized,
-        List<(uint, string, string, int)> forms, List<QuestDefinition> quests, Dictionary<uint, string> scripts)
+        List<(uint, string, string, int)> forms, List<QuestDefinition> quests,
+        Dictionary<uint, (string GameMode, List<string> Locals)> scripts)
     {
         var end = fs.Position + contentSize;
         while (fs.Position < end)
@@ -167,11 +169,11 @@ public sealed class TesPlugin
 
             if (sig == "SCPT")
             {
-                // A script record: keep its GameMode block (the source text — SCTX), keyed by FormID, for the
-                // quest link above. SCDA is compiled bytecode (ignored); SCTX is the human-readable source.
+                // A script record: keep its GameMode block + declared local-variable names (from the source text,
+                // SCTX), keyed by FormID, for the quest link above. SCDA is compiled bytecode (ignored).
                 foreach (var (type, sub) in subs)
-                    if (type == "SCTX" && ExtractGameMode(ZString(sub)) is { } gm)
-                        scripts[formId] = gm;
+                    if (type == "SCTX" && ZString(sub) is { } src && ExtractGameMode(src) is { } gm)
+                        scripts[formId] = (gm, ExtractLocals(src));
                 continue;
             }
 
@@ -320,6 +322,31 @@ public sealed class TesPlugin
             }
         }
         return sb.Length > 0 ? sb.ToString() : null;
+    }
+
+    /// <summary>The local-variable type keywords a FNV script declares variables with (case-insensitive).</summary>
+    private static readonly HashSet<string> VarTypes =
+        new(StringComparer.OrdinalIgnoreCase) { "short", "int", "long", "float", "ref", "reference", "string_var", "array_var" };
+
+    /// <summary>Extracts a script's declared local-variable names from its source text — declaration lines
+    /// <c>&lt;type&gt; &lt;name&gt;</c> (e.g. <c>short DoOnceMessage</c>, <c>float StartTimer</c>) that precede the
+    /// first <c>Begin</c> block (ROADMAP §6 #16). The interpreter treats these as script-internal (do-once / timer)
+    /// state, distinct from globals and world-query functions.</summary>
+    private static List<string> ExtractLocals(string scriptText)
+    {
+        var locals = new List<string>();
+        foreach (var raw in scriptText.Split('\n'))
+        {
+            var line = raw;
+            var semi = line.IndexOf(';');
+            if (semi >= 0) line = line[..semi];
+            var tokens = line.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0) continue;
+            if (tokens[0].Equals("Begin", StringComparison.OrdinalIgnoreCase)) break; // declarations precede the blocks
+            if (tokens.Length >= 2 && VarTypes.Contains(tokens[0]))
+                locals.Add(tokens[1]);
+        }
+        return locals;
     }
 
     /// <summary>R&amp;D (ROADMAP §6 #16): dump the raw subrecords of one <c>QUST</c> record from a plugin file,
@@ -487,11 +514,13 @@ public sealed record QuestObjectiveDef(int Index, string? Text, IReadOnlyList<ui
 /// it. <see cref="ScriptFormId"/> is the quest's <c>SCRI</c> (the FormID of its <c>SCPT</c> script); after
 /// linking, <see cref="GameModeScript"/> holds that script's <c>Begin GameMode … End</c> block source — the
 /// code that runs at load and (for Start-Game-Enabled quests) sets the quest's startup stage (ROADMAP
-/// §6 #16).</para></summary>
+/// §6 #16). <see cref="LocalVars"/> are the script's declared local variable names (do-once flags / timers); the
+/// interpreter uses them to tell a startup guard (only local vars + constants) from a world-state-gated one
+/// (functions / globals).</para></summary>
 public sealed record QuestDefinition(
     uint FormId, IReadOnlyList<QuestStageDef> Stages, IReadOnlyList<QuestObjectiveDef> Objectives,
     byte DataFlags = 0, string? Name = null, string? Edid = null,
-    uint ScriptFormId = 0, string? GameModeScript = null)
+    uint ScriptFormId = 0, string? GameModeScript = null, IReadOnlyList<string>? LocalVars = null)
 {
     /// <summary>The quest's <c>DATA</c> "Start Game Enabled" flag (bit0): the engine starts these at game load,
     /// so a Start-Game-Enabled quest with a displayed objective shows in the Pip-Boy with no save delta.</summary>

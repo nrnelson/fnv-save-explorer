@@ -23,21 +23,25 @@ public enum QuestScriptVerb
     CompleteAllObjectives,
 }
 
-/// <summary>One quest-affecting call parsed from a stage's result-script text (ROADMAP §6 #16). <see cref="Arg1"/>
-/// is the objective/stage index (where the verb takes one), <see cref="Arg2"/> the on/off flag for the
-/// objective verbs (defaulting to 1 = on when the script omits it). <see cref="Conditional"/> is true when the
-/// call sits inside an <c>if … endif</c> block — the interpreter still applies it (a Phase-A over-approximation)
-/// but the flag marks that its firing isn't guaranteed without evaluating the condition.</summary>
+/// <summary>One quest-affecting call parsed from a stage's (or GameMode block's) result-script text (ROADMAP
+/// §6 #16). <see cref="Arg1"/> is the objective/stage index (where the verb takes one), <see cref="Arg2"/> the
+/// on/off flag for the objective verbs (defaulting to 1 = on when the script omits it). <see cref="Guards"/>
+/// holds the source text of every enclosing <c>if</c>/<c>elseif</c> condition (outermost first); the call fires
+/// only when all of them hold (see <see cref="ScriptStartup"/> for the startup evaluation).</summary>
 public sealed record QuestScriptEffect(
-    QuestScriptVerb Verb, string TargetQuestEdid, int Arg1, int Arg2, bool Conditional);
+    QuestScriptVerb Verb, string TargetQuestEdid, int Arg1, int Arg2, IReadOnlyList<string> Guards)
+{
+    /// <summary>The call sits inside at least one <c>if</c> block.</summary>
+    public bool Conditional => Guards.Count > 0;
+}
 
 /// <summary>
 /// Parses FNV quest stage result-script <b>source text</b> (<c>SCTX</c>) into the structured quest effects the
 /// Pip-Boy interpreter applies (ROADMAP §6 #16). This is a deliberately small <i>literal</i> scan, not a script
 /// engine: it recognises a fixed set of quest verbs (<see cref="QuestScriptVerb"/>) whose arguments are constants,
-/// tracks <c>if/endif</c> nesting only to flag conditional calls, and ignores everything else (reference method
-/// calls like <c>SomeRef.Enable</c>, variable assignments, comments). Calls whose arguments are variables rather
-/// than integer literals are skipped — they can't be resolved without executing the script.
+/// records the enclosing <c>if</c>/<c>elseif</c> guard text, and ignores everything else (reference method calls
+/// like <c>SomeRef.Enable</c>, comments). Calls whose arguments are variables rather than integer literals are
+/// skipped — they can't be resolved without executing the script.
 /// </summary>
 public static class QuestScript
 {
@@ -53,42 +57,50 @@ public static class QuestScript
         ["completeallobjectives"] = QuestScriptVerb.CompleteAllObjectives,
     };
 
-    /// <summary>Whether a verb takes an objective/stage index as its second token (after the quest edid).</summary>
     private static bool HasIndexArg(QuestScriptVerb v) =>
         v is QuestScriptVerb.SetObjectiveDisplayed or QuestScriptVerb.SetObjectiveCompleted or QuestScriptVerb.SetStage;
 
-    /// <summary>Whether a verb takes an on/off flag as its third token (the objective verbs).</summary>
     private static bool HasOnOffArg(QuestScriptVerb v) =>
         v is QuestScriptVerb.SetObjectiveDisplayed or QuestScriptVerb.SetObjectiveCompleted;
 
-    /// <summary>Extracts the quest effects from a stage's result-script source text. Returns an empty list for
-    /// null/blank text. Lines are comment-stripped; <c>if/elseif/else/endif</c> only adjust the conditional depth.</summary>
+    /// <summary>Comment-strips a script line and returns its whitespace-split tokens (empty when blank).</summary>
+    private static string[] Tokens(string rawLine, out string trimmed)
+    {
+        var line = rawLine;
+        var semi = line.IndexOf(';');
+        if (semi >= 0) line = line[..semi];
+        trimmed = line.Trim();
+        return trimmed.Length == 0 ? [] : trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    /// <summary>Maintains the enclosing if/elseif/else guard stack for one script line; returns true when the line
+    /// was a control-flow keyword (and should not be processed further).</summary>
+    private static bool TrackGuards(string[] tokens, string trimmed, List<string> guards)
+    {
+        var head = tokens[0];
+        if (head.Equals("if", StringComparison.OrdinalIgnoreCase)) { guards.Add(trimmed[2..].Trim()); return true; }
+        if (head.Equals("elseif", StringComparison.OrdinalIgnoreCase)) { if (guards.Count > 0) guards[^1] = trimmed[6..].Trim(); return true; }
+        if (head.Equals("else", StringComparison.OrdinalIgnoreCase)) { if (guards.Count > 0) guards[^1] = "0"; return true; }
+        if (head.Equals("endif", StringComparison.OrdinalIgnoreCase)) { if (guards.Count > 0) guards.RemoveAt(guards.Count - 1); return true; }
+        return false;
+    }
+
+    /// <summary>Extracts the quest effects from a stage's (or GameMode block's) result-script source text. Returns
+    /// an empty list for null/blank text. Each effect records its enclosing <c>if</c>/<c>elseif</c> guards.</summary>
     public static IReadOnlyList<QuestScriptEffect> Parse(string? sctx)
     {
         if (string.IsNullOrWhiteSpace(sctx))
             return [];
 
         var effects = new List<QuestScriptEffect>();
-        var depth = 0;
+        var guards = new List<string>();
         foreach (var rawLine in sctx.Split('\n'))
         {
-            // Strip a line comment (";" to end) and surrounding whitespace.
-            var line = rawLine;
-            var semi = line.IndexOf(';');
-            if (semi >= 0) line = line[..semi];
-            line = line.Trim();
-            if (line.Length == 0) continue;
-
-            var tokens = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            var head = tokens[0];
-
-            // Conditional nesting — affects only the Conditional flag, never which calls we record.
-            if (head.Equals("if", StringComparison.OrdinalIgnoreCase)) { depth++; continue; }
-            if (head.Equals("endif", StringComparison.OrdinalIgnoreCase)) { depth = Math.Max(0, depth - 1); continue; }
-            if (head.Equals("elseif", StringComparison.OrdinalIgnoreCase) || head.Equals("else", StringComparison.OrdinalIgnoreCase))
+            var tokens = Tokens(rawLine, out var trimmed);
+            if (tokens.Length == 0 || TrackGuards(tokens, trimmed, guards))
                 continue;
 
-            if (!Verbs.TryGetValue(head, out var verb) || tokens.Length < 2)
+            if (!Verbs.TryGetValue(tokens[0], out var verb) || tokens.Length < 2)
                 continue;
 
             var target = tokens[1];
@@ -101,8 +113,203 @@ public static class QuestScript
             if (HasOnOffArg(verb) && tokens.Length >= 4 && int.TryParse(tokens[3], out var on))
                 arg2 = on;
 
-            effects.Add(new QuestScriptEffect(verb, target, arg1, arg2, depth > 0));
+            effects.Add(new QuestScriptEffect(verb, target, arg1, arg2, [.. guards]));
         }
         return effects;
     }
+
+    /// <summary>Extracts <c>set &lt;var&gt; to &lt;value&gt;</c> assignments (with their enclosing guards) from
+    /// script text — the do-once flags and timers a GameMode block drives. <c>Value</c> is the constant assigned,
+    /// or null when the right-hand side is an expression/function (a counter or timer). <see cref="ScriptStartup"/>
+    /// runs these to a fixpoint to learn each local variable's reachable startup values (ROADMAP §6 #16).</summary>
+    public static IReadOnlyList<(string Var, int? Value, IReadOnlyList<string> Guards)> ParseAssignments(string? sctx)
+    {
+        if (string.IsNullOrWhiteSpace(sctx))
+            return [];
+
+        var sets = new List<(string, int?, IReadOnlyList<string>)>();
+        var guards = new List<string>();
+        foreach (var rawLine in sctx.Split('\n'))
+        {
+            var tokens = Tokens(rawLine, out var trimmed);
+            if (tokens.Length == 0 || TrackGuards(tokens, trimmed, guards))
+                continue;
+
+            // set <var> to <value>   ("set"/"to" case-insensitive). A 4-token "set x to <int>" is a constant
+            // assignment; anything longer (an expression / function) leaves Value null (the variable is dynamic).
+            if (tokens.Length >= 4 && tokens[0].Equals("set", StringComparison.OrdinalIgnoreCase) &&
+                tokens[2].Equals("to", StringComparison.OrdinalIgnoreCase))
+            {
+                int? value = tokens.Length == 4 && int.TryParse(tokens[3], out var v) ? v : null;
+                sets.Add((tokens[1], value, [.. guards]));
+            }
+        }
+        return sets;
+    }
+}
+
+/// <summary>
+/// Decides whether a Start-Game-Enabled quest's GameMode <c>if</c>-guards are satisfied <b>at game start</b>
+/// (ROADMAP §6 #16) — i.e. whether the guarded <c>SetStage</c>/<c>StartQuest</c> fires at load with no player
+/// action. It models the quest script's <b>local variables</b> (do-once flags, timers) as the set of values each
+/// can reach from the GameMode block's own assignments, and treats all <b>world state</b> (query functions like
+/// <c>GetStage</c>/<c>GetReputationThreshold</c>, <c>Ref.Method</c> calls, and globals) as default/unknown.
+/// <para>A guard <b>holds at startup</b> when it is <i>satisfiable</i> under those reachable local values with
+/// every world atom false: the intro radio quests' guard <c>DoOnceMessage == 1 &amp;&amp; StartTimer &lt;= 0</c>
+/// holds (the do-once flag reaches 1, the timer counts down), while <c>iHouseObjective == 1</c> does not (that
+/// local is only incremented under world-state guards, so it stays 0), and <c>GetReputationThreshold … &gt;= 2</c>
+/// does not (a world atom). This is the precision lever that separates the four DLC-intro quests actually shown on
+/// Save 57 from Start-Game-Enabled quests whose objectives only display once the player has made progress.</para>
+/// Unparseable guards are treated as not holding (conservative — the caller won't fire).
+/// </summary>
+public sealed class ScriptStartup
+{
+    private const int Top = int.MinValue;              // sentinel "dynamic — any value reachable"
+    private readonly Dictionary<string, HashSet<int>> _values = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _locals;
+
+    private ScriptStartup(HashSet<string> locals) => _locals = locals;
+
+    /// <summary>Builds the startup model for a GameMode block: runs its <c>set</c> assignments to a fixpoint,
+    /// applying each only while its own guards are satisfiable, to learn every local's reachable startup values.</summary>
+    public static ScriptStartup Analyze(string? gameModeScript, IReadOnlyCollection<string>? localVars)
+    {
+        var s = new ScriptStartup(new HashSet<string>(localVars ?? [], StringComparer.OrdinalIgnoreCase));
+        var sets = QuestScript.ParseAssignments(gameModeScript);
+        for (var pass = 0; pass < 8 && sets.Count > 0; pass++) // converges fast; bound guards against oscillation
+        {
+            var changed = false;
+            foreach (var (var, value, guards) in sets)
+            {
+                if (!s._locals.Contains(var) || !guards.All(s.GuardHolds))
+                    continue;
+                var set = s._values.TryGetValue(var, out var existing) ? existing : s._values[var] = [0];
+                if (set.Contains(Top))
+                    continue;
+                changed |= value is { } c ? set.Add(c) : set.Add(Top); // null RHS (expr/timer) => dynamic
+            }
+            if (!changed)
+                break;
+        }
+        return s;
+    }
+
+    /// <summary>The values a local variable can reach at startup: a known set, <c>{0}</c> by default, or a set
+    /// containing the <see cref="Top"/> sentinel when the variable is dynamic (a timer / counter).</summary>
+    private HashSet<int> Reach(string name) => _values.TryGetValue(name, out var s) ? s : [0];
+
+    /// <summary>True when <paramref name="guard"/> is satisfiable at game start under the reachable local values
+    /// (world atoms false). Null/blank = no guard = holds. Unparseable = false.</summary>
+    public bool GuardHolds(string? guard)
+    {
+        if (string.IsNullOrWhiteSpace(guard))
+            return true;
+        try
+        {
+            var tokens = Tokenize(guard);
+            var pos = 0;
+            var r = ParseOr(tokens, ref pos);
+            return pos == tokens.Count && r;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    // ----- a tiny tokenizer + recursive-descent satisfiability evaluator over local value-sets -----
+
+    private static readonly string[] MultiCharOps = ["==", "!=", "<=", ">=", "&&", "||"];
+    private static readonly string[] CompareOps = ["==", "!=", "<", "<=", ">", ">="];
+
+    private static List<string> Tokenize(string s)
+    {
+        var tokens = new List<string>();
+        var i = 0;
+        while (i < s.Length)
+        {
+            var c = s[i];
+            if (char.IsWhiteSpace(c)) { i++; continue; }
+            if (c is '(' or ')') { tokens.Add(c.ToString()); i++; continue; }
+            var two = i + 1 < s.Length ? s.Substring(i, 2) : null;
+            if (two is not null && Array.IndexOf(MultiCharOps, two) >= 0) { tokens.Add(two); i += 2; continue; }
+            if (c is '<' or '>') { tokens.Add(c.ToString()); i++; continue; }
+            var start = i;
+            while (i < s.Length)
+            {
+                var d = s[i];
+                if (char.IsWhiteSpace(d) || d is '(' or ')' or '<' or '>') break;
+                if (i + 1 < s.Length && Array.IndexOf(MultiCharOps, s.Substring(i, 2)) >= 0) break;
+                i++;
+            }
+            tokens.Add(s[start..i]);
+        }
+        return tokens;
+    }
+
+    private bool ParseOr(List<string> t, ref int pos)
+    {
+        var v = ParseAnd(t, ref pos);
+        while (pos < t.Count && t[pos] == "||") { pos++; v = ParseAnd(t, ref pos) | v; }
+        return v;
+    }
+
+    private bool ParseAnd(List<string> t, ref int pos)
+    {
+        var v = ParseCmp(t, ref pos);
+        while (pos < t.Count && t[pos] == "&&") { pos++; v = ParseCmp(t, ref pos) & v; }
+        return v;
+    }
+
+    // cmp := '(' or-expr ')' | operand ( compareOp operand )?   (bare operand = truthiness)
+    private bool ParseCmp(List<string> t, ref int pos)
+    {
+        if (pos < t.Count && t[pos] == "(")
+        {
+            pos++;
+            var v = ParseOr(t, ref pos);
+            if (pos < t.Count && t[pos] == ")") pos++;
+            return v;
+        }
+        var left = ReadOperand(t, ref pos);
+        if (pos < t.Count && Array.IndexOf(CompareOps, t[pos]) >= 0)
+        {
+            var op = t[pos++];
+            var right = ReadOperand(t, ref pos);
+            return SatCompare(left, op, right);
+        }
+        return Satisfies(left, v => v != 0); // bare truthiness
+    }
+
+    /// <summary>An operand's reachable integer values at startup: a numeric literal, a local variable's reachable
+    /// set, or — for world state (a query function, a <c>Ref.Method</c> call, or a non-local global) — its
+    /// game-start default of <c>{0}</c>. So <c>GetDisabled == 0</c> (a default-enabled ref) holds, while
+    /// <c>GetReputationThreshold … &gt;= 2</c> / <c>GetStage … &gt;= 80</c> / a story-event <c>… == 1</c> do not.</summary>
+    private HashSet<int> ReadOperand(List<string> t, ref int pos)
+    {
+        var words = new List<string>();
+        while (pos < t.Count && t[pos] is not ("&&" or "||" or "(" or ")") && Array.IndexOf(CompareOps, t[pos]) < 0)
+            words.Add(t[pos++]);
+        if (words.Count == 1 && int.TryParse(words[0], out var n))
+            return [n];                                    // numeric literal
+        if (words.Count == 1 && !words[0].Contains('.') && _locals.Contains(words[0]))
+            return Reach(words[0]);                         // a local variable's reachable set
+        return [0];                                        // world state (function / member / global) — default 0
+    }
+
+    private static bool SatCompare(HashSet<int> left, string op, HashSet<int> right)
+    {
+        foreach (var a in left)
+            foreach (var b in right)
+                if (a == Top || b == Top || Compare(a, op, b))
+                    return true;
+        return false;
+    }
+
+    private static bool Satisfies(HashSet<int> set, Func<int, bool> pred) => set.Contains(Top) || set.Any(pred);
+
+    private static bool Compare(int a, string op, int b) => op switch
+    {
+        "==" => a == b, "!=" => a != b, "<" => a < b, "<=" => a <= b, ">" => a > b, ">=" => a >= b, _ => false,
+    };
 }

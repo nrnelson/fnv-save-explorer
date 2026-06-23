@@ -88,33 +88,28 @@ public sealed class QuestPipboy
                 work.Enqueue((target, sd));
         }
 
-        // ---- Seed: Start-Game-Enabled quests run their GameMode startup script at load. A quest's OWN GameMode
-        // SetStage is what advances it to its startup stage; it is followed condition-blind (these are typically
-        // if-guarded), while cross-quest GameMode calls follow the non-conditional rule to avoid over-firing.
-        // (Seeding the lowest stage instead over-fired badly — every SGE quest has a displayable first stage in
-        // the masters, but most aren't reached until an external trigger fires; the GameMode is that trigger.) ----
+        // ---- Seed: Start-Game-Enabled quests run their GameMode startup script at load. A quest advances itself
+        // to its startup stage via a GameMode SetStage; that SetStage is typically if-guarded, so we fire it only
+        // when its guards hold AT GAME-START DEFAULTS (ScriptCondition.TrueAtDefaults — every var/world-query = 0).
+        // That distinguishes a genuine startup call (guard like `DoOnceMessage == 0` → true) from a world-gated
+        // "catcher" (`GetReputationThreshold … >= 2` / `GetStage … >= 80` → false), which is what an in-game
+        // trigger sets later and must not fire at load. ----
         foreach (var st in states.Values)
         {
             if (!st.Def.StartGameEnabled)
                 continue;
             st.Running = true;
-            // A quest's GameMode also carries "catcher" SetStages — if-guarded jumps to LATE/recovery stages that
-            // fire only on specific world state. Following those condition-blind over-includes the quest at a
-            // late stage. The genuine startup SetStage targets the quest's LOWEST stage, so we follow a
-            // condition-blind SELF SetStage only when it targets that startup stage; catchers (later stages) are
-            // ignored unless non-conditional. (Cross-quest GameMode calls always require non-conditional.)
-            var startupStage = st.Def.Stages.Count > 0 ? st.Def.Stages.Min(s => s.Index) : int.MinValue;
+            var startup = ScriptStartup.Analyze(st.Def.GameModeScript, st.Def.LocalVars);
             foreach (var e in QuestScript.Parse(st.Def.GameModeScript))
             {
-                if (Resolve(e.TargetQuestEdid) is not { } target)
+                if (!e.Guards.All(startup.GuardHolds) || Resolve(e.TargetQuestEdid) is not { } target)
                     continue;
-                var selfStartup = ReferenceEquals(target, st) && e.Arg1 == startupStage;
                 switch (e.Verb)
                 {
-                    case QuestScriptVerb.SetStage when selfStartup || !e.Conditional:
+                    case QuestScriptVerb.SetStage:
                         Reach(target, e.Arg1);
                         break;
-                    case QuestScriptVerb.StartQuest when !e.Conditional:
+                    case QuestScriptVerb.StartQuest:
                         target.Running = true;
                         break;
                 }
