@@ -1011,6 +1011,38 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     (empty ref-style template, §6 #10) and likely needs the same capture on VCG02 or a Goodsprings-controller model.
     **Net for §6 #16:** the interpreter (`QuestPipboy`) is real and the precision problem is solved; recall is gated on
     one controlled in-game capture, which is a user step.
+    **PROGRESS 2026-06-23 (cont.) — the q8–q11 "Ghost Town Gunfight" probe DISPROVES the distributed-marker decode
+    hypothesis, and reclassifies `0x0010D9F4`. Two prior claims are corrected; the Save-57 recall path is unchanged.**
+    Investigated the natural-play captures q8→q9→q10→q11 (VMS16 "Ghost Town Gunfight", `0x00104EAE`, advanced one
+    objective at a time). New `qscript` output prints each objective's `QSTA` target refs, so the markers could be
+    checked against the actual objective→target map. Findings:
+    - **The "type 0x08 marker = enable of the completed objective's QSTA target ref" hypothesis is FALSE.** VMS16's
+      objective targets are obj5→`0x00104C7D` (Ringo), obj10→`0x00104E85` (Sunny), obj20→`0x00104C6D` (Trudy),
+      obj30→`0x00104C79` (Chet), obj40→`0x00104C80` (Easy Pete), obj45→`0x00104C0F` (Doc), obj50/60→`0x00104C7D`,
+      obj65→`0x00104E85`, obj70→6 Powder-Ganger refs. The **clean** q10→q11 transition (player stayed in the saloon;
+      completed ONLY obj20 "Enlist the help of Trudy"; idiff delta +4) inserts type 0x08 markers `0x0017529A` /
+      `0x0002ABCD` / `0x000B2503` plus one type 0x32 record `0x00104E7D` — **none is obj20's target `0x00104C6D`**,
+      nor any other VMS16 objective target. Same for q8→q9 (completed obj5 / displayed obj10): inserted markers
+      `0x0015551C` / `0x0010B293` / type 0x00 `0x00107D4A` / `0x00107D4D` / `0x00169330` — **none is `0x00104C7D` or
+      `0x00104E85`**. So the markers are arbitrary script side-effects (`.Enable` on unrelated refs, AI/package refs),
+      NOT a decodable objective↔target-ref signal. The §6 #10 "objective active ↔ target ref enabled" relationship,
+      where it exists, is mediated by per-quest dialogue/result-script logic and is not recoverable by alignment.
+    - **`0x0010D9F4` is cell/location data, NOT a quest-objective tracker** (corrects the earlier "tracks Back in the
+      Saddle's objective lifecycle"). It is a formType-7 record whose len follows the player's **cell**, not quest
+      progress: 76 (saloon, q8) → 81 (gas station, q9) → 76 (saloon, q10) → 76 (saloon, q11). It **shrank** 81→76 at
+      q9→q10 — a monotonic map-reveal can't un-reveal, and it did **not** change at q10→q11 when an objective
+      completed in place. Its 32-byte payload (`00 00 C0 07 F0 0F F8 0F F8 0F …` = 16-bit thermometer runs 0x07C0,
+      0x0FF0, 0x0FF8…) is the symmetric radial fill of a local-map/cell bitmap that swaps per cell. The earlier
+      grow/shrink "around Back in the Saddle" was coincidental movement through Goodsprings during that quest.
+    - **Structural claim reconfirmed:** VMS16 is a fully active quest (2 completed + several displayed objectives) with
+      **no per-quest change form at all** across q8–q11 — objective state for normal quests is genuinely not stored in
+      a decodable per-quest record.
+    **Consequence for recall:** VMS16 ("Ghost Town Gunfight") is NOT one of Save 57's 7 Pip-Boy quests, so even a
+    perfect VMS16 decode would not lift the oracle's recall; it was only a mechanism probe, and the mechanism is fuzzy.
+    The genuine Save-57 gap remains the 3 Goodsprings chargen quests, whose only tractable lever is the **VCG01
+    formType-7 thermometer decode** (needs the controlled in-game `setstage 0x00104C1C N` capture — a user step) and/or
+    the **VMQ01 `0x000842DD` bit18 ExtraDataList decode** (one of the 7; directly testable). The distributed type 0x08
+    marker route is now closed as a dead end. Tooling: `qscript` now prints `obj N targets=[…] "text"`.
 
 ---
 

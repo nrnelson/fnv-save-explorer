@@ -712,6 +712,15 @@ static void QuestScriptDump(FalloutSave s, string savePath, string formIdArg, st
             Console.WriteLine($"      {(e.Conditional ? "?" : " ")} {e.Verb} {e.TargetQuestEdid}{idx}{onOff}");
         }
     }
+
+    Console.WriteLine("\n  --- objectives (QOBJ index → NNAM text → QSTA target refs) ---");
+    foreach (var o in q.Objectives.OrderBy(x => x.Index))
+    {
+        var targets = o.TargetFormIds.Count > 0
+            ? string.Join(", ", o.TargetFormIds.Select(t => $"0x{t:X8}"))
+            : "(none)";
+        Console.WriteLine($"  obj {o.Index,-3} targets=[{targets}]  \"{o.Text}\"");
+    }
 }
 
 static void NoteScan(string dir)
