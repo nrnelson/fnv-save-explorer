@@ -990,6 +990,27 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     VMQ01` + `SetStage VMQ01 10` → They Went That-a-Way; VCG02 Back in the Saddle). `ScriptStartup` pinned by
     `ScriptStartupTests` (do-once / world-default / world-guarded-local / timer / and-or); 1115 tests green. Tooling:
     CLI `qscript` prints `LocalVars` + per-effect `fires=`.
+    **PROGRESS 2026-06-23 (cont.) — lever (b) is BLOCKED at the project's controlled-diff boundary (needs the game), so
+    Save 57 stands at 4/7 with PERFECT precision (4 correct, 0 false positives) and the 3 Goodsprings quests still
+    missed.** Attempted the formType-7 decode by cross-save/cross-character diff of Ain't That a Kick (VCG01,
+    `0x00104C1C`): its change form is `[99000000 7C](SCRIPT, only once the result script has run) [10 7C 00 7C 00 7C]
+    then 4× [marker bytes][~32-byte array]`. **Two findings, one correcting the prior roadmap:** (1) the `99000000`
+    SCRIPT prefix + `changeFlags` bit30 appear only **after** VCG01's completing stage ran — present in Nathan's
+    left-the-house saves (47/57) and Mace's Goodsprings save (3), absent in Nathan's in-house saves (22/28); (2) the
+    **4 arrays DO encode progress** (they are NOT the "static structural" data a first read suggested — they were
+    identical only across Nathan's same-state saves; **Mace Windu's differ**: array1 `0F 0F 0F 0F 07` vs Nathan's
+    `1F 1F 1F 1F 0F`, a clean bit-shift), and they look like **cumulative bit-runs / a thermometer encoding** of
+    stages-reached. **But mapping bit→stage cannot be done from corpus alignment alone** (the arrays move as a whole;
+    no save isolates a single stage), so it needs a **controlled `setstage` capture on a formType-7 quest** — the
+    `zc0–zc4` captures don't apply (they were `setstage 0x0010A214`, a *ref-style* quest, not formType-7). Per the
+    repo's "don't guess" rule + §7 controlled-diff methodology, the bitmask is **left undecoded rather than guessed**.
+    **The exact capture that would close it:** from a fresh chargen, `setstage 0x00104C1C 5` → save → `10` → save → …,
+    then `fdiff`/`hex` which array bit flips per stage. Two of the three missing quests then fall out for free:
+    VCG01 reaching stage 200 propagates `StartQuest VMQ01` + `SetStage VMQ01 10` → **They Went That-a-Way** active, and
+    VCG01 itself → completed; the third, **Back in the Saddle** (VCG02), has its completion in *no* decodable save field
+    (empty ref-style template, §6 #10) and likely needs the same capture on VCG02 or a Goodsprings-controller model.
+    **Net for §6 #16:** the interpreter (`QuestPipboy`) is real and the precision problem is solved; recall is gated on
+    one controlled in-game capture, which is a user step.
 
 ---
 
