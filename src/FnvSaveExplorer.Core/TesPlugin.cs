@@ -168,7 +168,7 @@ public sealed class TesPlugin
             if (!string.IsNullOrEmpty(name))
                 forms.Add((formId, name, sig, noteType)); // sig is the record type (WEAP/ARMO/ALCH/AMMO/MISC/…)
             if (sig == "QUST")
-                quests.Add(ParseQuest(formId, subs, localized));
+                quests.Add(ParseQuest(formId, subs, localized, full));
         }
     }
 
@@ -185,10 +185,11 @@ public sealed class TesPlugin
     /// </list>
     /// Parsing is defensive: a malformed/short subrecord is skipped rather than throwing.
     /// </summary>
-    private static QuestDefinition ParseQuest(uint formId, List<(string Type, byte[] Data)> subs, bool localized)
+    private static QuestDefinition ParseQuest(uint formId, List<(string Type, byte[] Data)> subs, bool localized, string? full)
     {
         var stages = new List<QuestStageDef>();
         var objectives = new List<QuestObjectiveDef>();
+        byte dataFlags = 0; // QUST DATA byte 0: bit0 = Start Game Enabled (ROADMAP §6 #16)
 
         int? pendingStage = null;
         byte pendingFlags = 0;
@@ -222,6 +223,9 @@ public sealed class TesPlugin
         {
             switch (type)
             {
+                case "DATA" when sub.Length >= 1:
+                    dataFlags = sub[0]; // QUST DATA: byte 0 = quest flags (bit0 = Start Game Enabled)
+                    break;
                 case "INDX":
                     FlushStage();
                     pendingStage = sub.Length >= 2 ? BinaryPrimitives.ReadInt16LittleEndian(sub) : sub.Length == 1 ? sub[0] : 0;
@@ -250,7 +254,57 @@ public sealed class TesPlugin
         FlushStage();
         FlushObjective();
 
-        return new QuestDefinition(formId, stages, objectives);
+        return new QuestDefinition(formId, stages, objectives, dataFlags, full);
+    }
+
+    /// <summary>R&amp;D (ROADMAP §6 #16): dump the raw subrecords of one <c>QUST</c> record from a plugin file,
+    /// matched by <b>plugin-local</b> FormID. Returns each subrecord's signature, length, and (for text fields)
+    /// decoded text — used to discover whether FNV masters retain stage result-script <b>source text</b>
+    /// (<c>SCTX</c>) and conditions (<c>CTDA</c>) we can statically scan, or only compiled bytecode (<c>SCDA</c>).</summary>
+    public static IReadOnlyList<(string Type, int Size, string? Text)> DumpQust(Stream fs, uint localFormId)
+    {
+        if (ReadSignature(fs) != "TES4")
+            throw new SaveFormatException("not a TES4 plugin", 0);
+        var headerDataSize = ReadU32(fs);
+        ReadExactly(fs, 16); // flags(4) + formId(4) + version-control(8)
+        ReadExactly(fs, (int)headerDataSize);
+
+        while (true)
+        {
+            var gsig = ReadSignature(fs);
+            if (gsig is null) break;
+            if (gsig != "GRUP") break;
+            var groupSize = ReadU32(fs);
+            var label = Encoding.ASCII.GetString(ReadExactly(fs, 4));
+            ReadU32(fs);
+            ReadExactly(fs, 8);
+            var contentSize = (long)groupSize - HeaderSize;
+            if (label != "QUST") { fs.Seek(contentSize, SeekOrigin.Current); continue; }
+
+            var end = fs.Position + contentSize;
+            while (fs.Position < end)
+            {
+                var sig = ReadSignature(fs);
+                if (sig is null) break;
+                var size = ReadU32(fs);
+                if (sig == "GRUP") { ReadExactly(fs, 16); fs.Seek((long)size - HeaderSize, SeekOrigin.Current); continue; }
+                var flags = ReadU32(fs);
+                var formId = ReadU32(fs);
+                ReadExactly(fs, 8);
+                var data = ReadExactly(fs, (int)size);
+                if (formId != localFormId) continue;
+                if ((flags & CompressedFlag) != 0) data = Decompress(data);
+                var result = new List<(string, int, string?)>();
+                foreach (var (type, sub) in ParseSubrecords(data))
+                {
+                    string? text = type is "SCTX" or "CNAM" or "NNAM" or "FULL" or "EDID" ? ZString(sub) : null;
+                    result.Add((type, sub.Length, text));
+                }
+                return result;
+            }
+            break;
+        }
+        return [];
     }
 
     /// <summary>
@@ -354,5 +408,21 @@ public sealed record QuestObjectiveDef(int Index, string? Text, IReadOnlyList<ui
 /// <summary>A <c>QUST</c> record's decoded structure: its FormID (plugin-local as read from a
 /// <see cref="TesPlugin"/>, re-keyed into save space by <see cref="PluginDatabase"/>) plus its stages and
 /// objectives. This is the static quest <i>definition</i> from the masters; the player's progress against it
-/// lives in the save's change forms (read by <c>QuestLog</c>).</summary>
-public sealed record QuestDefinition(uint FormId, IReadOnlyList<QuestStageDef> Stages, IReadOnlyList<QuestObjectiveDef> Objectives);
+/// lives in the save's change forms (read by <c>QuestLog</c>).
+/// <para><see cref="DataFlags"/> is the <c>DATA</c> subrecord's first byte (FO3/FNV quest flags): bit0
+/// <c>0x01</c> = <b>Start Game Enabled</b> (the engine starts the quest at game load), bit2 <c>0x04</c> =
+/// Allow repeated conversation topics, bit3 <c>0x08</c> = Allow repeated stages. <see cref="Name"/> is the
+/// quest's <c>FULL</c> display name (null when the quest has none — a dialogue/script container that never
+/// appears in the Pip-Boy); a player-facing quest has a name <i>and</i> objectives (ROADMAP §6 #16).</para></summary>
+public sealed record QuestDefinition(
+    uint FormId, IReadOnlyList<QuestStageDef> Stages, IReadOnlyList<QuestObjectiveDef> Objectives,
+    byte DataFlags = 0, string? Name = null)
+{
+    /// <summary>The quest's <c>DATA</c> "Start Game Enabled" flag (bit0): the engine starts these at game load,
+    /// so a Start-Game-Enabled quest with a displayed objective shows in the Pip-Boy with no save delta.</summary>
+    public bool StartGameEnabled => (DataFlags & 0x01) != 0;
+
+    /// <summary>A player-facing quest carries a display name and at least one objective; only these can appear in
+    /// the Pip-Boy Quests list (dialogue/script-only quests have neither). The first-order Pip-Boy filter.</summary>
+    public bool IsPlayerFacing => !string.IsNullOrEmpty(Name) && Objectives.Count > 0;
+}

@@ -136,7 +136,7 @@ public sealed class PluginDatabase
                             targets.Add(st);
                     objectives.Add(new QuestObjectiveDef(o.Index, o.Text, targets));
                 }
-                quests[questFormId] = new QuestDefinition(questFormId, q.Stages, objectives);
+                quests[questFormId] = new QuestDefinition(questFormId, q.Stages, objectives, q.DataFlags, q.Name);
             }
 
             resolved.Add(loadOrder[i]);

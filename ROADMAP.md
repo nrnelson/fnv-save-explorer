@@ -901,6 +901,31 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     and the masters-default quests remain absent by design rather than faked. This item is the path to removing
     that caveat. Foundations in place: `TesPlugin.QuestDefinition`, `PluginDatabase.Quest`, `QuestLog`, and the
     §6 #10 objective-status decode.
+    **PROGRESS 2026-06-23 — user authorised the build; the key enabler is CONFIRMED and the approach is now Phase-A
+    static text scan (NOT a bytecode VM).** Two findings on the Save 57 ground-truth oracle (user screenshot: exactly
+    7 Pip-Boy quests, 5 active + 2 completed — the validation target):
+    - **FNV masters retain quest stage result-script SOURCE TEXT (`SCTX`), not just compiled `SCDA` bytecode.** Dumped
+      via the new `TesPlugin.DumpQust` / CLI `qrec <plugin.esm> <localFormIdHex>`. E.g. *They Went That-a-Way* (VMQ01)
+      stage 10 reads literally `SetObjectiveDisplayed VMQ01 10 1` / `…25 1` / `…30 1`; later stages `SetObjectiveCompleted
+      VMQ01 20 1`, `if VMQ01.bPrimmClosed == 0 … endif`, `CompleteQuest VMQ01`, `RewardXP 1000`. *Back in the Saddle*
+      (VCG02) shows `SetObjectiveDisplayed VCG02 3 1`, `SetStage CGTutorial 54`, `VCG02Gecko1REF.Enable`. So the Pip-Boy
+      display logic is **readable as text** — Phase A scans `SetObjectiveDisplayed`/`SetObjectiveCompleted`/`SetStage`/
+      `StartQuest`/`StopQuest`/`CompleteQuest`/`FailQuest`/`CompleteAllObjectives` calls (targets resolved by quest EDID).
+      "(Optional)" is baked into the `NNAM` objective text, not a separate flag.
+    - **The open risk is the SEED (current stage) for freeform/no-change-form quests, NOT the script reading.** The
+      save records a clean stage list only for formType-9 quests (decoded). The 5 shown freeform quests store their stage
+      nowhere clean: *Back in the Saddle* = empty ref-style template (byte-identical to hidden quests), *Ain't That a
+      Kick* = undecoded formType-7 packed bitmask, and *They Went That-a-Way* + *Happy Trails Expedition* = **no change
+      form at all** (VMQ01 is DATA `0x00`, not even Start-Game-Enabled — yet runs at stage 10+). So "what stage is each
+      freeform quest at" must be reconstructed by **propagating `SetStage`/`StartQuest` across quests from a seed**
+      (save stage-lists + SGE startups), a fixpoint that is **condition-blind** (it ignores `if`/`GetStage` guards) and
+      will over-fire. This is the accuracy ceiling of Phase A and the concrete reason a faithful result may still need
+      light condition evaluation (Phase B) for the propagated cases. Decoding the formType-7 packed bitmask (1 quest)
+      and finding where VMQ01's running-stage actually persists are the two specific unknowns to close next.
+    - **Scaffolding shipped this session (uncommitted, kept):** `QuestDefinition.{DataFlags,Name,StartGameEnabled,
+      IsPlayerFacing}` (QUST `DATA` bit0 = Start Game Enabled; player-facing = FULL name + ≥1 objective — the first-order
+      filter: 194 player-facing / 67 SGE / only 7 shown on Save 57), `TesPlugin.DumpQust`, CLI `qrec` + `qdbg`
+      (masters × SGE × change-form-presence × decoded-objective correlation).
 
 ---
 

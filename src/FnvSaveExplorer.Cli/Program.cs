@@ -171,6 +171,19 @@ try
         case "notescan":
             NoteScan(path);
             break;
+        case "qdbg":
+            QuestDebug(FalloutSave.Load(path), path,
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
+            break;
+        case "qrec":
+        {
+            // qrec <plugin.esm> <localFormIdHex> — dump a QUST record's raw subrecords (R&D §6 #16).
+            using var fs = File.OpenRead(path);
+            var local = ParseOffset(args[2]);
+            foreach (var (type, size, text) in TesPlugin.DumpQust(fs, local))
+                Console.WriteLine($"  {type}  {size,5}{(text is not null ? "  \"" + text + "\"" : "")}");
+            break;
+        }
         case "resolve":
             Resolve(FalloutSave.Load(path), path, ParseOffset(args[2]), args.Length > 3 ? args[3] : null);
             break;
@@ -587,6 +600,42 @@ static void Quests(FalloutSave s, string savePath, string? dataDir, bool raw)
             if (mark is null) continue;
             Console.WriteLine($"    obj {o.Index,-3} {mark} {Truncate(o.Text ?? "?", 60)}");
         }
+    }
+
+    static string Truncate(string v, int max) => v.Length <= max ? v : v[..(max - 1)] + "…";
+}
+
+// R&D (ROADMAP §6 #16): for every PLAYER-FACING quest in the masters (FULL name + >=1 objective), print its
+// Start-Game-Enabled flag, whether the save carries a change form for it, and the save-side displayed/completed
+// objective state. Lets us correlate masters+save fields against a known-ground-truth Pip-Boy list (Save 57).
+static void QuestDebug(FalloutSave s, string savePath, string? dataDir)
+{
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    if (db.Count == 0) { Console.WriteLine("Needs the game Data folder."); return; }
+
+    // Which quest FormIDs have a change form in this save (any kind)?
+    var changeForms = new Dictionary<uint, FalloutSave.ChangeFormHeader>();
+    foreach (var cf in s.EnumerateChangeForms())
+        if (db.RecordType(cf.FormId) == "QUST")
+            changeForms[cf.FormId] = cf;
+
+    var log = QuestLog.Read(s, db);
+    var byId = log.Quests.ToDictionary(q => q.FormId);
+
+    var facing = db.Quests.Values.Where(q => q.IsPlayerFacing)
+        .OrderByDescending(q => q.StartGameEnabled)
+        .ThenBy(q => q.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    Console.WriteLine($"Player-facing quests in masters (FULL name + objectives): {facing.Count}");
+    Console.WriteLine($"  of those with a change form in this save: {facing.Count(q => changeForms.ContainsKey(q.FormId))}");
+    Console.WriteLine($"  Start-Game-Enabled: {facing.Count(q => q.StartGameEnabled)}\n");
+    Console.WriteLine($"{"SGE",-4}{"CF",-4}{"DATA",-6}{"dispObj",-8}{"doneObj",-8}{"Name",-42}FormID");
+    foreach (var q in facing)
+    {
+        var hasCf = changeForms.ContainsKey(q.FormId);
+        byId.TryGetValue(q.FormId, out var decoded);
+        var disp = decoded?.Objectives.Count(o => o.Displayed == true) ?? 0;
+        var done = decoded?.Objectives.Count(o => o.Completed == true) ?? 0;
+        Console.WriteLine($"{(q.StartGameEnabled ? "SGE" : ""),-4}{(hasCf ? "cf" : ""),-4}0x{q.DataFlags:X2}  {disp,-8}{done,-8}{Truncate(q.Name ?? "?", 40),-42}0x{q.FormId:X8}");
     }
 
     static string Truncate(string v, int max) => v.Length <= max ? v : v[..(max - 1)] + "…";
