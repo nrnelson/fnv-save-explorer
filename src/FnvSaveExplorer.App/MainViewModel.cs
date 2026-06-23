@@ -461,9 +461,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         QuestsInfo = $"Computed Pip-Boy quest list: {Quests.Count} quest(s) — {active} active, {done} completed. " +
                      "Reconstructed by interpreting the masters' quest scripts (ROADMAP §6 #16), not just read from " +
                      "the save — so it excludes background-initialized quests the save records but the Pip-Boy doesn't " +
-                     "show. Known gap: the Goodsprings character-creation quests (e.g. Ain't That a Kick / Back in the " +
-                     "Saddle / They Went That-a-Way) are omitted — their state isn't stored in any decodable save " +
-                     "field. Read-only.";
+                     "show. Known gap: \"Back in the Saddle\" (the Goodsprings tutorial quest) is omitted — its " +
+                     "completion isn't stored in any decodable save field. Read-only.";
     }
 
     private static string DescribeInventory(int stacks, PluginDatabase db) =>

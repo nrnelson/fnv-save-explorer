@@ -29,7 +29,7 @@ if (args.Length < 2)
           fnvsave notes <save.fos> [dataDir]  List the player's Pip-Boy Data -> Notes — READ and UNREAD (§4k/§4k.1)
           fnvsave pipboy <save.fos> [dataDir]   The COMPUTED in-game Pip-Boy quest list (§6 #16): interprets the
                                               masters' quest scripts (SGE startup + reached-stage effects + guard eval).
-                                              active/completed + displayed objectives. (Goodsprings chargen chain omitted.)
+                                              active/completed + displayed objectives. (Only "Back in the Saddle" omitted.)
           fnvsave quests <save.fos> [dataDir] [--raw]   List quests whose state the save records (§6 #10): stages
                                               (done/time) + objectives ([active]/[done], from CHANGE_QUEST_OBJECTIVES).
                                               NOT the Pip-Boy list (use `pipboy` for that). --raw hex-dumps each form
