@@ -151,7 +151,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
 {
     private FalloutSave? _save;
     private string? _loadedPath;
-    private PluginDatabase? _questDb; // database last used for the Quests tab, so the show-all toggle can re-populate
 
     public ObservableCollection<string> Plugins { get; } = [];
     public ObservableCollection<FltRow> FileLocationTable { get; } = [];
@@ -213,22 +212,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private string _questsInfo = "";
     public string QuestsInfo { get => _questsInfo; private set => Set(ref _questsInfo, value); }
-
-    private bool _showAllQuests;
-    /// <summary>When set, the Quests tab also lists internal/tracker quests that have stage state but no
-    /// player-facing log line (the player-facing gate is bypassed — see <see cref="QuestLog"/>). Toggling
-    /// re-populates the grid.</summary>
-    public bool ShowAllQuests
-    {
-        get => _showAllQuests;
-        set
-        {
-            if (_showAllQuests == value) return;
-            Set(ref _showAllQuests, value);
-            if (_save is not null && _questDb is not null)
-                PopulateQuests(_save, _questDb);
-        }
-    }
 
     // ---- Edit fields (two-way bound) --------------------------------------
     private string _editName = "";
@@ -447,7 +430,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void PopulateQuests(FalloutSave save, PluginDatabase db)
     {
         Quests.Clear();
-        _questDb = db;
         if (db.Count == 0)
         {
             QuestsInfo = "The quest log needs the game's Data folder (FalloutNV.esm) to classify and name " +
@@ -455,7 +437,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        var log = QuestLog.Read(save, db, includeAll: ShowAllQuests);
+        var log = QuestLog.Read(save, db);
         foreach (var q in log.Quests
                      .OrderBy(q => q.State == QuestState.Unknown)                  // decoded-progress quests first
                      .ThenBy(q => q.Name ?? "￿", StringComparer.OrdinalIgnoreCase))
@@ -493,13 +475,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             });
         }
 
-        QuestsInfo = (ShowAllQuests
-            ? $"{Quests.Count} quest(s) with any recorded progress, including internal/tracker quests with stage " +
-              "state but no player-facing log line. Untick to show only the player-facing log. "
-            : $"{Quests.Count} quest(s) in the player's log — displayed objectives + completed log stages the save " +
-              "records. NOT the full Pip-Boy list: Start-Game-Enabled quests at their masters default (e.g. the DLC " +
-              "intros) leave no save delta and aren't shown — tick “Show tracker quests” for everything decodable. ")
-            + "(ROADMAP §6 #10.) Read-only — quest edits are length-changing.";
+        QuestsInfo = $"{Quests.Count} quest(s) whose stage/objective state this save records. ⚠ This is NOT your " +
+                     "Pip-Boy quest list and can't be made into one from the save alone: it includes quests the game " +
+                     "background-initialized but you haven't started (e.g. DLC main quests like “Welcome to the Big " +
+                     "Empty” before you enter the DLC — identical save bytes to a started quest), and omits quests " +
+                     "shown from masters defaults (no save delta). The real Pip-Boy list needs the quest-script " +
+                     "interpreter (ROADMAP §6 #16). Read-only — quest edits are length-changing.";
     }
 
     private static string DescribeInventory(int stacks, PluginDatabase db) =>

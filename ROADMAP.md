@@ -779,26 +779,33 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     re-keyed into save space by `PluginDatabase.Quest`); and the generic reader (`QuestLog`) walks target-ref
     enable-state + stage lists into a quest-log view (CLI + GUI). A stage-list entry is attributed to its owning
     quest via the change form's refID (resolves for real QUST forms).
-    **Objective display/complete state — ✅ DECODED (the real Pip-Boy signal).** The full FNV QUST change-form
-    layout was cracked by aligning the bytes against the masters defs (UESP `QUST_Changeform` spec + corpus):
+    **Objective display/complete state — ✅ DECODED (but it is NOT a sufficient "shown in Pip-Boy" signal — see
+    below).** The full FNV QUST change-form layout was cracked by aligning the bytes against the masters defs (UESP
+    `QUST_Changeform` spec + corpus):
     `[questFlags][7C] [vsval stageCount][7C] stages [vsval varCount][7C] (u32 idx,f64 val) script-vars [00][7C][00][7C]
     [vsval objCount][7C] (u32 objIndex,u32 status)`. The **objective `status` is a bitfield — bit0 = displayed,
-    bit1 = completed** — i.e. exactly what the Pip-Boy renders. **Confirmed by a controlled diff** (Saves 56→57: a
-    natural quest completion flipped `NVDLC04Ending` objective 70's status `1 → 3`). `QuestLog.ReadObjectiveStatuses`
-    decodes it (a self-validating scan: a vsval count followed by that many `(masters-objIndex, small-status)` pairs),
-    `QuestObjective` now carries `Displayed`/`Completed`/`Active`, and `DeriveState` uses objective completion. CLI
-    `quests` + the GUI tab show per-objective `[active]`/`[done]`. **Verified on real saves:** "Why Can't We Be
-    Friends?" → obj 10 `[active]`, and the 56→57 completion reads as completed.
-    **Scope / honesty boundary (the list is NOT a full Pip-Boy mirror — established this session):** the Pip-Boy
-    list is assembled by the engine from **save change forms + masters defaults + compiled-script execution**, so it
-    can't be fully reconstructed statically. What IS surfaced is the progress the **save** records — stage lists +
-    objective display/complete status. NOT surfaced: (a) **Start-Game-Enabled quests at their masters default** —
-    e.g. the DLC intro quests, and **"They Went That-a-Way" (`0x000842DD`), which has NO change form at all** yet
-    shows in the Pip-Boy (proven: type QUST, absent from all change forms — its display state is the masters default +
-    startup script, not in the save); (b) the **packed formType-7 stage encoding** (e.g. "Ain't That a Kick" — the
-    only formType-7 quest, chargen-only). Also note: a change form whose refID resolves to a QUST FormID but carries
-    bit18 (`0x00040000`) reference-like data is the quest's REFR-style state, not the clean quest layout; the FormType
-    byte is a **layout discriminator, not the record type** (PlayerRef ACHR + player base are both FormType 9).
+    bit1 = completed**. **Confirmed by a controlled diff** (Saves 56→57: a natural quest completion flipped
+    `NVDLC04Ending` objective 70's status `1 → 3`). `QuestLog.ReadObjectiveStatuses` decodes it (a self-validating
+    scan: a vsval count followed by that many `(masters-objIndex, small-status)` pairs), `QuestObjective` carries
+    `Displayed`/`Completed`/`Active`, and `DeriveState` uses objective completion. CLI `quests` + the GUI tab show
+    per-objective `[active]`/`[done]`. **Verified on real saves** ("Why Can't We Be Friends?" → obj 10 `[active]`;
+    the 56→57 completion reads completed).
+    **Why this is NOT the Pip-Boy list (a tried-and-rejected gate, established this session).** A first attempt
+    gated the default view to "has a displayed objective or completed log stage", calling that the Pip-Boy. It's
+    wrong: the engine **background-initializes** quests (sets stage + displays an objective) when content loads,
+    *before the player starts them*, and that state is **byte-for-byte identical** to a started quest. Proven on
+    vanilla Save 57: "Welcome to the Big Empty" (`0x05002FCB`, Old World Blues — the player has **not** entered the
+    DLC) carries quest-flags `0x31` + objective 10 status `1` (displayed), **identical** to genuinely-active quests;
+    same for "Supply Train" (`0x07008892`). There is **no save-side "started/given-to-player" bit** (corroborated by
+    Saves 54→55: when a quest was actually *given* by an NPC, **no QUST change form changed** — only reference-enable
+    markers). So the gate was removed; `QuestLog.Read` now returns simply "quests whose state the save records",
+    honestly labelled as NOT the Pip-Boy list. The list both **over**-includes (background-initialized, not-yet-started
+    quests like the above) and **under**-includes (Start-Game-Enabled quests at their masters default — e.g.
+    **"They Went That-a-Way" `0x000842DD`, which has NO change form at all** yet shows in the Pip-Boy). The packed
+    **formType-7** stage encoding ("Ain't That a Kick", chargen-only) is also undecoded. Aside: a change form whose
+    refID resolves to a QUST FormID but carries bit18 (`0x00040000`) reference-like data is the quest's REFR-style
+    state, not the clean quest layout; the FormType byte is a **layout discriminator, not the record type** (PlayerRef
+    ACHR + player base are both FormType 9).
     **Remaining work:** decode the formType-7 packed bitmask (low payoff — 1 quest); and close the gap to a
     **full Pip-Boy mirror** — the Start-Game-Enabled / masters-default quests that leave no save delta — which
     needs the **Gamebryo quest-script interpreter, now in scope as §6 #16**.
@@ -869,13 +876,19 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     startup/result scripts at load, not by anything in the save. To reproduce that list we must model what those
     scripts do. **The masters already hold the scripts** (`SCPT` records + quest stage/result-script fragments,
     which `TesPlugin` reads but currently skips); FOSE/FNVEdit decompile the FO3/FNV compiled-bytecode format, so
-    it's documented (see §8). **Phased plan:**
+    it's documented (see §8). **The crux this item must solve is the "started / given-to-player" state**, NOT
+    objective display: §6 #10 proved the save can't distinguish a started quest from a background-initialized one
+    (both carry quest-flags `0x31` + a displayed objective — e.g. "Welcome to the Big Empty" before Old World Blues
+    is entered). So the interpreter must determine *whether each quest is actually running/given* (StartQuest, the
+    quest's start conditions, DLC-entry triggers) — only then does its objective-display state mean "in the Pip-Boy".
+    **Phased plan:**
     - **A — static literal scan (high coverage, low cost).** Parse the masters `QUST` `DATA` flags (Start Game
       Enabled), then statically scan each quest's stage **result scripts** for literal `SetStage` /
-      `SetObjectiveDisplayed` / `SetObjectiveCompleted` calls with constant args. Many default-shown quests (the
-      DLC intros especially) start with a trivial `SetStage 10`/`SetObjectiveDisplayed q 10 1`, so this predicts
-      their displayed objectives **without executing anything** — and unions cleanly with the §6 #10 save-side
-      status (save delta wins where present). Likely recovers most of the early-game Pip-Boy list.
+      `SetObjectiveDisplayed` / `SetObjectiveCompleted` calls with constant args. Caveat from above: a static scan
+      alone will also "predict" the background-initialized quests (their startup scripts *do* call
+      `SetObjectiveDisplayed`), so Phase A must pair the scan with a **started-state determination** — at minimum,
+      treat DLC/Start-Game-Enabled quests as *not shown until a start trigger fires*, which generally needs Phase B.
+      Unions with the §6 #10 save-side status (save delta wins where present).
     - **B — a real bytecode VM (for the data-dependent cases).** A FO3/FNV compiled-script interpreter (opcodes,
       conditionals, quest/`GetStage` reads, quest variables) executing the startup-relevant fragments against the
       save's decoded state (globals §4c, quest stages/objectives, player data). Scope creep risk is real: scripts

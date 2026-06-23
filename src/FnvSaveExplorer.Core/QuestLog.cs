@@ -83,13 +83,18 @@ public sealed class QuestLog
 
     private QuestLog(IReadOnlyList<Quest> quests) => Quests = quests;
 
-    /// <summary>Reads the quest log. Returns an empty log when <paramref name="db"/> has no masters (quest
-    /// change forms can't be classified without them).
-    /// <para>By default only quests that match the player's Pip-Boy are returned (see <see cref="InPlayerLog"/>):
-    /// a displayed objective, or a completed log-entry stage. Pass <paramref name="includeAll"/> to instead
-    /// return every quest with <i>any</i> decodable progress — including internal/tracker quests with stage
-    /// state but no player-facing log line (e.g. <c>NVDLC04Ending</c>).</para></summary>
-    public static QuestLog Read(FalloutSave save, PluginDatabase db, bool includeAll = false)
+    /// <summary>Reads the quests whose stage/objective state the save records. Returns an empty log when
+    /// <paramref name="db"/> has no masters (quest change forms can't be classified without them).
+    /// <para><b>This is NOT the in-game Pip-Boy list — and can't be made into one statically.</b> The save records
+    /// objective display/complete status and stage lists for quests the engine has <i>background-initialized</i>,
+    /// which is byte-for-byte identical whether or not the player has been given the quest: e.g. a DLC main quest
+    /// like "Welcome to the Big Empty" carries objective 10 = displayed and quest-flags <c>0x31</c> from Old World
+    /// Blues' setup, the same as a started quest, even though it isn't shown until you enter the DLC. There is no
+    /// save-side "started/shown" bit (confirmed by controlled diff: when a quest is actually given, no QUST change
+    /// form changes). Conversely the quests that <i>are</i> shown often sit at their masters default with no save
+    /// delta at all (e.g. "They Went That-a-Way" has no change form). A faithful Pip-Boy list therefore needs the
+    /// quest-script interpreter — ROADMAP §6 #16.</para></summary>
+    public static QuestLog Read(FalloutSave save, PluginDatabase db)
     {
         // Index change forms by FormID once, for objective target-ref lookups.
         var byFormId = new Dictionary<uint, FalloutSave.ChangeFormHeader>();
@@ -108,13 +113,9 @@ public sealed class QuestLog
 
             // Need *some* decodable progress: a stage list, or an objective the change form marks
             // displayed/completed. Quests with neither (pure dialogue/timer forms, or masters-default quests
-            // with no save delta) carry nothing to show.
+            // with no save delta) carry nothing to show. (No "Pip-Boy" gate: it isn't recoverable — see above.)
             var hasObjectiveState = objectives.Any(o => o.Displayed == true || o.Completed == true);
             if (stages.Count == 0 && !hasObjectiveState)
-                continue;
-
-            // Default view: only quests the Pip-Boy would render. includeAll keeps the rest (R&D).
-            if (!includeAll && !InPlayerLog(stages, objectives))
                 continue;
 
             var state = DeriveState(stages, objectives);
@@ -123,17 +124,6 @@ public sealed class QuestLog
 
         return new QuestLog(quests);
     }
-
-    /// <summary>The player-facing gate (ROADMAP §6 #10): a quest matches the in-game Pip-Boy when the save
-    /// records a <b>displayed objective</b> (status bit0 — the live signal the Pip-Boy renders) or a
-    /// <b>completed log-entry stage</b> (a done stage with Pip-Boy log text). This drops internal/tracker quests
-    /// that carry stage state but never wrote a player-facing line (their stages have no <c>CNAM</c> log text and
-    /// their objectives aren't masters-defined). It does <i>not</i> recover Start-Game-Enabled quests sitting at
-    /// their masters default (no save delta) — those are unreachable statically (ROADMAP §6 #10).</summary>
-    private static bool InPlayerLog(
-        IReadOnlyList<QuestStageEntry> stages, IReadOnlyList<QuestObjective> objectives)
-        => objectives.Any(o => o.Displayed == true)
-        || stages.Any(s => s.Done && s.LogText is { Length: > 0 });
 
     /// <summary>Parses the <c>0x7C</c>-delimited stage list from a quest change form carrying the
     /// <c>CHANGE_QUEST_STAGES</c> flag, joining each entry to its masters stage definition (flags + log text).

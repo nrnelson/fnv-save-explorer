@@ -27,10 +27,9 @@ if (args.Length < 2)
                                               the game masters; dataDir overrides Data-folder auto-detect)
           fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
           fnvsave notes <save.fos> [dataDir]  List the player's Pip-Boy Data -> Notes — READ and UNREAD (§4k/§4k.1)
-          fnvsave quests <save.fos> [dataDir] [--all] [--raw]   List the player's quests (§6 #10): each with its
-                                              stages (done/time) and objectives ([active]/[done], from the save's
-                                              CHANGE_QUEST_OBJECTIVES status). Defaults to the player-facing log;
-                                              --all adds internal/tracker quests; --raw hex-dumps each form (R&D)
+          fnvsave quests <save.fos> [dataDir] [--raw]   List quests whose state the save records (§6 #10): stages
+                                              (done/time) + objectives ([active]/[done], from CHANGE_QUEST_OBJECTIVES).
+                                              NOT the Pip-Boy list (see the command's note). --raw hex-dumps each form
           fnvsave notescan <dir>             Walk every .fos in a folder and aggregate the read-note markers:
                                               changeFlags values + whether each type-0x1F marker resolves to a
                                               NOTE record + inventory-reference confirmation (R&D §4k.1 #1-3)
@@ -167,7 +166,7 @@ try
         case "quests":
             Quests(FalloutSave.Load(path), path,
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path),
-                args.Contains("--raw"), args.Contains("--all"));
+                args.Contains("--raw"));
             break;
         case "notescan":
             NoteScan(path);
@@ -533,7 +532,7 @@ static void Notes(FalloutSave s, string savePath, string? dataDir)
     }
 }
 
-static void Quests(FalloutSave s, string savePath, string? dataDir, bool raw, bool all)
+static void Quests(FalloutSave s, string savePath, string? dataDir, bool raw)
 {
     // The player's quest log (ROADMAP §6 #10). Classifying a change form as a quest needs the masters
     // (refID -> FormID -> QUST), as do stage/objective names, so the database is required.
@@ -558,13 +557,12 @@ static void Quests(FalloutSave s, string savePath, string? dataDir, bool raw, bo
         return;
     }
 
-    var log = QuestLog.Read(s, db, includeAll: all);
-    Console.WriteLine(all
-        ? $"Quests with any recorded progress: {log.Quests.Count}  (includes internal/tracker quests with stage " +
-          "state but no player-facing log line)\n"
-        : $"Quests in the player's log: {log.Quests.Count}  (displayed objectives + completed log stages the save " +
-          "records; use --all for tracker quests too. NOT a full Pip-Boy mirror — masters-default quests like the " +
-          "DLC intros leave no save delta — §6 #10)\n");
+    var log = QuestLog.Read(s, db);
+    Console.WriteLine($"Quests with state recorded in this save: {log.Quests.Count}\n" +
+        "NOTE: this is NOT your Pip-Boy quest list and can't be made into one from the save alone. It includes\n" +
+        "quests the engine background-initialized but you haven't started (e.g. DLC main quests like \"Welcome to\n" +
+        "the Big Empty\" before you enter the DLC — identical save bytes to a started quest), and it omits quests\n" +
+        "shown from masters defaults (no save delta). The real Pip-Boy list needs the quest-script interpreter — §6 #16.\n");
     foreach (var q in log.Quests.OrderBy(q => q.Name ?? "￿", StringComparer.OrdinalIgnoreCase))
     {
         Console.WriteLine($"{q.Name ?? "?",-44} [{q.State}]  0x{q.FormId:X8}");

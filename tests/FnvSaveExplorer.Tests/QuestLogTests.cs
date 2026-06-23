@@ -69,20 +69,20 @@ public class QuestLogTests
     }
 
     [Fact]
-    public void Tracker_quest_without_a_displayed_objective_or_log_stage_is_hidden_by_default()
+    public void Quest_with_no_stage_or_objective_state_is_omitted()
     {
-        // Stage state but no displayed objective (status 2 = completed/hidden) and no log-entry stage (the
-        // stage carries no CNAM) -> an internal tracker. Hidden from the player-facing default, kept with includeAll.
+        // OBJECTIVES flag set but the objective left at status 0 (not displayed, not completed) and no stage list
+        // -> nothing decodable to show, so it isn't listed. (There is no "Pip-Boy" gate: in-game visibility isn't
+        // recoverable from the save — a started quest and a background-initialized one share identical bytes.)
         using var dir = new TempDataFolder();
         dir.Write("A.esm", EsmBuilder.Plugin([],
-            new TestRecord("QUST", 0x0010A001, Edid: "Tracker", Full: "Tracker", Subs:
-            [("INDX", I16(10)), ("QSDT", [0x00]), ("QOBJ", I32(10)), ("NNAM", Z("obj"))]))); // stage 10, no CNAM log text
+            new TestRecord("QUST", 0x0010A001, Edid: "Q", Full: "Q", Subs:
+            [("QOBJ", I32(10)), ("NNAM", Z("obj"))])));
 
-        var save = FalloutSave.Parse(QuestSave.Build(objStatus: 2)); // completed but NOT displayed
-        var db = PluginDatabase.Build(save.Plugins, dir.Path);
+        var save = FalloutSave.Parse(QuestSave.Build(questFlags: 0x20000000, objStatus: 0)); // OBJECTIVES only, status 0
+        var log = QuestLog.Read(save, PluginDatabase.Build(save.Plugins, dir.Path));
 
-        Assert.Empty(QuestLog.Read(save, db).Quests);                    // player-facing gate hides it
-        Assert.Single(QuestLog.Read(save, db, includeAll: true).Quests); // reachable with includeAll
+        Assert.Empty(log.Quests);
     }
 
     [Fact]
