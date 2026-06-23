@@ -1131,6 +1131,26 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     or whitespace (no-space form included); pinned by `Tracks_guards_when_if_elseif_have_no_space_before_paren`. The
     fix only makes the interpreter *more* conservative (more guards captured → fewer unconditional fires), so it can't
     add false positives; Save 57 stays 6/7. Tooling: `qaudit` (+`--list`/`--who`), `qscript` EDID lookup.
+    **PROGRESS 2026-06-23 — Phase B STARTED: TesPlugin now reads dialogue (DIAL→INFO) result-script effects
+    (opt-in), the foundation for the dialogue-started quests qaudit flagged.** `TesPlugin.Read(…, readDialogue:
+    true)` descends the `DIAL` group, recurses its nested Topic-Children `GRUP`s, and parses each `INFO`'s result-
+    script `SCTX` with the existing `QuestScript.Parse` → `TesPlugin.DialogueEffects` (StartQuest/SetStage/SetObjective
+    calls, targeting quests by editor id). `PluginDatabase.Build(…, withDialogue: true)` aggregates these and resolves
+    the StartQuest/SetStage targets to FormIDs → `PluginDatabase.DialogueStartedQuests`. **Performance is a non-issue:
+    reading ALL of FalloutNV.esm's dialogue + parsing the INFO scripts adds ~120 ms** (only `SCTX` is decoded; it's
+    kept off the fast name/inventory path). On the vanilla load order, `qaudit` now shows **86 of the 112 at-risk
+    (conditional-only + external-only) player-facing quests have a known dialogue start/advance trigger**; the
+    remaining 26 (mostly DLC main quests like NVDLC04MQ*, X-8/X-13 setups) are activator/script-started.
+    **Key finding that scopes Step 2:** dialogue-started is a STATIC property and is NOT, by itself, a Pip-Boy gate —
+    the background-init quest "Welcome to the Big Empty" (`0x05002FCB`, the Save-57 anti-set) is ALSO `[dlg]`-targeted
+    (some Old World Blues INFO does `SetStage NVDLC03MQ01 …`), yet it's not shown until the player enters the DLC. So
+    Phase B's recall payoff requires combining the dialogue edge with a SAVE signal that the trigger actually fired /
+    the quest is genuinely running (the long-standing started-vs-background-init problem) — NOT the dialogue edge
+    alone. Candidate save signals to evaluate next: the INFO "said" state, or the §6 #10 objective-target-ref
+    enable-state (a genuinely-active objective's QSTA target ref is enabled; a background-init quest in an unloaded
+    DLC worldspace's is not). Step 1 is the data layer; the gate is Step 2. Shipped: `TesPlugin.DialogueEffects`,
+    `PluginDatabase.DialogueStartedQuests`, `qaudit` dialogue reclassification (+`[dlg]` in `--list`), 2 tests
+    (`QuestDialogueTests`). All quest/script/dialogue tests green.
 
 ---
 

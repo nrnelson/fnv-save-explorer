@@ -64,26 +64,37 @@ public sealed class TesPlugin
     /// reader (ROADMAP §6 #10). Empty unless the plugin defines quests.</summary>
     public IReadOnlyList<QuestDefinition> Quests { get; }
 
+    /// <summary>The quest-affecting calls (<c>StartQuest</c>/<c>SetStage</c>/<c>SetObjective…</c>) found in
+    /// dialogue <c>INFO</c> result-script source text (<c>SCTX</c>), each naming its target quest by editor id
+    /// (ROADMAP §6 #16 Phase B). Empty unless the plugin was read with <c>readDialogue: true</c> — dialogue is the
+    /// largest group, so it is parsed only when the Pip-Boy interpreter needs it. These are the start/advance
+    /// triggers that live OUTSIDE quest scripts (the "external-only" / dialogue-started class).</summary>
+    public IReadOnlyList<QuestScriptEffect> DialogueEffects { get; }
+
     private TesPlugin(
         string fileName,
         IReadOnlyList<string> masters,
         IReadOnlyList<(uint, string, string, int)> forms,
-        IReadOnlyList<QuestDefinition> quests)
+        IReadOnlyList<QuestDefinition> quests,
+        IReadOnlyList<QuestScriptEffect> dialogueEffects)
     {
         FileName = fileName;
         Masters = masters;
         Forms = forms;
         Quests = quests;
+        DialogueEffects = dialogueEffects;
     }
 
-    public static TesPlugin Load(string path)
+    public static TesPlugin Load(string path, bool readDialogue = false)
     {
         using var fs = File.OpenRead(path);
-        return Read(fs, Path.GetFileName(path));
+        return Read(fs, Path.GetFileName(path), readDialogue);
     }
 
-    /// <summary>Parses a plugin from an arbitrary (seekable) stream — used by tests with an in-memory plugin.</summary>
-    public static TesPlugin Read(Stream fs, string fileName)
+    /// <summary>Parses a plugin from an arbitrary (seekable) stream — used by tests with an in-memory plugin.
+    /// <paramref name="readDialogue"/> additionally descends into the <c>DIAL</c> group to collect <c>INFO</c>
+    /// result-script quest effects (off by default — it is the heaviest group; ROADMAP §6 #16 Phase B).</summary>
+    public static TesPlugin Read(Stream fs, string fileName, bool readDialogue = false)
     {
         // ---- TES4 header record (always first) ----
         var sig = ReadSignature(fs) ?? throw new SaveFormatException($"{fileName}: empty file", 0);
@@ -103,6 +114,7 @@ public sealed class TesPlugin
         // ---- top-level groups ----
         var forms = new List<(uint, string, string, int)>();
         var quests = new List<QuestDefinition>();
+        var dialogueEffects = new List<QuestScriptEffect>();
         // SCPT FormID -> (GameMode block source, declared local-variable names) (ROADMAP §6 #16)
         var scripts = new Dictionary<uint, (string GameMode, List<string> Locals)>();
         while (true)
@@ -124,6 +136,8 @@ public sealed class TesPlugin
             var labelType = Encoding.ASCII.GetString(label);
             if (groupType == 0 && (NamedTypes.Contains(labelType) || labelType == "SCPT"))
                 ReadRecords(fs, contentSize, localized, forms, quests, scripts);
+            else if (groupType == 0 && labelType == "DIAL" && readDialogue)
+                ReadInfoEffects(fs, contentSize, dialogueEffects); // descend DIAL -> Topic Children -> INFO (Phase B)
             else
                 fs.Seek(contentSize, SeekOrigin.Current); // skip the whole group without reading its bytes
         }
@@ -135,7 +149,40 @@ public sealed class TesPlugin
                 if (quests[i].ScriptFormId != 0 && scripts.TryGetValue(quests[i].ScriptFormId, out var s))
                     quests[i] = quests[i] with { GameModeScript = s.GameMode, LocalVars = s.Locals };
 
-        return new TesPlugin(fileName, masters, forms, quests);
+        return new TesPlugin(fileName, masters, forms, quests, dialogueEffects);
+    }
+
+    /// <summary>Descends a dialogue (<c>DIAL</c>) group — which nests <c>INFO</c> records inside per-topic
+    /// "Topic Children" sub-groups — collecting the quest-affecting calls in each <c>INFO</c>'s result-script
+    /// source text (<c>SCTX</c>). Recurses through nested <c>GRUP</c>s and skips non-<c>INFO</c> records (the
+    /// <c>DIAL</c> topics themselves). ROADMAP §6 #16 Phase B.</summary>
+    private static void ReadInfoEffects(Stream fs, long contentSize, List<QuestScriptEffect> effects)
+    {
+        var end = fs.Position + contentSize;
+        while (fs.Position < end)
+        {
+            var sig = ReadSignature(fs);
+            if (sig is null)
+                break;
+            var size = ReadU32(fs);
+            if (sig == "GRUP")
+            {
+                ReadExactly(fs, 16); // rest of the 24-byte group header
+                ReadInfoEffects(fs, (long)size - HeaderSize, effects); // recurse into the nested (Topic Children) group
+                continue;
+            }
+
+            var flags = ReadU32(fs);
+            ReadExactly(fs, 12); // formId(4) + version-control / form-version(8)
+            var data = ReadExactly(fs, (int)size);
+            if (sig != "INFO")
+                continue; // a DIAL topic (or other) record — only INFO carries the result scripts
+            if ((flags & CompressedFlag) != 0)
+                data = Decompress(data);
+            foreach (var (type, sub) in ParseSubrecords(data))
+                if (type == "SCTX" && ZString(sub) is { Length: > 0 } src)
+                    effects.AddRange(QuestScript.Parse(src));
+        }
     }
 
     /// <summary>Reads the records (and defensively skips any nested groups) inside one top-level item group.</summary>

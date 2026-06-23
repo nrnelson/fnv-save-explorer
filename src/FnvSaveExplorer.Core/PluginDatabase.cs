@@ -41,7 +41,9 @@ public sealed class PluginDatabase
 
     public int Count => _names.Count;
 
-    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved)
+    private readonly HashSet<uint> _dialogueStarted; // quest FormIDs an INFO StartQuest/SetStage-targets (Phase B)
+
+    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null)
     {
         _names = names;
         _types = types;
@@ -50,7 +52,13 @@ public sealed class PluginDatabase
         DataFolder = dataFolder;
         ModsFolder = modsFolder;
         ResolvedPlugins = resolved;
+        _dialogueStarted = dialogueStarted ?? [];
     }
+
+    /// <summary>Quest FormIDs (save-space) that a dialogue <c>INFO</c> result script <c>StartQuest</c>/<c>SetStage</c>
+    /// targets — the quests the player triggers through conversation rather than a quest script (ROADMAP §6 #16
+    /// Phase B). Empty unless the database was built with <c>withDialogue: true</c>.</summary>
+    public IReadOnlySet<uint> DialogueStartedQuests => _dialogueStarted;
 
     /// <summary>An empty database; every <see cref="Resolve"/> returns <c>null</c>.</summary>
     public static readonly PluginDatabase Empty = new([], [], [], [], null, null, []);
@@ -59,29 +67,30 @@ public sealed class PluginDatabase
     /// Builds a database for <paramref name="save"/>, auto-detecting the game <c>Data</c> folder (or using an
     /// override) and, when given, an MO2 <paramref name="modsFolder"/> for mod plugins.
     /// </summary>
-    public static PluginDatabase ForSave(FalloutSave save, string? dataFolderOverride = null, string? modsFolder = null)
+    public static PluginDatabase ForSave(FalloutSave save, string? dataFolderOverride = null, string? modsFolder = null, bool withDialogue = false)
     {
         var folder = GameDataLocator.FindDataFolder(dataFolderOverride);
         var paths = CollectPlugins(folder, modsFolder);
-        return paths.Count == 0 ? Empty : Build(save.Plugins, paths, folder, modsFolder);
+        return paths.Count == 0 ? Empty : Build(save.Plugins, paths, folder, modsFolder, withDialogue);
     }
 
     /// <summary>Builds a database from a load order and an explicit game <c>Data</c> folder.</summary>
-    public static PluginDatabase Build(IReadOnlyList<string> loadOrder, string dataFolder)
-        => Build(loadOrder, CollectPlugins(dataFolder, null), dataFolder, null);
+    public static PluginDatabase Build(IReadOnlyList<string> loadOrder, string dataFolder, bool withDialogue = false)
+        => Build(loadOrder, CollectPlugins(dataFolder, null), dataFolder, null, withDialogue);
 
     /// <summary>Builds a database from a load order and a plugin-name → file-path map (used in tests).</summary>
-    public static PluginDatabase Build(IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths)
-        => Build(loadOrder, pluginPaths, null, null);
+    public static PluginDatabase Build(IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, bool withDialogue = false)
+        => Build(loadOrder, pluginPaths, null, null, withDialogue);
 
     private static PluginDatabase Build(
-        IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, string? dataFolder, string? modsFolder)
+        IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, string? dataFolder, string? modsFolder, bool withDialogue = false)
     {
         var names = new Dictionary<uint, string>();
         var types = new Dictionary<uint, string>();
         var noteTypes = new Dictionary<uint, int>();
         var quests = new Dictionary<uint, QuestDefinition>();
         var resolved = new List<string>();
+        var dialogueTargetEdids = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // INFO StartQuest/SetStage targets
 
         // Case-insensitive load-order index, for mapping a plugin's masters back to save indices.
         var indexOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -96,7 +105,7 @@ public sealed class PluginDatabase
             TesPlugin plugin;
             try
             {
-                plugin = TesPlugin.Load(file);
+                plugin = TesPlugin.Load(file, withDialogue);
             }
             catch (SaveFormatException)
             {
@@ -140,10 +149,23 @@ public sealed class PluginDatabase
                     questFormId, q.Stages, objectives, q.DataFlags, q.Name, q.Edid, q.ScriptFormId, q.GameModeScript, q.LocalVars);
             }
 
+            // Dialogue INFO result-script effects target quests by editor id; collect the StartQuest/SetStage
+            // targets so they can be resolved to FormIDs once every plugin's quests are known (Phase B).
+            foreach (var e in plugin.DialogueEffects)
+                if (e.Verb is QuestScriptVerb.StartQuest or QuestScriptVerb.SetStage && !string.IsNullOrEmpty(e.TargetQuestEdid))
+                    dialogueTargetEdids.Add(e.TargetQuestEdid);
+
             resolved.Add(loadOrder[i]);
         }
 
-        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved);
+        // Resolve dialogue start/advance targets (by editor id) to quest FormIDs in save space.
+        var dialogueStarted = new HashSet<uint>();
+        if (dialogueTargetEdids.Count > 0)
+            foreach (var q in quests.Values)
+                if (q.Edid is { } edid && dialogueTargetEdids.Contains(edid))
+                    dialogueStarted.Add(q.FormId);
+
+        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted);
     }
 
     /// <summary>Re-keys a plugin-local FormID into save space using the plugin's high-byte → save-index

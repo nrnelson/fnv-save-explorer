@@ -1301,7 +1301,9 @@ static void QuestAudit(FalloutSave s, string savePath, string? dataDir, bool lis
     // player-facing quest that is reachable by NEITHER is started only by something we don't read — dialogue
     // (DIAL/INFO) result scripts, activators, or if-guarded/world-gated triggers — i.e. the VCG02 "Back in the
     // Saddle" class. This audits the masters (no save state) to size that blind spot.
-    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath), withDialogue: true);
+    sw.Stop();
     if (db.Count == 0) { Console.WriteLine("Needs the game Data folder."); return; }
 
     var byEdid = new Dictionary<string, QuestDefinition>(StringComparer.OrdinalIgnoreCase);
@@ -1357,15 +1359,22 @@ static void QuestAudit(FalloutSave s, string savePath, string? dataDir, bool lis
         foreach (var t in nonCondTargets.GetValueOrDefault(work.Dequeue()) ?? [])
             if (reachable.Add(t)) work.Enqueue(t);
 
+    var dlg = db.DialogueStartedQuests;
     var pf = db.Quests.Values.Where(q => q.IsPlayerFacing).ToList();
     var computable = pf.Where(q => reachable.Contains(q.FormId)).ToList();
     var condOnly = pf.Where(q => !reachable.Contains(q.FormId) && condTargetsOf.Contains(q.FormId)).ToList();
     var externalOnly = pf.Where(q => !reachable.Contains(q.FormId) && !anyTargetOf.Contains(q.FormId)).ToList();
+    // Phase B: of the QUST-unreachable quests, how many do we now have a dialogue (INFO) start trigger for?
+    var atRisk = condOnly.Concat(externalOnly).ToList();
+    var dialogueExplained = atRisk.Count(q => dlg.Contains(q.FormId));
 
-    Console.WriteLine($"Player-facing quests in this load order: {pf.Count}  (masters: {db.Quests.Count} total QUST defs)\n");
+    Console.WriteLine($"Player-facing quests in this load order: {pf.Count}  (masters: {db.Quests.Count} total QUST defs)");
+    Console.WriteLine($"Masters read with dialogue (INFO) result scripts in {sw.ElapsedMilliseconds:N0} ms; {dlg.Count} quests have a dialogue start/advance trigger.\n");
     Console.WriteLine($"  computable      {computable.Count,4}  — SGE or reached by non-conditional QUST propagation (our interpreter can surface these)");
-    Console.WriteLine($"  conditional-only{condOnly.Count,4}  — only ever an IF-guarded cross-quest target; we skip conditional propagation -> AT RISK");
-    Console.WriteLine($"  external-only   {externalOnly.Count,4}  — never a QUST-script start target at all -> started by dialogue/activators (VCG02 class) -> BLIND SPOT");
+    Console.WriteLine($"  conditional-only{condOnly.Count,4}  — only ever an IF-guarded cross-quest QUST target; we skip conditional propagation -> AT RISK");
+    Console.WriteLine($"  external-only   {externalOnly.Count,4}  — never a QUST-script start target at all (VCG02 class)");
+    Console.WriteLine($"\n  Of the {atRisk.Count} at-risk (conditional-only + external-only) quests, {dialogueExplained} now have a known dialogue (INFO) trigger");
+    Console.WriteLine($"  (Phase B foundation) — these can be gated on a save signal next; {atRisk.Count - dialogueExplained} remain with no QUST/dialogue trigger (activator/script-only).");
     Console.WriteLine($"\n  Note: 'computable' = CAN be surfaced if the save triggers it; it is not a claim that the quest is in any given Pip-Boy.");
 
     if (list)
@@ -1374,7 +1383,7 @@ static void QuestAudit(FalloutSave s, string savePath, string? dataDir, bool lis
         {
             Console.WriteLine($"\n=== {label} ({qs.Count}) ===");
             foreach (var q in qs.OrderBy(q => q.Name, StringComparer.OrdinalIgnoreCase))
-                Console.WriteLine($"  0x{q.FormId:X8}  {(q.StartGameEnabled ? "SGE " : "    ")} {q.Edid,-22} \"{q.Name}\"");
+                Console.WriteLine($"  0x{q.FormId:X8}  {(q.StartGameEnabled ? "SGE " : "    ")}{(dlg.Contains(q.FormId) ? "[dlg] " : "      ")}{q.Edid,-22} \"{q.Name}\"");
         }
         Dump("external-only (dialogue/activator-started — VCG02 class)", externalOnly);
         Dump("conditional-only (if-guarded cross-quest target)", condOnly);
