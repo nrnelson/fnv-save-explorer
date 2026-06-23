@@ -151,6 +151,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 {
     private FalloutSave? _save;
     private string? _loadedPath;
+    private PluginDatabase? _questDb; // database last used for the Quests tab, so the show-all toggle can re-populate
 
     public ObservableCollection<string> Plugins { get; } = [];
     public ObservableCollection<FltRow> FileLocationTable { get; } = [];
@@ -212,6 +213,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private string _questsInfo = "";
     public string QuestsInfo { get => _questsInfo; private set => Set(ref _questsInfo, value); }
+
+    private bool _showAllQuests;
+    /// <summary>When set, the Quests tab also lists internal/tracker quests that have stage state but no
+    /// player-facing log line (the player-facing gate is bypassed — see <see cref="QuestLog"/>). Toggling
+    /// re-populates the grid.</summary>
+    public bool ShowAllQuests
+    {
+        get => _showAllQuests;
+        set
+        {
+            if (_showAllQuests == value) return;
+            Set(ref _showAllQuests, value);
+            if (_save is not null && _questDb is not null)
+                PopulateQuests(_save, _questDb);
+        }
+    }
 
     // ---- Edit fields (two-way bound) --------------------------------------
     private string _editName = "";
@@ -430,6 +447,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void PopulateQuests(FalloutSave save, PluginDatabase db)
     {
         Quests.Clear();
+        _questDb = db;
         if (db.Count == 0)
         {
             QuestsInfo = "The quest log needs the game's Data folder (FalloutNV.esm) to classify and name " +
@@ -437,7 +455,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
-        var log = QuestLog.Read(save, db);
+        var log = QuestLog.Read(save, db, includeAll: ShowAllQuests);
         foreach (var q in log.Quests
                      .OrderBy(q => q.State == QuestState.Unknown)                  // decoded-progress quests first
                      .ThenBy(q => q.Name ?? "￿", StringComparer.OrdinalIgnoreCase))
@@ -451,7 +469,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
             foreach (var o in q.Objectives.OrderBy(o => o.Index))
             {
-                var mark = o.Active switch { true => "active", false => "inactive", null => "—" };
+                // Save-side display/complete status (bit0/bit1); skip objectives the save marks not-displayed.
+                var mark = (o.Displayed, o.Completed) switch
+                {
+                    (true, true) => "done",
+                    (true, _) => "active",
+                    (false, true) => "done*",
+                    (false, _) => (string?)null,
+                    (null, _) => "—",
+                };
+                if (mark is null) continue;
                 lines.Add($"obj {o.Index,-3} [{mark}]  {o.Text ?? "?"}");
             }
 
@@ -466,10 +493,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             });
         }
 
-        var decoded = Quests.Count(q => q.State != nameof(QuestState.Unknown));
-        QuestsInfo = $"{Quests.Count} quest(s) tracked — {decoded} with decoded stage progress. Quests whose " +
-                     "state lives in the undecoded packed form show their objectives but state \"Unknown\" " +
-                     "(ROADMAP §6 #10). Read-only — quest edits are length-changing.";
+        QuestsInfo = (ShowAllQuests
+            ? $"{Quests.Count} quest(s) with any recorded progress, including internal/tracker quests with stage " +
+              "state but no player-facing log line. Untick to show only the player-facing log. "
+            : $"{Quests.Count} quest(s) in the player's log — displayed objectives + completed log stages the save " +
+              "records. NOT the full Pip-Boy list: Start-Game-Enabled quests at their masters default (e.g. the DLC " +
+              "intros) leave no save delta and aren't shown — tick “Show tracker quests” for everything decodable. ")
+            + "(ROADMAP §6 #10.) Read-only — quest edits are length-changing.";
     }
 
     private static string DescribeInventory(int stacks, PluginDatabase db) =>

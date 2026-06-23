@@ -779,12 +779,28 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     re-keyed into save space by `PluginDatabase.Quest`); and the generic reader (`QuestLog`) walks target-ref
     enable-state + stage lists into a quest-log view (CLI + GUI). A stage-list entry is attributed to its owning
     quest via the change form's refID (resolves for real QUST forms).
-    **Remaining work:** decode the formType-7 **packed bitmask array** (the major story quests' stage state — until
-    then those quests read as `Unknown`); attribute the *freeform* "Back in the Saddle" stage state, which routes
-    through `0x00174BC0`/created forms with no inline quest FormID seen yet; and pin the `QSDT` flag bit semantics
-    by a controlled diff (the reader currently classifies *Completed* via the documented FO3/FNV "Complete Quest"
-    bit `0x02`, corroborated on a real save but not yet FNV-controlled-diff-verified; quest **failure** has no
-    distinct decoded signal yet, so it is not reported as a separate state).
+    **Objective display/complete state — ✅ DECODED (the real Pip-Boy signal).** The full FNV QUST change-form
+    layout was cracked by aligning the bytes against the masters defs (UESP `QUST_Changeform` spec + corpus):
+    `[questFlags][7C] [vsval stageCount][7C] stages [vsval varCount][7C] (u32 idx,f64 val) script-vars [00][7C][00][7C]
+    [vsval objCount][7C] (u32 objIndex,u32 status)`. The **objective `status` is a bitfield — bit0 = displayed,
+    bit1 = completed** — i.e. exactly what the Pip-Boy renders. **Confirmed by a controlled diff** (Saves 56→57: a
+    natural quest completion flipped `NVDLC04Ending` objective 70's status `1 → 3`). `QuestLog.ReadObjectiveStatuses`
+    decodes it (a self-validating scan: a vsval count followed by that many `(masters-objIndex, small-status)` pairs),
+    `QuestObjective` now carries `Displayed`/`Completed`/`Active`, and `DeriveState` uses objective completion. CLI
+    `quests` + the GUI tab show per-objective `[active]`/`[done]`. **Verified on real saves:** "Why Can't We Be
+    Friends?" → obj 10 `[active]`, and the 56→57 completion reads as completed.
+    **Scope / honesty boundary (the list is NOT a full Pip-Boy mirror — established this session):** the Pip-Boy
+    list is assembled by the engine from **save change forms + masters defaults + compiled-script execution**, so it
+    can't be fully reconstructed statically. What IS surfaced is the progress the **save** records — stage lists +
+    objective display/complete status. NOT surfaced: (a) **Start-Game-Enabled quests at their masters default** —
+    e.g. the DLC intro quests, and **"They Went That-a-Way" (`0x000842DD`), which has NO change form at all** yet
+    shows in the Pip-Boy (proven: type QUST, absent from all change forms — its display state is the masters default +
+    startup script, not in the save); (b) the **packed formType-7 stage encoding** (e.g. "Ain't That a Kick" — the
+    only formType-7 quest, chargen-only). Also note: a change form whose refID resolves to a QUST FormID but carries
+    bit18 (`0x00040000`) reference-like data is the quest's REFR-style state, not the clean quest layout; the FormType
+    byte is a **layout discriminator, not the record type** (PlayerRef ACHR + player base are both FormType 9).
+    **Remaining work:** decode the formType-7 packed bitmask (low payoff — 1 quest); the masters-default + script
+    path is out of scope (needs a Gamebryo quest-script interpreter).
     **Dataset note (ephemeral):** the `zc0`–`zc4` captures and the natural Saves 43→47 used above are a **temporary**
     dataset and will likely be deleted. The byte-level findings here — FormIDs, offsets, flag bits, the
     formType-7/9 layouts, and the exact capture method — are recorded to **stand alone**, so the decode is

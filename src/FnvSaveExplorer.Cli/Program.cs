@@ -27,9 +27,10 @@ if (args.Length < 2)
                                               the game masters; dataDir overrides Data-folder auto-detect)
           fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
           fnvsave notes <save.fos> [dataDir]  List the player's Pip-Boy Data -> Notes — READ and UNREAD (§4k/§4k.1)
-          fnvsave quests <save.fos> [dataDir] [--raw]   List the player's quests (§6 #10): each tracked quest
-                                              with its stages (done/time) and objectives (active + target
-                                              enable-state). --raw hex-dumps each quest change form (R&D)
+          fnvsave quests <save.fos> [dataDir] [--all] [--raw]   List the player's quests (§6 #10): each with its
+                                              stages (done/time) and objectives ([active]/[done], from the save's
+                                              CHANGE_QUEST_OBJECTIVES status). Defaults to the player-facing log;
+                                              --all adds internal/tracker quests; --raw hex-dumps each form (R&D)
           fnvsave notescan <dir>             Walk every .fos in a folder and aggregate the read-note markers:
                                               changeFlags values + whether each type-0x1F marker resolves to a
                                               NOTE record + inventory-reference confirmation (R&D §4k.1 #1-3)
@@ -166,7 +167,7 @@ try
         case "quests":
             Quests(FalloutSave.Load(path), path,
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path),
-                args.Contains("--raw"));
+                args.Contains("--raw"), args.Contains("--all"));
             break;
         case "notescan":
             NoteScan(path);
@@ -532,7 +533,7 @@ static void Notes(FalloutSave s, string savePath, string? dataDir)
     }
 }
 
-static void Quests(FalloutSave s, string savePath, string? dataDir, bool raw)
+static void Quests(FalloutSave s, string savePath, string? dataDir, bool raw, bool all)
 {
     // The player's quest log (ROADMAP §6 #10). Classifying a change form as a quest needs the masters
     // (refID -> FormID -> QUST), as do stage/objective names, so the database is required.
@@ -557,8 +558,13 @@ static void Quests(FalloutSave s, string savePath, string? dataDir, bool raw)
         return;
     }
 
-    var log = QuestLog.Read(s, db);
-    Console.WriteLine($"Quests tracked: {log.Quests.Count}\n");
+    var log = QuestLog.Read(s, db, includeAll: all);
+    Console.WriteLine(all
+        ? $"Quests with any recorded progress: {log.Quests.Count}  (includes internal/tracker quests with stage " +
+          "state but no player-facing log line)\n"
+        : $"Quests in the player's log: {log.Quests.Count}  (displayed objectives + completed log stages the save " +
+          "records; use --all for tracker quests too. NOT a full Pip-Boy mirror — masters-default quests like the " +
+          "DLC intros leave no save delta — §6 #10)\n");
     foreach (var q in log.Quests.OrderBy(q => q.Name ?? "￿", StringComparer.OrdinalIgnoreCase))
     {
         Console.WriteLine($"{q.Name ?? "?",-44} [{q.State}]  0x{q.FormId:X8}");
@@ -570,9 +576,18 @@ static void Quests(FalloutSave s, string savePath, string? dataDir, bool raw)
         }
         foreach (var o in q.Objectives.OrderBy(o => o.Index))
         {
-            var mark = o.Active switch { true => "[active]  ", false => "[inactive]", null => "[unknown] " };
-            var targets = o.Targets.Count == 0 ? "" : "  targets: " + string.Join(", ", o.Targets.Select(t => $"0x{t.FormId:X8}={t.State}"));
-            Console.WriteLine($"    obj {o.Index,-3} {mark} {Truncate(o.Text ?? "?", 60)}{targets}");
+            // Save-side display/complete status (bit0/bit1). Show only objectives the save marks displayed or
+            // completed, plus those still unknown — a not-displayed objective is just clutter.
+            var mark = (o.Displayed, o.Completed) switch
+            {
+                (true, true) => "[done]   ",
+                (true, _) => "[active] ",
+                (false, true) => "[done*]  ", // completed but no longer displayed
+                (false, _) => null,            // not displayed — skip
+                (null, _) => "[unknown]",
+            };
+            if (mark is null) continue;
+            Console.WriteLine($"    obj {o.Index,-3} {mark} {Truncate(o.Text ?? "?", 60)}");
         }
     }
 

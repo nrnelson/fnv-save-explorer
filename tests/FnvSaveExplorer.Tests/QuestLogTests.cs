@@ -39,10 +39,50 @@ public class QuestLogTests
         var obj = Assert.Single(quest.Objectives);
         Assert.Equal(10, obj.Index);
         Assert.Equal("Do the objective", obj.Text);
-        Assert.True(obj.Active); // its target ref cleared the Initially-Disabled flag in the save
+        Assert.True(obj.Displayed);   // status bit0 (the change form's objectives block records status 1)
+        Assert.False(obj.Completed);  // status bit1 not set
+        Assert.True(obj.Active);      // displayed and not completed
         var target = Assert.Single(obj.Targets);
         Assert.Equal(0x0010A050u, target.FormId);
         Assert.Equal(EnableState.Enabled, target.State);
+    }
+
+    [Fact]
+    public void Completed_objective_status_marks_the_quest_completed()
+    {
+        // Objective status 3 = displayed + completed (bit0|bit1). With its only displayed objective completed,
+        // the quest reads Completed. (Confirmed semantics — Saves 56→57 flipped an objective's status 1 → 3.)
+        using var dir = new TempDataFolder();
+        dir.Write("A.esm", EsmBuilder.Plugin([],
+            new TestRecord("QUST", 0x0010A001, Edid: "TestQuest", Full: "Test Quest", Subs:
+            [("INDX", I16(10)), ("QSDT", [0x00]), ("QOBJ", I32(10)), ("NNAM", Z("Do the objective"))])));
+
+        var save = FalloutSave.Parse(QuestSave.Build(objStatus: 3)); // displayed + completed
+        var log = QuestLog.Read(save, PluginDatabase.Build(save.Plugins, dir.Path));
+
+        var quest = Assert.Single(log.Quests);
+        var obj = Assert.Single(quest.Objectives);
+        Assert.True(obj.Displayed);
+        Assert.True(obj.Completed);
+        Assert.False(obj.Active);                       // completed -> not the current objective
+        Assert.Equal(QuestState.Completed, quest.State); // all displayed objectives completed
+    }
+
+    [Fact]
+    public void Tracker_quest_without_a_displayed_objective_or_log_stage_is_hidden_by_default()
+    {
+        // Stage state but no displayed objective (status 2 = completed/hidden) and no log-entry stage (the
+        // stage carries no CNAM) -> an internal tracker. Hidden from the player-facing default, kept with includeAll.
+        using var dir = new TempDataFolder();
+        dir.Write("A.esm", EsmBuilder.Plugin([],
+            new TestRecord("QUST", 0x0010A001, Edid: "Tracker", Full: "Tracker", Subs:
+            [("INDX", I16(10)), ("QSDT", [0x00]), ("QOBJ", I32(10)), ("NNAM", Z("obj"))]))); // stage 10, no CNAM log text
+
+        var save = FalloutSave.Parse(QuestSave.Build(objStatus: 2)); // completed but NOT displayed
+        var db = PluginDatabase.Build(save.Plugins, dir.Path);
+
+        Assert.Empty(QuestLog.Read(save, db).Quests);                    // player-facing gate hides it
+        Assert.Single(QuestLog.Read(save, db, includeAll: true).Quests); // reachable with includeAll
     }
 
     [Fact]
@@ -109,7 +149,7 @@ public class QuestLogTests
 /// </summary>
 internal static class QuestSave
 {
-    public static byte[] Build(uint questFlags = 0x80000000)
+    public static byte[] Build(uint questFlags = 0xA0000000, int objStatus = 1)
     {
         var b = new List<byte>();
         void Str(string s) => b.AddRange(Encoding.Latin1.GetBytes(s));
@@ -160,6 +200,8 @@ internal static class QuestSave
         QB(0x0C, 0x7C); QU32(0x2A); QB(0x7C);                       // a leading [u8][u32] header the scan skips
         QB(0x0A, 0x7C, 0x01, 0x7C, 0x04, 0x7C, 0x00, 0x7C, 0x01, 0x7C); QU32(12345); QB(0x7C); // stage 10 done @12345
         QB(0x14, 0x7C, 0x00, 0x7C, 0x04, 0x7C, 0x00, 0x7C, 0x00, 0x7C);                        // stage 20 not done
+        // Objectives block (CHANGE_QUEST_OBJECTIVES): [vsval count=1][7C] then [u32 objIndex=10][7C][u32 status][7C].
+        QB(0x04, 0x7C); QU32(10); QB(0x7C); QU32((uint)objStatus); QB(0x7C);
 
         var questRec = ChangeForm(iref: 1, flags: questFlags, type: 0x49, quest); // 0x49 = formType 9, u16 len
 

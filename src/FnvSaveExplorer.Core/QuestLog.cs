@@ -15,10 +15,19 @@ public enum QuestState { Unknown, Active, Completed }
 /// <summary>One target reference of an objective and its decoded enable-state in the save.</summary>
 public sealed record QuestTarget(uint FormId, EnableState State);
 
-/// <summary>One objective of a quest: its index and display text (from the masters), its target refs with
-/// their save-side enable-state, and whether it is currently active (any target enabled), inactive (targets
-/// known but none enabled), or unknown (<c>null</c> — no enable-state recorded).</summary>
-public sealed record QuestObjective(int Index, string? Text, bool? Active, IReadOnlyList<QuestTarget> Targets);
+/// <summary>One objective of a quest: its index and display text (from the masters), the <b>save-side
+/// display/complete status</b> read from the quest change form's <c>CHANGE_QUEST_OBJECTIVES</c> block
+/// (ROADMAP §6 #10 — status byte: bit0 = displayed, bit1 = completed, confirmed by a controlled diff), and
+/// its target refs with their enable-state. <see cref="Displayed"/>/<see cref="Completed"/> are <c>null</c>
+/// when the change form records no objective status (e.g. the packed formType-7 quests, or a quest the
+/// player hasn't touched). <see cref="Active"/> = displayed and not yet completed (the current objective).</summary>
+public sealed record QuestObjective(
+    int Index, string? Text, bool? Displayed, bool? Completed, IReadOnlyList<QuestTarget> Targets)
+{
+    /// <summary>The objective is the current one shown in the Pip-Boy: displayed and not yet completed.
+    /// <c>null</c> when no save-side status was recorded.</summary>
+    public bool? Active => Displayed is null ? null : Displayed == true && Completed != true;
+}
 
 /// <summary>One stage of a quest as recorded in the save: its index, whether it is done, the completion
 /// game-time (when done), and — joined from the masters definition — the stage's raw <c>QSDT</c> flag byte
@@ -42,11 +51,19 @@ public sealed record Quest(
 /// <c>0x7C</c>-delimited stage list (ROADMAP §6 #10). Each completed entry is
 /// <c>[stageNum][done][04][stageIdx][done2][u32 game-time]</c>; an incomplete entry drops the trailing
 /// time and has <c>done=0</c>.</item>
-/// <item><b>Objective enable-state</b> — for freeform quests, objective progress lives in the enable-state of
-/// the objective's target placed references (the <c>QSTA</c> targets in the masters QUST record). A target
-/// whose change form clears the <i>Initially Disabled</i> base-record flag (<c>0x800</c>) is enabled, i.e.
-/// its objective is active (ROADMAP §6 #10).</item>
+/// <item><b>Objective display/complete state</b> — the quest change form's <c>CHANGE_QUEST_OBJECTIVES</c>
+/// block (bit29) stores, after the stage list, <c>[vsval count][7C]</c> then <c>count ×
+/// ([u32 objIndex][7C][u32 status][7C])</c>. The status is a bitfield — <b>bit0 = displayed, bit1 =
+/// completed</b> (confirmed by a controlled diff: Saves 56→57, a quest completion flipped objective 70's
+/// status <c>1 → 3</c>). This is the same signal the Pip-Boy renders, so it's the authoritative objective
+/// state. The objective's <c>QSTA</c> target refs and their enable-state are also surfaced (secondary).</item>
 /// </list>
+/// <para><b>Scope (honesty boundary).</b> This reads the quest progress the save actually records: stage
+/// lists and objective display/complete status for quests the player has advanced. It is <b>not</b> a
+/// complete Pip-Boy mirror — Start-Game-Enabled quests sitting at their masters default (e.g. the DLC intro
+/// quests, or "They Went That-a-Way" which has no change form at all) are displayed by the engine from the
+/// masters with no save delta, and the packed formType-7 stage encoding (e.g. "Ain't That a Kick") is not
+/// decoded. Those won't appear here. See ROADMAP §6 #10.</para>
 /// This is a read-only reconstruction; it never mutates the save. It requires a <see cref="PluginDatabase"/>
 /// (built from the game masters) to classify quest change forms and to supply objective/stage definitions.
 /// </summary>
@@ -67,8 +84,12 @@ public sealed class QuestLog
     private QuestLog(IReadOnlyList<Quest> quests) => Quests = quests;
 
     /// <summary>Reads the quest log. Returns an empty log when <paramref name="db"/> has no masters (quest
-    /// change forms can't be classified without them).</summary>
-    public static QuestLog Read(FalloutSave save, PluginDatabase db)
+    /// change forms can't be classified without them).
+    /// <para>By default only quests that match the player's Pip-Boy are returned (see <see cref="InPlayerLog"/>):
+    /// a displayed objective, or a completed log-entry stage. Pass <paramref name="includeAll"/> to instead
+    /// return every quest with <i>any</i> decodable progress — including internal/tracker quests with stage
+    /// state but no player-facing log line (e.g. <c>NVDLC04Ending</c>).</para></summary>
+    public static QuestLog Read(FalloutSave save, PluginDatabase db, bool includeAll = false)
     {
         // Index change forms by FormID once, for objective target-ref lookups.
         var byFormId = new Dictionary<uint, FalloutSave.ChangeFormHeader>();
@@ -83,19 +104,36 @@ public sealed class QuestLog
 
             var def = db.Quest(cf.FormId);
             var stages = ReadStageList(save, cf, def);
-            var objectives = ReadObjectives(save, byFormId, def);
+            var objectives = ReadObjectives(save, cf, byFormId, def);
 
-            // A quest log entry needs something to show. Many QUST change forms are pure dialogue/timer/script
-            // quests with neither decoded stages nor any player-facing objective — skip those as noise.
-            if (stages.Count == 0 && objectives.Count == 0)
+            // Need *some* decodable progress: a stage list, or an objective the change form marks
+            // displayed/completed. Quests with neither (pure dialogue/timer forms, or masters-default quests
+            // with no save delta) carry nothing to show.
+            var hasObjectiveState = objectives.Any(o => o.Displayed == true || o.Completed == true);
+            if (stages.Count == 0 && !hasObjectiveState)
                 continue;
 
-            var state = DeriveState(stages);
+            // Default view: only quests the Pip-Boy would render. includeAll keeps the rest (R&D).
+            if (!includeAll && !InPlayerLog(stages, objectives))
+                continue;
+
+            var state = DeriveState(stages, objectives);
             quests.Add(new Quest(cf.FormId, db.Resolve(cf.FormId), state, cf.ChangeFlags, stages, objectives));
         }
 
         return new QuestLog(quests);
     }
+
+    /// <summary>The player-facing gate (ROADMAP §6 #10): a quest matches the in-game Pip-Boy when the save
+    /// records a <b>displayed objective</b> (status bit0 — the live signal the Pip-Boy renders) or a
+    /// <b>completed log-entry stage</b> (a done stage with Pip-Boy log text). This drops internal/tracker quests
+    /// that carry stage state but never wrote a player-facing line (their stages have no <c>CNAM</c> log text and
+    /// their objectives aren't masters-defined). It does <i>not</i> recover Start-Game-Enabled quests sitting at
+    /// their masters default (no save delta) — those are unreachable statically (ROADMAP §6 #10).</summary>
+    private static bool InPlayerLog(
+        IReadOnlyList<QuestStageEntry> stages, IReadOnlyList<QuestObjective> objectives)
+        => objectives.Any(o => o.Displayed == true)
+        || stages.Any(s => s.Done && s.LogText is { Length: > 0 });
 
     /// <summary>Parses the <c>0x7C</c>-delimited stage list from a quest change form carrying the
     /// <c>CHANGE_QUEST_STAGES</c> flag, joining each entry to its masters stage definition (flags + log text).
@@ -138,13 +176,17 @@ public sealed class QuestLog
         return stages;
     }
 
-    /// <summary>Resolves each objective's target refs to their save-side enable-state (ROADMAP §6 #10).
-    /// Returns an empty list when the quest has no masters definition.</summary>
+    /// <summary>Joins each masters objective to its save-side display/complete status (from the change form's
+    /// <c>CHANGE_QUEST_OBJECTIVES</c> block) and its target refs' enable-state (ROADMAP §6 #10). Returns an
+    /// empty list when the quest has no masters definition.</summary>
     private static IReadOnlyList<QuestObjective> ReadObjectives(
-        FalloutSave save, Dictionary<uint, FalloutSave.ChangeFormHeader> byFormId, QuestDefinition? def)
+        FalloutSave save, FalloutSave.ChangeFormHeader cf,
+        Dictionary<uint, FalloutSave.ChangeFormHeader> byFormId, QuestDefinition? def)
     {
         if (def is null || def.Objectives.Count == 0)
             return [];
+
+        var statuses = ReadObjectiveStatuses(save, cf, def); // objIndex -> status byte, or null if none recorded
 
         var objectives = new List<QuestObjective>(def.Objectives.Count);
         foreach (var o in def.Objectives)
@@ -153,12 +195,70 @@ public sealed class QuestLog
             foreach (var formId in o.TargetFormIds)
                 targets.Add(new QuestTarget(formId, TargetState(save, byFormId, formId)));
 
-            bool? active = targets.Any(t => t.State == EnableState.Enabled) ? true
-                : targets.Any(t => t.State == EnableState.Disabled) ? false
-                : null; // all unknown
-            objectives.Add(new QuestObjective(o.Index, o.Text, active, targets));
+            // When the change form records objective status, an objective not listed is implicitly status 0
+            // (not displayed, not completed); when it records none at all, status is unknown (null).
+            bool? displayed = null, completed = null;
+            if (statuses is not null)
+            {
+                var st = statuses.GetValueOrDefault(o.Index);
+                displayed = (st & ObjectiveDisplayedBit) != 0;
+                completed = (st & ObjectiveCompletedBit) != 0;
+            }
+            objectives.Add(new QuestObjective(o.Index, o.Text, displayed, completed, targets));
         }
         return objectives;
+    }
+
+    /// <summary>The objective-status bits in the <c>CHANGE_QUEST_OBJECTIVES</c> block, confirmed by a
+    /// controlled diff (Saves 56→57: completing a quest flipped objective 70's status <c>1 → 3</c>).</summary>
+    private const int ObjectiveDisplayedBit = 0x01;
+    private const int ObjectiveCompletedBit = 0x02;
+
+    /// <summary>Decodes the quest change form's <c>CHANGE_QUEST_OBJECTIVES</c> block (ROADMAP §6 #10): after the
+    /// stage list it holds <c>[vsval count][7C]</c> then <c>count × ([u32 objIndex][7C][u32 status][7C])</c>.
+    /// Rather than parse every preceding section, this scans for the self-validating block — a small count
+    /// immediately followed by that many (index, status) pairs whose <i>index</i> is one of the quest's masters
+    /// objective indices and whose <i>status</i> is a small bitfield. Returns objIndex→status, or <c>null</c>
+    /// when the flag is absent or no block validates (e.g. the packed formType-7 encoding).</summary>
+    private static Dictionary<int, int>? ReadObjectiveStatuses(
+        FalloutSave save, FalloutSave.ChangeFormHeader cf, QuestDefinition def)
+    {
+        if ((cf.ChangeFlags & ReferenceChangeForm.ChangeQuestObjectives) == 0)
+            return null;
+
+        var indices = def.Objectives.Select(o => o.Index).ToHashSet();
+        if (indices.Count == 0)
+            return null;
+
+        var data = save.ReadAt(cf.DataOffset, cf.DataLength);
+        var fields = ReferenceChangeForm.Tokenize(data, cf.DataOffset);
+
+        for (var i = 0; i < fields.Count; i++)
+        {
+            // A single-byte vsval count (low 2 bits = 0 -> 1-byte width; value = b >> 2).
+            if (fields[i].Length != 1 || (fields[i].Bytes[0] & 0x03) != 0)
+                continue;
+            var n = fields[i].Bytes[0] >> 2;
+            if (n < 1 || n > indices.Count || i + 2 * n >= fields.Count)
+                continue;
+
+            var block = new Dictionary<int, int>(n);
+            var ok = true;
+            for (var k = 0; k < n; k++)
+            {
+                if (fields[i + 1 + 2 * k].AsUInt32 is not { } idx ||
+                    fields[i + 2 + 2 * k].AsUInt32 is not { } status ||
+                    !indices.Contains((int)idx) || status > 0x0F) // status is a small bitfield (displayed/completed)
+                {
+                    ok = false;
+                    break;
+                }
+                block[(int)idx] = (int)status;
+            }
+            if (ok && block.Count == n)
+                return block; // first self-validating block
+        }
+        return null;
     }
 
     /// <summary>The enable-state of a placed reference: <see cref="EnableState.Enabled"/> /
@@ -180,15 +280,20 @@ public sealed class QuestLog
         return (flags & InitiallyDisabledFormFlag) != 0 ? EnableState.Disabled : EnableState.Enabled;
     }
 
-    /// <summary>Classifies the quest from its decoded stage entries: <see cref="QuestState.Completed"/> when a
-    /// done stage is flagged "complete quest", <see cref="QuestState.Active"/> when any stage is recorded, else
-    /// <see cref="QuestState.Unknown"/>.</summary>
-    private static QuestState DeriveState(IReadOnlyList<QuestStageEntry> stages)
+    /// <summary>Classifies the quest from its decoded stages and objective status: <see
+    /// cref="QuestState.Completed"/> when a done stage is flagged "complete quest" or every displayed objective
+    /// is completed; <see cref="QuestState.Active"/> when an objective is displayed-and-incomplete or any stage
+    /// is recorded; else <see cref="QuestState.Unknown"/>.</summary>
+    private static QuestState DeriveState(
+        IReadOnlyList<QuestStageEntry> stages, IReadOnlyList<QuestObjective> objectives)
     {
-        if (stages.Count == 0)
-            return QuestState.Unknown;
         if (stages.Any(s => s.Done && (s.DefinitionFlags & CompleteQuestStageFlag) != 0))
             return QuestState.Completed;
-        return QuestState.Active;
+
+        var displayed = objectives.Where(o => o.Displayed == true).ToList();
+        if (displayed.Count > 0)
+            return displayed.All(o => o.Completed == true) ? QuestState.Completed : QuestState.Active;
+
+        return stages.Count > 0 ? QuestState.Active : QuestState.Unknown;
     }
 }
