@@ -1086,6 +1086,30 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     `0xC0000000` would be labelled completed rather than failed, since complete-vs-fail needs the still-undecoded
     thermometer; the quest's *presence* is correct either way. Pinned by a third synthetic test
     (`FormType7_objective_record_family_0x60000000_does_not_fire_the_seed`). Tooling: `q7corpus`.
+    **PROGRESS 2026-06-23 (cont.) — why "Back in the Saddle" (VCG02 `0x0010A214`) can't be loaded: its state is NOT
+    stored anywhere — it is RECOMPUTED at load by the SGE chargen controller + dialogue scripts. Now rigorously
+    proven (the earlier "empty template" claim was right but for the wrong reason).** Chased it the same way VCG01 was
+    cracked, with a proper same-quest / natural comparison:
+    - **VCG02 has NO change form in q4–q11** (the natural Goodsprings opening) and a single type-0x41 / `0x00040000`
+      (bit18) / len-297 record ONLY in Save 57 (where it's completed). But that record is **byte-for-byte identical to
+      the *active* SGE quest Sierra Madre's record** (`0x08005229`, also type-0x41/bit18/len-297) — exact `cf` diff:
+      they differ ONLY in 2 embedded alias refIDs (`+0x07`, `+0x0B`) and one float (`+0x23`); the entire tail is
+      identical. So this record does NOT encode started/stage/completed state — it's an alias-ref stub.
+    - **No other VCG02-keyed record holds it either:** no formType-7 (`q7scan` shows only VCG01), and the §6 #10
+      `QuestLog` stage/objective reader finds only the 4 DLC background-init quests on Save 57, not VCG02. `globals`
+      shows the usual 12 GlobalData type-0–11 records (no per-quest stage table).
+    - **The controller doesn't anchor it.** `CGTutorial` (`0x00059C85`, the chargen controller VCG02 drives via
+      `SetStage CGTutorial 54/70/90`) is **SGE but has no change form at all** (q11 or Save 57), and its GameMode only
+      *reads* `GetQuestCompleted VCG02` as a guard — it never sets/completes VCG02. (Added EDID lookup to `qscript` to
+      find it, since the QUST record is zlib-compressed in the ESM and not greppable.)
+    **Conclusion:** unlike VCG01 (a formType-7 record whose `0x80000000→0xC0000000` flag flip is a genuine save
+    anchor) and VMQ01 (recovered by VCG01's stage-200 propagation), VCG02's Pip-Boy state is **derived at load**, not
+    persisted: the engine re-runs `CGTutorial` (SGE) + Sunny's dialogue (DIAL/INFO) result scripts — which `StartQuest
+    VCG02` / advance its stages — branching on chargen/world state our Phase-A static QUST-script interpreter does not
+    evaluate (it reads QUST stage scripts, not INFO dialogue scripts). VCG01-completed does NOT imply VCG02-done either
+    (VCG02 is the Sunny tutorial *after* leaving the house — at q4 VCG01 is complete but VCG02 isn't), so a chargen
+    inference would false-positive. **So 6/7 on Save 57 is the principled ceiling**: recovering VCG02 needs Phase-B
+    modeling of the chargen controller's load-time recomputation + dialogue result scripts, not a missing field read.
 
 ---
 

@@ -691,9 +691,13 @@ static void QuestScriptDump(FalloutSave s, string savePath, string formIdArg, st
     var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
     if (db.Count == 0) { Console.WriteLine("Needs the game Data folder."); return; }
 
-    var formId = ParseOffset(formIdArg);
-    var q = db.Quest(formId);
-    if (q is null) { Console.WriteLine($"No QUST definition for 0x{formId:X8} in the masters."); return; }
+    // Accept either a hex/numeric FormID or an editor id (EDID) — EDID is handy for controller quests like
+    // CGTutorial whose FormID isn't known and whose record is zlib-compressed in the ESM (not greppable).
+    var looksNumeric = formIdArg.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+        || formIdArg.All(c => Uri.IsHexDigit(c));
+    var q = looksNumeric ? db.Quest(ParseOffset(formIdArg)) : null;
+    q ??= db.Quests.Values.FirstOrDefault(x => string.Equals(x.Edid, formIdArg, StringComparison.OrdinalIgnoreCase));
+    if (q is null) { Console.WriteLine($"No QUST definition for '{formIdArg}' in the masters."); return; }
 
     Console.WriteLine($"0x{q.FormId:X8}  {q.Name ?? "(no name)"}  [EDID {q.Edid ?? "?"}]");
     Console.WriteLine($"  DATA 0x{q.DataFlags:X2}  StartGameEnabled={q.StartGameEnabled}  PlayerFacing={q.IsPlayerFacing}  " +
