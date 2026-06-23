@@ -1317,7 +1317,9 @@ static void QuestFired(FalloutSave s, string savePath, string? dataDir)
     foreach (var (infoFormId, effects) in db.DialogueInfoEffects)
         if (present.Contains(infoFormId))
             foreach (var e in effects)
-                if (e.Verb is QuestScriptVerb.StartQuest or QuestScriptVerb.SetStage && byEdid.TryGetValue(e.TargetQuestEdid, out var q))
+                if (e.Verb is QuestScriptVerb.StartQuest or QuestScriptVerb.SetStage or QuestScriptVerb.StopQuest
+                        or QuestScriptVerb.CompleteQuest or QuestScriptVerb.FailQuest
+                    && byEdid.TryGetValue(e.TargetQuestEdid, out var q))
                 {
                     (firedBy.TryGetValue(q, out var l) ? l : firedBy[q] = []).Add(infoFormId);
                     (effectDetail.TryGetValue(q, out var d) ? d : effectDetail[q] = [])
