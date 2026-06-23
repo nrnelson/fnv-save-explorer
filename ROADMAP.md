@@ -799,8 +799,9 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     only formType-7 quest, chargen-only). Also note: a change form whose refID resolves to a QUST FormID but carries
     bit18 (`0x00040000`) reference-like data is the quest's REFR-style state, not the clean quest layout; the FormType
     byte is a **layout discriminator, not the record type** (PlayerRef ACHR + player base are both FormType 9).
-    **Remaining work:** decode the formType-7 packed bitmask (low payoff — 1 quest); the masters-default + script
-    path is out of scope (needs a Gamebryo quest-script interpreter).
+    **Remaining work:** decode the formType-7 packed bitmask (low payoff — 1 quest); and close the gap to a
+    **full Pip-Boy mirror** — the Start-Game-Enabled / masters-default quests that leave no save delta — which
+    needs the **Gamebryo quest-script interpreter, now in scope as §6 #16**.
     **Dataset note (ephemeral):** the `zc0`–`zc4` captures and the natural Saves 43→47 used above are a **temporary**
     dataset and will likely be deleted. The byte-level findings here — FormIDs, offsets, flag bits, the
     formType-7/9 layouts, and the exact capture method — are recorded to **stand alone**, so the decode is
@@ -859,6 +860,34 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     are deliberately left as `0`/unknown rather than resolved on an unverified Skyrim-spec guess — per the repo's
     "don't guess" rule, surfacing an unseen type as unknown is honest and would flag the surprise. Unit + real-save
     tests pin the split and the created-form resolution. 768 green.
+16. **Gamebryo quest-script interpreter — the full Pip-Boy quest list** (NEW — IN SCOPE, not started; the
+    successor to §6 #10). **Why:** §6 #10 decoded the quest progress the *save* records (stage lists + the
+    `CHANGE_QUEST_OBJECTIVES` display/complete status), but the in-game Pip-Boy list is **computed by the engine
+    from save + masters + compiled scripts**. Proven this session: **Start-Game-Enabled** quests sitting at their
+    masters default leave **no save delta at all** — e.g. "They Went That-a-Way" (`0x000842DD`) is type QUST,
+    shows in the Pip-Boy, yet has **zero change forms** — so they're displayed by the engine running each quest's
+    startup/result scripts at load, not by anything in the save. To reproduce that list we must model what those
+    scripts do. **The masters already hold the scripts** (`SCPT` records + quest stage/result-script fragments,
+    which `TesPlugin` reads but currently skips); FOSE/FNVEdit decompile the FO3/FNV compiled-bytecode format, so
+    it's documented (see §8). **Phased plan:**
+    - **A — static literal scan (high coverage, low cost).** Parse the masters `QUST` `DATA` flags (Start Game
+      Enabled), then statically scan each quest's stage **result scripts** for literal `SetStage` /
+      `SetObjectiveDisplayed` / `SetObjectiveCompleted` calls with constant args. Many default-shown quests (the
+      DLC intros especially) start with a trivial `SetStage 10`/`SetObjectiveDisplayed q 10 1`, so this predicts
+      their displayed objectives **without executing anything** — and unions cleanly with the §6 #10 save-side
+      status (save delta wins where present). Likely recovers most of the early-game Pip-Boy list.
+    - **B — a real bytecode VM (for the data-dependent cases).** A FO3/FNV compiled-script interpreter (opcodes,
+      conditionals, quest/`GetStage` reads, quest variables) executing the startup-relevant fragments against the
+      save's decoded state (globals §4c, quest stages/objectives, player data). Scope creep risk is real: scripts
+      branch on arbitrary world state, so a *faithful* full reproduction trends toward re-implementing the quest
+      engine. **Target a high-coverage approximation, labelled "computed (not save-resident)" to stay honest** —
+      never silently present a guess as decoded fact (repo "don't guess" rule).
+    - **C — validation.** Diff the computed list against the in-game Pip-Boy on the controlled corpus (the early
+      Goodsprings saves where the ground truth is known — Saves 28/47/etc.) and report coverage, not perfection.
+    **Honesty boundary carried forward:** until this lands, the quest view stays labelled "recorded progress",
+    and the masters-default quests remain absent by design rather than faked. This item is the path to removing
+    that caveat. Foundations in place: `TesPlugin.QuestDefinition`, `PluginDatabase.Quest`, `QuestLog`, and the
+    §6 #10 objective-status decode.
 
 ---
 
