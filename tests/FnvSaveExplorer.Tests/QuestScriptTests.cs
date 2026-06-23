@@ -52,6 +52,31 @@ public class QuestScriptTests
     }
 
     [Fact]
+    public void Tracks_guards_when_if_elseif_have_no_space_before_paren()
+    {
+        // Real VGenericTimer form: `elseif(nEvent == 3)` with NO space before the paren. A token-equality keyword
+        // check tokenises `elseif(nEvent` as one word and silently desyncs the guard stack, making the inner
+        // SetStage look NON-conditional (which would falsely propagate in QuestPipboy). ROADMAP §6 #16.
+        const string sctx =
+            "if(fTimer > 0)\n" +
+            "   if (nEvent == 2)\n" +
+            "      SetStage VMQYesMan01 70\n" +
+            "   elseif(nEvent == 3)\n" +
+            "      SetStage VCG01 200\n" +
+            "      SetStage VCG02 5\n" +
+            "   endif\n" +
+            "endif";
+
+        var effects = QuestScript.Parse(sctx);
+
+        // Every SetStage here is nested inside at least the `if(fTimer > 0)` guard -> all conditional.
+        Assert.Equal(3, effects.Count);
+        Assert.All(effects, e => Assert.True(e.Conditional));
+        var vcg02 = Assert.Single(effects, e => e.TargetQuestEdid == "VCG02");
+        Assert.Contains("nEvent == 3", string.Join(" | ", vcg02.Guards)); // the elseif guard was captured
+    }
+
+    [Fact]
     public void Recognises_completion_and_stage_verbs_and_ignores_others()
     {
         const string sctx =

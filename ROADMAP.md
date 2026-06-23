@@ -1110,6 +1110,27 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     (VCG02 is the Sunny tutorial *after* leaving the house — at q4 VCG01 is complete but VCG02 isn't), so a chargen
     inference would false-positive. **So 6/7 on Save 57 is the principled ceiling**: recovering VCG02 needs Phase-B
     modeling of the chargen controller's load-time recomputation + dialogue result scripts, not a missing field read.
+    **PROGRESS 2026-06-23 (cont.) — quantified the blind spot ("is VCG02 a one-off?") with a new `qaudit` command,
+    and it surfaced + fixed a real `QuestScript.Parse` guard bug.** `qaudit <save> [--list] [--who EDID]` audits the
+    masters: it runs the same SGE-seed + non-conditional QUST-propagation reachability the interpreter uses and
+    classifies every player-facing quest. **Vanilla load order (194 player-facing quests):** ~**57 "external-only"**
+    (never the target of ANY QUST start-script → started only by dialogue (DIAL/INFO) result scripts or activators →
+    a guaranteed blind spot, the VCG02 class), ~**55 "conditional-only"** (only ever an `if`-guarded cross-quest
+    target, which we deliberately don't follow → at risk), and ~77 "computable" (SGE or non-conditional propagation —
+    surfaceable *if* the save triggers them). **So VCG02 is NOT a one-off: a majority (~110/194) of player-facing
+    quests are structurally unreachable by a QUST-script-only interpreter.** The practical consequence: the computed
+    list is most reliable for early-game / SGE-driven states (like Save 57); recall degrades on mid/late saves whose
+    active quests are mostly dialogue-started. Measuring *actual* accuracy there needs more ground-truth Pip-Boy
+    oracles (the only one we have is Save 57).
+    **Bug found + fixed via `qaudit --who`:** tracing what "starts" VCG02 showed `VGenericTimer`'s GameMode
+    `elseif(nEvent == 3) … SetStage VCG02 5` — but `QuestScript.Parse` reported it **non-conditional**. Cause:
+    `elseif(nEvent` (no space before the paren) tokenises as one word, so the old `tokens[0].Equals("elseif")` check
+    missed it and the guard stack desynced — which could make a genuinely if-guarded cross-quest `SetStage` propagate
+    unconditionally (a latent false-positive risk on saves that reach such a quest; Save 57 was unaffected only because
+    those quests weren't triggered). Fixed `TrackGuards` to recognise `if`/`elseif`/`else`/`endif` followed by a paren
+    or whitespace (no-space form included); pinned by `Tracks_guards_when_if_elseif_have_no_space_before_paren`. The
+    fix only makes the interpreter *more* conservative (more guards captured → fewer unconditional fires), so it can't
+    add false positives; Save 57 stays 6/7. Tooling: `qaudit` (+`--list`/`--who`), `qscript` EDID lookup.
 
 ---
 

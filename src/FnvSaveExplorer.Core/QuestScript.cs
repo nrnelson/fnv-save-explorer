@@ -73,15 +73,23 @@ public static class QuestScript
         return trimmed.Length == 0 ? [] : trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
     }
 
+    /// <summary>True when <paramref name="trimmed"/> opens with control keyword <paramref name="kw"/> — i.e. the
+    /// keyword is followed by whitespace, an opening paren, or end-of-line. This tolerates the no-space form
+    /// (<c>elseif(nEvent == 3)</c>, <c>if(x)</c>) that FNV scripts use, which a plain token-equality check misses
+    /// (it would tokenise <c>elseif(nEvent</c> as one word, desyncing the guard stack — ROADMAP §6 #16).</summary>
+    private static bool OpensWith(string trimmed, string kw) =>
+        trimmed.StartsWith(kw, StringComparison.OrdinalIgnoreCase) &&
+        (trimmed.Length == kw.Length || trimmed[kw.Length] == '(' || char.IsWhiteSpace(trimmed[kw.Length]));
+
     /// <summary>Maintains the enclosing if/elseif/else guard stack for one script line; returns true when the line
-    /// was a control-flow keyword (and should not be processed further).</summary>
+    /// was a control-flow keyword (and should not be processed further). Order matters: <c>elseif</c> is tested
+    /// before <c>else</c>, and <c>endif</c> before <c>if</c>, so the shorter keyword can't swallow the longer.</summary>
     private static bool TrackGuards(string[] tokens, string trimmed, List<string> guards)
     {
-        var head = tokens[0];
-        if (head.Equals("if", StringComparison.OrdinalIgnoreCase)) { guards.Add(trimmed[2..].Trim()); return true; }
-        if (head.Equals("elseif", StringComparison.OrdinalIgnoreCase)) { if (guards.Count > 0) guards[^1] = trimmed[6..].Trim(); return true; }
-        if (head.Equals("else", StringComparison.OrdinalIgnoreCase)) { if (guards.Count > 0) guards[^1] = "0"; return true; }
-        if (head.Equals("endif", StringComparison.OrdinalIgnoreCase)) { if (guards.Count > 0) guards.RemoveAt(guards.Count - 1); return true; }
+        if (OpensWith(trimmed, "elseif")) { if (guards.Count > 0) guards[^1] = trimmed[6..].Trim(); return true; }
+        if (OpensWith(trimmed, "else")) { if (guards.Count > 0) guards[^1] = "0"; return true; }
+        if (OpensWith(trimmed, "endif")) { if (guards.Count > 0) guards.RemoveAt(guards.Count - 1); return true; }
+        if (OpensWith(trimmed, "if")) { guards.Add(trimmed[2..].Trim()); return true; }
         return false;
     }
 

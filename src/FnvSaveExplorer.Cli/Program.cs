@@ -139,6 +139,14 @@ try
         case "q7corpus":
             Q7Corpus(path, args.Length > 2 ? args[2] : null);
             break;
+        case "qaudit":
+        {
+            var whoIdx = Array.IndexOf(args, "--who");
+            QuestAudit(FalloutSave.Load(path), path,
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path),
+                args.Contains("--list"), whoIdx >= 0 && whoIdx + 1 < args.Length ? args[whoIdx + 1] : null);
+            break;
+        }
         case "edlscan":
             EdlScan(path);
             break;
@@ -1284,6 +1292,93 @@ static void Walk(FalloutSave s)
     Console.WriteLine("\n12 largest change forms:");
     foreach (var cf in s.EnumerateChangeForms().OrderByDescending(c => c.DataLength).Take(12))
         Console.WriteLine($"   @0x{cf.Offset:X}  iref {cf.Iref,6} -> 0x{cf.FormId:X8}  type 0x{cf.TypeByte:X2}  flags 0x{cf.ChangeFlags:X8}  len {cf.DataLength,7:N0}");
+}
+
+static void QuestAudit(FalloutSave s, string savePath, string? dataDir, bool list, string? who = null)
+{
+    // ROADMAP §6 #16 blind-spot audit: our Phase-A interpreter can only START a quest via (a) Start-Game-Enabled
+    // startup or (b) a NON-conditional StartQuest/SetStage from another reachable quest's QUST script. Any
+    // player-facing quest that is reachable by NEITHER is started only by something we don't read — dialogue
+    // (DIAL/INFO) result scripts, activators, or if-guarded/world-gated triggers — i.e. the VCG02 "Back in the
+    // Saddle" class. This audits the masters (no save state) to size that blind spot.
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    if (db.Count == 0) { Console.WriteLine("Needs the game Data folder."); return; }
+
+    var byEdid = new Dictionary<string, QuestDefinition>(StringComparer.OrdinalIgnoreCase);
+    foreach (var q in db.Quests.Values)
+        if (!string.IsNullOrEmpty(q.Edid)) byEdid[q.Edid] = q;
+
+    // --who <EDID>: list every quest whose script SetStage/StartQuest-targets <EDID> (which starts it, and how).
+    if (who is not null)
+    {
+        Console.WriteLine($"Quests whose QUST scripts start/advance '{who}':");
+        var found = false;
+        foreach (var q in db.Quests.Values)
+        {
+            var stages = q.Stages.Select(st => (Label: $"stage {st.Index}", Text: (string?)st.ScriptText))
+                .Append((Label: "GameMode", Text: q.GameModeScript));
+            foreach (var (label, text) in stages.Where(x => x.Text is not null))
+                foreach (var e in QuestScript.Parse(text).Where(e =>
+                    e.Verb is QuestScriptVerb.StartQuest or QuestScriptVerb.SetStage &&
+                    string.Equals(e.TargetQuestEdid, who, StringComparison.OrdinalIgnoreCase)))
+                {
+                    found = true;
+                    Console.WriteLine($"  {q.Edid,-22} (0x{q.FormId:X8}{(q.StartGameEnabled ? " SGE" : "")}) {label}: " +
+                        $"{(e.Conditional ? "?" : " ")}{e.Verb}{(e.Verb == QuestScriptVerb.SetStage ? $" {e.Arg1}" : "")}");
+                }
+        }
+        if (!found) Console.WriteLine("  (no QUST script references it — started only by dialogue/activators)");
+        return;
+    }
+
+    // Per-quest cross-quest start edges (StartQuest / SetStage targeting ANOTHER quest), split by conditional.
+    var nonCondTargets = new Dictionary<uint, HashSet<uint>>();
+    var condTargetsOf = new HashSet<uint>();   // quests that are the target of at least one conditional start edge
+    var anyTargetOf = new HashSet<uint>();      // quests referenced as a start target by any QUST script at all
+    foreach (var q in db.Quests.Values)
+    {
+        var scripts = q.Stages.Select(st => st.ScriptText).Append(q.GameModeScript);
+        foreach (var e in scripts.Where(t => t is not null).SelectMany(t => QuestScript.Parse(t)))
+        {
+            if (e.Verb is not (QuestScriptVerb.StartQuest or QuestScriptVerb.SetStage)) continue;
+            if (byEdid.GetValueOrDefault(e.TargetQuestEdid) is not { } tgt || tgt.FormId == q.FormId) continue; // skip self
+            anyTargetOf.Add(tgt.FormId);
+            if (e.Conditional) condTargetsOf.Add(tgt.FormId);
+            else (nonCondTargets.TryGetValue(q.FormId, out var set) ? set : nonCondTargets[q.FormId] = []).Add(tgt.FormId);
+        }
+    }
+
+    // Reachability fixpoint: seed Start-Game-Enabled, expand over non-conditional cross-quest edges (same shape as
+    // QuestPipboy's propagation, but ignoring per-save guards/seeds — so this OVER-estimates what we can reach, making
+    // the "external-only" set a conservative LOWER bound on the blind spot).
+    var reachable = new HashSet<uint>(db.Quests.Values.Where(q => q.StartGameEnabled).Select(q => q.FormId));
+    var work = new Queue<uint>(reachable);
+    while (work.Count > 0)
+        foreach (var t in nonCondTargets.GetValueOrDefault(work.Dequeue()) ?? [])
+            if (reachable.Add(t)) work.Enqueue(t);
+
+    var pf = db.Quests.Values.Where(q => q.IsPlayerFacing).ToList();
+    var computable = pf.Where(q => reachable.Contains(q.FormId)).ToList();
+    var condOnly = pf.Where(q => !reachable.Contains(q.FormId) && condTargetsOf.Contains(q.FormId)).ToList();
+    var externalOnly = pf.Where(q => !reachable.Contains(q.FormId) && !anyTargetOf.Contains(q.FormId)).ToList();
+
+    Console.WriteLine($"Player-facing quests in this load order: {pf.Count}  (masters: {db.Quests.Count} total QUST defs)\n");
+    Console.WriteLine($"  computable      {computable.Count,4}  — SGE or reached by non-conditional QUST propagation (our interpreter can surface these)");
+    Console.WriteLine($"  conditional-only{condOnly.Count,4}  — only ever an IF-guarded cross-quest target; we skip conditional propagation -> AT RISK");
+    Console.WriteLine($"  external-only   {externalOnly.Count,4}  — never a QUST-script start target at all -> started by dialogue/activators (VCG02 class) -> BLIND SPOT");
+    Console.WriteLine($"\n  Note: 'computable' = CAN be surfaced if the save triggers it; it is not a claim that the quest is in any given Pip-Boy.");
+
+    if (list)
+    {
+        void Dump(string label, List<QuestDefinition> qs)
+        {
+            Console.WriteLine($"\n=== {label} ({qs.Count}) ===");
+            foreach (var q in qs.OrderBy(q => q.Name, StringComparer.OrdinalIgnoreCase))
+                Console.WriteLine($"  0x{q.FormId:X8}  {(q.StartGameEnabled ? "SGE " : "    ")} {q.Edid,-22} \"{q.Name}\"");
+        }
+        Dump("external-only (dialogue/activator-started — VCG02 class)", externalOnly);
+        Dump("conditional-only (if-guarded cross-quest target)", condOnly);
+    }
 }
 
 static void Q7Corpus(string dir, string? dataDir)
