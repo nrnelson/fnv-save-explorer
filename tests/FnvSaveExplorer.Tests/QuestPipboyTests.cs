@@ -15,13 +15,62 @@ public class QuestPipboyTests
     private static TestRecord Scpt(uint formId, string gameModeBody) =>
         new("SCPT", formId, Edid: $"S{formId:X}", Full: null, Subs: [("SCTX", Z($"Begin GameMode\n{gameModeBody}\nEnd"))]);
 
-    private static QuestPipboy Compute(params TestRecord[] records)
+    private static QuestPipboy Compute(params TestRecord[] records) => Compute(QuestSave.Build(), records);
+
+    private static QuestPipboy Compute(byte[] saveBytes, params TestRecord[] records)
     {
         using var dir = new TempDataFolder();
         dir.Write("A.esm", EsmBuilder.Plugin([], records));
-        var save = FalloutSave.Parse(QuestSave.Build());
+        var save = FalloutSave.Parse(saveBytes);
         var db = PluginDatabase.Build(save.Plugins, dir.Path);
         return QuestPipboy.Compute(save, db);
+    }
+
+    // The Goodsprings chargen quest VCG01 "Ain't That a Kick" is FormId 0x0010A001 here, matching the formType-7
+    // change form QuestSave can emit. Its completing stage 200 hands off to the chained quest VMQ01.
+    private const uint ChargenFormId = 0x0010A001;
+
+    private static TestRecord ChargenQuest() => new("QUST", ChargenFormId, Edid: "VCG01", Full: "Ain't That a Kick", Subs:
+    [
+        ("DATA", Data(0x11)),                                          // Start-Game-Enabled (as the real VCG01)
+        ("INDX", I16(10)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed VCG01 10 1")),
+        ("INDX", I16(200)), ("QSDT", [0x01]),                          // completing stage: hands off to VMQ01
+            ("SCTX", Z("StartQuest VMQ01\nSetStage VMQ01 10")),
+        ("QOBJ", I16(10)), ("NNAM", Z("Use the Vit-o-matic Vigor Tester")),
+    ]);
+
+    private static TestRecord HandoffQuest() => new("QUST", 0x0010A002, Edid: "VMQ01", Full: "They Went That-a-Way", Subs:
+    [
+        ("DATA", Data(0x00)),                                          // not SGE — only reachable via the hand-off
+        ("INDX", I16(10)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed VMQ01 10 1")),
+        ("QOBJ", I16(10)), ("NNAM", Z("Find the men who tried to kill you")),
+    ]);
+
+    [Fact]
+    public void FormType7_quest_with_script_changeflag_is_completed_and_propagates_to_its_chain()
+    {
+        // ROADMAP §6 #16 save-anchored seed: VCG01's formType-7 change form carries bit30 (SCRIPT) -> its completing
+        // stage ran -> VCG01 completed AND stage 200 hands off (StartQuest VMQ01 + SetStage VMQ01 10) -> VMQ01 active.
+        var save = QuestSave.Build(ft7FormId: ChargenFormId, ft7Flags: 0x40000000); // bit30 set
+        var pip = Compute(save, ChargenQuest(), HandoffQuest());
+
+        var vcg01 = Assert.Single(pip.Quests, q => q.Name == "Ain't That a Kick");
+        Assert.Equal(PipboyQuestState.Completed, vcg01.State);
+
+        var vmq01 = Assert.Single(pip.Quests, q => q.Name == "They Went That-a-Way");
+        Assert.Equal(PipboyQuestState.Active, vmq01.State);            // started purely by the formType-7 hand-off
+    }
+
+    [Fact]
+    public void FormType7_quest_without_script_changeflag_does_not_fire_the_chain()
+    {
+        // Same masters, but the formType-7 record lacks bit30 (the in-Doc-Mitchell's-house state, before stage 200).
+        // Nothing reaches the completing stage, so neither the chargen quest nor its hand-off is shown.
+        var save = QuestSave.Build(ft7FormId: ChargenFormId, ft7Flags: 0x80000000); // bit30 NOT set
+        var pip = Compute(save, ChargenQuest(), HandoffQuest());
+
+        Assert.DoesNotContain(pip.Quests, q => q.Name == "Ain't That a Kick");
+        Assert.DoesNotContain(pip.Quests, q => q.Name == "They Went That-a-Way");
     }
 
     [Fact]

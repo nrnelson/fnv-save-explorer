@@ -149,7 +149,8 @@ public class QuestLogTests
 /// </summary>
 internal static class QuestSave
 {
-    public static byte[] Build(uint questFlags = 0xA0000000, int objStatus = 1)
+    public static byte[] Build(uint questFlags = 0xA0000000, int objStatus = 1,
+        uint? ft7FormId = null, uint ft7Flags = 0)
     {
         var b = new List<byte>();
         void Str(string s) => b.AddRange(Encoding.Latin1.GetBytes(s));
@@ -189,6 +190,7 @@ internal static class QuestSave
             0x00000007,           // iref 0
             0x0010A001,           // iref 1 -> the quest
             0x0010A050,           // iref 2 -> the objective's target reference
+            .. (ft7FormId is { } f7 ? new[] { f7 } : []), // iref 3 -> optional formType-7 quest record (ROADMAP §6 #16)
         ];
         var changeFormsOffset = formIdArrayOffset + 4 + formIds.Length * 4;
 
@@ -211,7 +213,13 @@ internal static class QuestSave
         target.AddRange([0x0B, 0x00, 0x80, 0x00, 0x7C]); // u32 LE 0x0080000B
         var targetRec = ChangeForm(iref: 2, flags: 0x00000001, type: 0x41, target); // 0x41 = formType 1, u16 len
 
-        var globalData3Offset = changeFormsOffset + questRec.Count + targetRec.Count;
+        // Optional formType-7 quest change form (type 0x07, 1-byte length): the §6 #16 save-anchored seed reads only
+        // its presence + the bit30 SCRIPT change-flag, so a tiny payload suffices.
+        var ft7Rec = ft7FormId is null
+            ? new List<byte>()
+            : ChangeForm(iref: 3, flags: ft7Flags, type: 0x07, [0x10, 0x7C, 0x00]);
+
+        var globalData3Offset = changeFormsOffset + questRec.Count + targetRec.Count + ft7Rec.Count;
 
         // FLT (8 u32) — must sit exactly at bodyStart.
         U32((uint)formIdArrayOffset);  // [0] FormIdArrayCountOffset
@@ -221,27 +229,34 @@ internal static class QuestSave
         U32((uint)globalData3Offset);  // [4] GlobalData3Offset (= end of change forms)
         U32(0);                        // [5] GlobalData1Count
         U32(0);                        // [6] GlobalData3Count
-        U32(2);                        // [7] ChangeFormCount
+        U32((uint)(ft7FormId is null ? 2 : 3)); // [7] ChangeFormCount
 
         U32((uint)formIds.Length);     // FormID array: count
         foreach (var f in formIds) U32(f);
 
         b.AddRange(questRec);
         b.AddRange(targetRec);
+        b.AddRange(ft7Rec);
 
         var bytes = b.ToArray();
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(headerSizeAt, 4), (uint)(screenshotStart - 15));
         return bytes;
     }
 
-    /// <summary>One change-form record: [refID:3 BE][changeFlags:u32 LE][type:u8][version][len:u16][data].</summary>
+    /// <summary>One change-form record: [refID:3 BE][changeFlags:u32 LE][type:u8][version][len][data]. The length
+    /// field width follows the type's top 2 bits (00→1, 01→2, ≥10→4 bytes), matching the engine layout.</summary>
     private static List<byte> ChangeForm(int iref, uint flags, byte type, List<byte> data)
     {
         var rec = new List<byte> { (byte)(iref >> 16), (byte)(iref >> 8), (byte)iref };
         var f = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(f, flags); rec.AddRange(f);
         rec.Add(type);
         rec.Add(0x1B); // version
-        var len = new byte[2]; BinaryPrimitives.WriteUInt16LittleEndian(len, (ushort)data.Count); rec.AddRange(len);
+        switch (type >> 6)
+        {
+            case 0: rec.Add((byte)data.Count); break;
+            case 1: var u16 = new byte[2]; BinaryPrimitives.WriteUInt16LittleEndian(u16, (ushort)data.Count); rec.AddRange(u16); break;
+            default: var u32 = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(u32, (uint)data.Count); rec.AddRange(u32); break;
+        }
         rec.AddRange(data);
         return rec;
     }

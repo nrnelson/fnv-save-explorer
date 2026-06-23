@@ -1043,6 +1043,29 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     formType-7 thermometer decode** (needs the controlled in-game `setstage 0x00104C1C N` capture — a user step) and/or
     the **VMQ01 `0x000842DD` bit18 ExtraDataList decode** (one of the 7; directly testable). The distributed type 0x08
     marker route is now closed as a dead end. Tooling: `qscript` now prints `obj N targets=[…] "text"`.
+    **PROGRESS 2026-06-23 (cont.) — recall LIFTED 4/7 → 6/7 on Save 57 (still 0 false positives) via a controlled-diff
+    save anchor for the Goodsprings chain.** Per the user's steer (no `setstage`; VCG01's natural stage-200 state is
+    already in q4–q11), found the clean in-save signal by dumping VCG01 "Ain't That a Kick" (`0x00104C1C`, formType-7)
+    across q3/q4/q11/Save 57 with the new `cf <save> <formIdHex>` command: its **`changeFlags` bit30 (SCRIPT,
+    `0x40000000`) is ABSENT in Doc Mitchell's house (q3, `0x80000000`) and SET the instant the completing stage 200
+    fires on leaving the house (q4/q11/Save 57, `0xC0000000`)** — and stays set in the oracle. The new `q7scan` shows
+    VCG01 is the **only** player-facing formType-7 quest in Save 57, so the signal is unambiguous there (no over-fire).
+    `qscript 0x00104C1C` confirms stage 200 (QSDT `0x01`) runs `StopQuest VCG01 / StartQuest VMQ01 / StartQuest VCG04 /
+    SetStage VMQ01 10`. Implemented in `QuestPipboy.Compute` a **save-anchored seed**: a player-facing formType-7 quest
+    whose change form carries bit30 has run its result scripts through its completing (QSDT-`0x01`) stage, so we reach
+    that quest's stages up to and including the completing one — reconstructing its objective state AND its cross-quest
+    propagation via the existing fixpoint. **Result on Save 57: 6 computed = 6 correct** — the 4 DLC intros + **"Ain't
+    That a Kick" (completed)** + **"They Went That-a-Way" (active, recovered via the stage-200 hand-off → VMQ01 stage
+    10 displays "Find the men who tried to kill you")**. Validated end-to-end on the natural transition: `pipboy q3` = 4
+    (chain absent, in house), `pipboy q4` = 6 (chain present, stepped outside). **Still missed: only "Back in the
+    Saddle" (VCG02 `0x0010A214`)** — its completion is in no decodable save field (empty ref-style template, §6 #10),
+    so 6/7 is the precision-preserving ceiling without a new VCG02 signal. The bit30→completing-stage rule is
+    controlled-diff-proven for VCG01 (the lone formType-7 player-facing quest here) and applied generally with that
+    caveat documented in code. Pinned by two synthetic tests (`FormType7_quest_with[out]_script_changeflag_…`);
+    `QuestSave` test builder gained an optional formType-7 change form (and `ChangeForm` now honours the type's
+    length-field width). Tooling: CLI `cf` (dump change form by resolved FormID) + `q7scan` (formType-7 quest/bit30
+    audit). All quest/script/pipboy tests green; the only failing tests are the pre-existing chargen inventory-decode
+    edge case (§4i, unrelated).
 
 ---
 

@@ -129,6 +129,13 @@ try
         case "refdump":
             RefDump(FalloutSave.Load(path), path, args.Length > 2 ? (int)ParseOffset(args[2]) : (int?)null);
             break;
+        case "cf":
+            CfByFormId(FalloutSave.Load(path), ParseOffset(args[2]));
+            break;
+        case "q7scan":
+            Q7Scan(FalloutSave.Load(path), path,
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
+            break;
         case "edlscan":
             EdlScan(path);
             break;
@@ -1270,6 +1277,44 @@ static void Walk(FalloutSave s)
     Console.WriteLine("\n12 largest change forms:");
     foreach (var cf in s.EnumerateChangeForms().OrderByDescending(c => c.DataLength).Take(12))
         Console.WriteLine($"   @0x{cf.Offset:X}  iref {cf.Iref,6} -> 0x{cf.FormId:X8}  type 0x{cf.TypeByte:X2}  flags 0x{cf.ChangeFlags:X8}  len {cf.DataLength,7:N0}");
+}
+
+static void Q7Scan(FalloutSave s, string savePath, string? dataDir)
+{
+    // R&D for ROADMAP §6 #16: list every formType-7 change form, flag whether bit30 (SCRIPT, 0x40000000) is set,
+    // and resolve which are player-facing quests. Tests the candidate "bit30 = completing-stage ran" seed signal.
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    foreach (var cf in s.EnumerateChangeForms())
+    {
+        if (cf.FormType != 0x07) continue;
+        var q = db.Count > 0 ? db.Quest(cf.FormId) : null;
+        var pf = q is { IsPlayerFacing: true };
+        var bit30 = (cf.ChangeFlags & 0x40000000u) != 0;
+        if (!pf && !bit30) continue;            // only show quests, or any bit30-set formType-7
+        Console.WriteLine($"0x{cf.FormId:X8}  flags 0x{cf.ChangeFlags:X8} {(bit30 ? "[bit30]" : "       ")}  " +
+            $"len {cf.DataLength,4}  {(pf ? $"QUEST \"{q!.Name}\" SGE={q.StartGameEnabled}" : "(not a player-facing quest)")}");
+    }
+}
+
+static void CfByFormId(FalloutSave s, uint formId)
+{
+    // R&D: locate every change form whose RESOLVED FormID matches `formId` (refdump needs the iref, which
+    // differs per save because creating forms renumbers the FormID array). Prints header + a hex dump of data.
+    var hits = 0;
+    foreach (var cf in s.EnumerateChangeForms())
+    {
+        if (cf.FormId != formId) continue;
+        hits++;
+        Console.WriteLine($"iref {cf.Iref} -> 0x{cf.FormId:X8}  type 0x{cf.TypeByte:X2} (formType 0x{cf.FormType:X2})  " +
+            $"changeFlags 0x{cf.ChangeFlags:X8}  len {cf.DataLength}  @0x{cf.Offset:X}");
+        var data = s.ReadAt(cf.DataOffset, cf.DataLength);
+        for (var i = 0; i < data.Length; i += 32)
+        {
+            var slice = data.Skip(i).Take(32).ToArray();
+            Console.WriteLine($"  +0x{i:X3}: {string.Join(' ', slice.Select(b => b.ToString("X2")))}");
+        }
+    }
+    Console.WriteLine(hits == 0 ? $"No change form resolves to 0x{formId:X8}." : $"{hits} change form(s).");
 }
 
 static void RefDump(FalloutSave s, string savePath, int? iref)

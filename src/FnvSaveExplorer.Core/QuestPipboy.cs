@@ -116,6 +116,34 @@ public sealed class QuestPipboy
             }
         }
 
+        // ---- Save-anchored seed (ROADMAP §6 #16): a player-facing formType-7 quest whose change form carries the
+        // SCRIPT change-flag (bit30, 0x40000000) has run its result scripts through its completing stage. This is
+        // controlled-diff validated on VCG01 "Ain't That a Kick in the Head" (0x00104C1C): bit30 is ABSENT while the
+        // player is still in Doc Mitchell's house (stage < 200) and SET the moment the completing stage 200 fires on
+        // leaving the house, and it stays set in the ground-truth oracle (Save 57). On Save 57 VCG01 is the ONLY
+        // player-facing formType-7 quest, so this fires exactly once and correctly. For any other formType-7 quest it
+        // is an approximation (we have not proven bit30 there marks the *completing* stage specifically). We reach the
+        // quest's stages up to and including its completing (QSDT-complete) stage, so its final objective state AND its
+        // cross-quest propagation are reconstructed — for VCG01 that is stage 200 -> StartQuest VMQ01 + SetStage VMQ01
+        // 10 (recovering "They Went That-a-Way") + StartQuest VCG04, and the QSDT-complete flag marks VCG01 done. ----
+        const uint ScriptChangeFlag = 0x40000000;
+        foreach (var cf in save.EnumerateChangeForms())
+        {
+            if (cf.FormType != 0x07 || (cf.ChangeFlags & ScriptChangeFlag) == 0)
+                continue;
+            if (!states.TryGetValue(cf.FormId, out var st) || !st.Def.IsPlayerFacing)
+                continue;
+            var completeStage = st.Def.Stages
+                .Where(s => (s.Flags & CompleteQuestStageFlag) != 0)
+                .Select(s => (int?)s.Index)
+                .Max();
+            if (completeStage is not { } cap)
+                continue; // no completing stage to anchor against
+            st.Running = true;
+            foreach (var sd in st.Def.Stages.Where(s => s.Index <= cap))
+                Reach(st, sd.Index);
+        }
+
         // ---- Fixpoint: run reached-stage scripts; non-conditional SetStage/StartQuest expand the running set. ----
         while (work.Count > 0)
         {
