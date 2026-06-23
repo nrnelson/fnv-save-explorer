@@ -78,20 +78,50 @@ public sealed class QuestPipboy
                 byEdid[def.Edid] = st;
         }
 
-        // ---- Seed: Start-Game-Enabled quests are running from game load at their lowest defined stage. ----
         var work = new Queue<(QState Quest, QuestStageDef Stage)>();
+        QState? Resolve(string edid) => byEdid.GetValueOrDefault(edid);
+        void Reach(QState target, int stageIndex)
+        {
+            target.Running = true;
+            var sd = target.Def.Stages.FirstOrDefault(s => s.Index == stageIndex);
+            if (sd is not null && target.Reached.Add(stageIndex))
+                work.Enqueue((target, sd));
+        }
+
+        // ---- Seed: Start-Game-Enabled quests run their GameMode startup script at load. A quest's OWN GameMode
+        // SetStage is what advances it to its startup stage; it is followed condition-blind (these are typically
+        // if-guarded), while cross-quest GameMode calls follow the non-conditional rule to avoid over-firing.
+        // (Seeding the lowest stage instead over-fired badly — every SGE quest has a displayable first stage in
+        // the masters, but most aren't reached until an external trigger fires; the GameMode is that trigger.) ----
         foreach (var st in states.Values)
         {
-            if (!st.Def.StartGameEnabled || st.Def.Stages.Count == 0)
+            if (!st.Def.StartGameEnabled)
                 continue;
             st.Running = true;
-            var lowest = st.Def.Stages.MinBy(s => s.Index)!;
-            if (st.Reached.Add(lowest.Index))
-                work.Enqueue((st, lowest));
+            // A quest's GameMode also carries "catcher" SetStages — if-guarded jumps to LATE/recovery stages that
+            // fire only on specific world state. Following those condition-blind over-includes the quest at a
+            // late stage. The genuine startup SetStage targets the quest's LOWEST stage, so we follow a
+            // condition-blind SELF SetStage only when it targets that startup stage; catchers (later stages) are
+            // ignored unless non-conditional. (Cross-quest GameMode calls always require non-conditional.)
+            var startupStage = st.Def.Stages.Count > 0 ? st.Def.Stages.Min(s => s.Index) : int.MinValue;
+            foreach (var e in QuestScript.Parse(st.Def.GameModeScript))
+            {
+                if (Resolve(e.TargetQuestEdid) is not { } target)
+                    continue;
+                var selfStartup = ReferenceEquals(target, st) && e.Arg1 == startupStage;
+                switch (e.Verb)
+                {
+                    case QuestScriptVerb.SetStage when selfStartup || !e.Conditional:
+                        Reach(target, e.Arg1);
+                        break;
+                    case QuestScriptVerb.StartQuest when !e.Conditional:
+                        target.Running = true;
+                        break;
+                }
+            }
         }
 
         // ---- Fixpoint: run reached-stage scripts; non-conditional SetStage/StartQuest expand the running set. ----
-        QState? Resolve(string edid) => byEdid.GetValueOrDefault(edid);
         while (work.Count > 0)
         {
             var (_, stage) = work.Dequeue();
@@ -105,10 +135,7 @@ public sealed class QuestPipboy
                         target.Running = true;
                         break;
                     case QuestScriptVerb.SetStage when !e.Conditional:
-                        target.Running = true;
-                        var sd = target.Def.Stages.FirstOrDefault(s => s.Index == e.Arg1);
-                        if (sd is not null && target.Reached.Add(e.Arg1))
-                            work.Enqueue((target, sd));
+                        Reach(target, e.Arg1);
                         break;
                     case QuestScriptVerb.StopQuest:
                         target.Running = false;

@@ -103,6 +103,7 @@ public sealed class TesPlugin
         // ---- top-level groups ----
         var forms = new List<(uint, string, string, int)>();
         var quests = new List<QuestDefinition>();
+        var scripts = new Dictionary<uint, string>(); // SCPT FormID -> its GameMode block source (ROADMAP §6 #16)
         while (true)
         {
             var gsig = ReadSignature(fs);
@@ -120,11 +121,18 @@ public sealed class TesPlugin
                 throw new SaveFormatException($"{fileName}: bad GRUP size {groupSize}", (int)fs.Position);
 
             var labelType = Encoding.ASCII.GetString(label);
-            if (groupType == 0 && NamedTypes.Contains(labelType))
-                ReadRecords(fs, contentSize, localized, forms, quests);
+            if (groupType == 0 && (NamedTypes.Contains(labelType) || labelType == "SCPT"))
+                ReadRecords(fs, contentSize, localized, forms, quests, scripts);
             else
                 fs.Seek(contentSize, SeekOrigin.Current); // skip the whole group without reading its bytes
         }
+
+        // Link each quest to its SCPT script's GameMode block (the startup code; ROADMAP §6 #16). The QUST and
+        // its SCPT live in the same plugin, so this is a plain plugin-local lookup — no FormID remap needed.
+        if (scripts.Count > 0)
+            for (var i = 0; i < quests.Count; i++)
+                if (quests[i].ScriptFormId != 0 && scripts.TryGetValue(quests[i].ScriptFormId, out var gm))
+                    quests[i] = quests[i] with { GameModeScript = gm };
 
         return new TesPlugin(fileName, masters, forms, quests);
     }
@@ -132,7 +140,7 @@ public sealed class TesPlugin
     /// <summary>Reads the records (and defensively skips any nested groups) inside one top-level item group.</summary>
     private static void ReadRecords(
         Stream fs, long contentSize, bool localized,
-        List<(uint, string, string, int)> forms, List<QuestDefinition> quests)
+        List<(uint, string, string, int)> forms, List<QuestDefinition> quests, Dictionary<uint, string> scripts)
     {
         var end = fs.Position + contentSize;
         while (fs.Position < end)
@@ -156,6 +164,17 @@ public sealed class TesPlugin
                 data = Decompress(data);
 
             var subs = ParseSubrecords(data);
+
+            if (sig == "SCPT")
+            {
+                // A script record: keep its GameMode block (the source text — SCTX), keyed by FormID, for the
+                // quest link above. SCDA is compiled bytecode (ignored); SCTX is the human-readable source.
+                foreach (var (type, sub) in subs)
+                    if (type == "SCTX" && ExtractGameMode(ZString(sub)) is { } gm)
+                        scripts[formId] = gm;
+                continue;
+            }
+
             string? edid = null, full = null;
             var noteType = -1;
             foreach (var (type, sub) in subs)
@@ -190,6 +209,7 @@ public sealed class TesPlugin
         var stages = new List<QuestStageDef>();
         var objectives = new List<QuestObjectiveDef>();
         byte dataFlags = 0; // QUST DATA byte 0: bit0 = Start Game Enabled (ROADMAP §6 #16)
+        uint scriptFormId = 0; // SCRI: the FormID of the quest's SCPT script (linked to GameMode text later)
 
         int? pendingStage = null;
         byte pendingFlags = 0;
@@ -228,6 +248,9 @@ public sealed class TesPlugin
                 case "DATA" when sub.Length >= 1:
                     dataFlags = sub[0]; // QUST DATA: byte 0 = quest flags (bit0 = Start Game Enabled)
                     break;
+                case "SCRI" when sub.Length >= 4:
+                    scriptFormId = BinaryPrimitives.ReadUInt32LittleEndian(sub); // the quest's SCPT script FormID
+                    break;
                 case "INDX":
                     FlushStage();
                     pendingStage = sub.Length >= 2 ? BinaryPrimitives.ReadInt16LittleEndian(sub) : sub.Length == 1 ? sub[0] : 0;
@@ -260,7 +283,43 @@ public sealed class TesPlugin
         FlushStage();
         FlushObjective();
 
-        return new QuestDefinition(formId, stages, objectives, dataFlags, full, edid);
+        return new QuestDefinition(formId, stages, objectives, dataFlags, full, edid, scriptFormId);
+    }
+
+    /// <summary>Extracts the <c>Begin GameMode … End</c> block(s) from a script's source text (ROADMAP §6 #16) —
+    /// the code the engine runs each frame, where a Start-Game-Enabled quest sets its own startup stage. Other
+    /// block types (<c>MenuMode</c>, <c>OnActivate</c>, …) and the variable declarations are dropped. Returns
+    /// null when the script has no GameMode block. A block ends at a standalone <c>End</c> (distinct from
+    /// <c>endif</c>, which the interpreter's own scan handles).</summary>
+    private static string? ExtractGameMode(string scriptText)
+    {
+        if (string.IsNullOrEmpty(scriptText))
+            return null;
+        var sb = new StringBuilder();
+        var inBlock = false;
+        foreach (var raw in scriptText.Split('\n'))
+        {
+            var line = raw;
+            var semi = line.IndexOf(';');
+            if (semi >= 0) line = line[..semi];
+            var trimmed = line.Trim();
+            if (!inBlock)
+            {
+                if (trimmed.StartsWith("begin", StringComparison.OrdinalIgnoreCase) &&
+                    trimmed[5..].TrimStart().StartsWith("gamemode", StringComparison.OrdinalIgnoreCase))
+                    inBlock = true;
+            }
+            else if (trimmed.Equals("end", StringComparison.OrdinalIgnoreCase))
+            {
+                inBlock = false;
+                sb.Append('\n');
+            }
+            else
+            {
+                sb.Append(raw).Append('\n');
+            }
+        }
+        return sb.Length > 0 ? sb.ToString() : null;
     }
 
     /// <summary>R&amp;D (ROADMAP §6 #16): dump the raw subrecords of one <c>QUST</c> record from a plugin file,
@@ -425,10 +484,14 @@ public sealed record QuestObjectiveDef(int Index, string? Text, IReadOnlyList<ui
 /// appears in the Pip-Boy); a player-facing quest has a name <i>and</i> objectives (ROADMAP §6 #16).
 /// <see cref="Edid"/> is the quest's editor id (e.g. <c>VMQ01</c>): script calls like
 /// <c>SetStage VMQ01 10</c> name their target quest by editor id, so the interpreter resolves them via
-/// it.</para></summary>
+/// it. <see cref="ScriptFormId"/> is the quest's <c>SCRI</c> (the FormID of its <c>SCPT</c> script); after
+/// linking, <see cref="GameModeScript"/> holds that script's <c>Begin GameMode … End</c> block source — the
+/// code that runs at load and (for Start-Game-Enabled quests) sets the quest's startup stage (ROADMAP
+/// §6 #16).</para></summary>
 public sealed record QuestDefinition(
     uint FormId, IReadOnlyList<QuestStageDef> Stages, IReadOnlyList<QuestObjectiveDef> Objectives,
-    byte DataFlags = 0, string? Name = null, string? Edid = null)
+    byte DataFlags = 0, string? Name = null, string? Edid = null,
+    uint ScriptFormId = 0, string? GameModeScript = null)
 {
     /// <summary>The quest's <c>DATA</c> "Start Game Enabled" flag (bit0): the engine starts these at game load,
     /// so a Start-Game-Enabled quest with a displayed objective shows in the Pip-Boy with no save delta.</summary>

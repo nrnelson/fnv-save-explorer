@@ -8,27 +8,34 @@ public class QuestPipboyTests
     // QUST DATA subrecord: byte 0 = quest flags (bit0 = Start Game Enabled), rest priority/delay.
     private static byte[] Data(byte flags) => [flags, 0, 0, 0, 0, 0, 0, 0];
     private static byte[] I16(short v) => [(byte)v, (byte)(v >> 8)];
+    private static byte[] U32(uint v) => [(byte)v, (byte)(v >> 8), (byte)(v >> 16), (byte)(v >> 24)];
     private static byte[] Z(string s) { var d = Encoding.Latin1.GetBytes(s); var r = new byte[d.Length + 1]; Array.Copy(d, r, d.Length); return r; }
 
-    private static QuestPipboy Compute(params TestRecord[] qusts)
+    // A SCPT record whose GameMode block is the given body — the quest's startup script (ROADMAP §6 #16).
+    private static TestRecord Scpt(uint formId, string gameModeBody) =>
+        new("SCPT", formId, Edid: $"S{formId:X}", Full: null, Subs: [("SCTX", Z($"Begin GameMode\n{gameModeBody}\nEnd"))]);
+
+    private static QuestPipboy Compute(params TestRecord[] records)
     {
         using var dir = new TempDataFolder();
-        dir.Write("A.esm", EsmBuilder.Plugin([], qusts));
+        dir.Write("A.esm", EsmBuilder.Plugin([], records));
         var save = FalloutSave.Parse(QuestSave.Build());
         var db = PluginDatabase.Build(save.Plugins, dir.Path);
         return QuestPipboy.Compute(save, db);
     }
 
     [Fact]
-    public void Start_game_enabled_quest_shows_active_with_its_displayed_objective()
+    public void Start_game_enabled_quest_shows_active_when_its_gamemode_sets_its_startup_stage()
     {
-        // SGE quest seeded at its lowest stage (10), whose result script displays objective 10.
-        var pip = Compute(new TestRecord("QUST", 0x00100001, Edid: "QONE", Full: "Quest One", Subs:
-        [
-            ("DATA", Data(0x01)),                                  // Start Game Enabled
-            ("INDX", I16(10)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QONE 10 1")),
-            ("QOBJ", I16(10)), ("NNAM", Z("Do the thing")),
-        ]));
+        // SGE quest whose GameMode startup script sets its lowest stage (10), whose result script displays obj 10.
+        var pip = Compute(
+            new TestRecord("QUST", 0x00100001, Edid: "QONE", Full: "Quest One", Subs:
+            [
+                ("DATA", Data(0x01)), ("SCRI", U32(0x00100011)),
+                ("INDX", I16(10)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QONE 10 1")),
+                ("QOBJ", I16(10)), ("NNAM", Z("Do the thing")),
+            ]),
+            Scpt(0x00100011, "SetStage QONE 10"));
 
         var q = Assert.Single(pip.Quests);
         Assert.Equal("Quest One", q.Name);
@@ -39,11 +46,30 @@ public class QuestPipboyTests
     }
 
     [Fact]
+    public void Sge_quest_whose_gamemode_only_catcher_sets_a_late_stage_is_not_shown()
+    {
+        // The over-fire case: an SGE quest with a displayable startup stage (10) but whose GameMode only sets a
+        // LATE catcher stage (90). The startup stage isn't reached (it's set by an external trigger), so nothing
+        // is displayed -> NOT shown. (This is what pruned Save 57 from 15 down to 8.)
+        var pip = Compute(
+            new TestRecord("QUST", 0x00100002, Edid: "QLATE", Full: "Quest Late", Subs:
+            [
+                ("DATA", Data(0x01)), ("SCRI", U32(0x00100012)),
+                ("INDX", I16(10)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QLATE 10 1")),
+                ("INDX", I16(90)), ("QSDT", [0x01]),
+                ("QOBJ", I16(10)), ("NNAM", Z("Startup objective")),
+            ]),
+            Scpt(0x00100012, "if SomeCatcher\nSetStage QLATE 90\nendif"));
+
+        Assert.Empty(pip.Quests);
+    }
+
+    [Fact]
     public void Quest_that_is_never_started_is_excluded_even_with_a_displayable_objective()
     {
         // The "Welcome to the Big Empty" precision case: a non-SGE quest whose masters define a displayed-objective
         // stage, but nothing starts it -> not running -> NOT shown. (This is what a raw save read gets wrong.)
-        var pip = Compute(new TestRecord("QUST", 0x00100002, Edid: "QTWO", Full: "Quest Two", Subs:
+        var pip = Compute(new TestRecord("QUST", 0x00100003, Edid: "QTWO", Full: "Quest Two", Subs:
         [
             ("DATA", Data(0x00)),                                  // NOT Start Game Enabled
             ("INDX", I16(10)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QTWO 10 1")),
@@ -56,26 +82,26 @@ public class QuestPipboyTests
     [Fact]
     public void Cross_quest_setstage_and_completequest_drive_propagation_and_completion()
     {
-        // SGE quest A starts at stage 10 (displays obj 10), then non-conditionally SetStages itself to 20, which
-        // completes obj 10 and CompleteQuests -> A reads Completed. A also StartQuests + SetStages B to 10, which
-        // displays B's objective -> B reads Active even though B is not Start-Game-Enabled (the VCG01->VMQ01 hand-off).
-        var a = new TestRecord("QUST", 0x00100003, Edid: "QA", Full: "Quest A", Subs:
+        // SGE quest A's GameMode starts it at stage 10 (displays obj 10), whose result script non-conditionally
+        // SetStages A to 20 (completes obj 10, CompleteQuests A -> Completed) and StartQuests + SetStages B to 10,
+        // which displays B's objective -> B reads Active though not SGE (the VCG01->VMQ01 hand-off).
+        var a = new TestRecord("QUST", 0x00100004, Edid: "QA", Full: "Quest A", Subs:
         [
-            ("DATA", Data(0x01)),
+            ("DATA", Data(0x01)), ("SCRI", U32(0x00100014)),
             ("INDX", I16(10)), ("QSDT", [0x00]),
                 ("SCTX", Z("SetObjectiveDisplayed QA 10 1\nSetStage QA 20\nStartQuest QB\nSetStage QB 10")),
             ("INDX", I16(20)), ("QSDT", [0x00]),
                 ("SCTX", Z("SetObjectiveCompleted QA 10 1\nCompleteQuest QA")),
             ("QOBJ", I16(10)), ("NNAM", Z("A objective")),
         ]);
-        var b = new TestRecord("QUST", 0x00100004, Edid: "QB", Full: "Quest B", Subs:
+        var b = new TestRecord("QUST", 0x00100005, Edid: "QB", Full: "Quest B", Subs:
         [
             ("DATA", Data(0x00)),                                  // not SGE — only reachable via A's hand-off
             ("INDX", I16(10)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QB 10 1")),
             ("QOBJ", I16(10)), ("NNAM", Z("B objective")),
         ]);
 
-        var pip = Compute(a, b);
+        var pip = Compute(a, b, Scpt(0x00100014, "SetStage QA 10"));
 
         var qa = Assert.Single(pip.Quests, x => x.Name == "Quest A");
         Assert.Equal(PipboyQuestState.Completed, qa.State);
@@ -88,22 +114,22 @@ public class QuestPipboyTests
     [Fact]
     public void Conditional_cross_quest_setstage_is_not_followed()
     {
-        // An if-guarded SetStage to another quest must NOT start it (Phase-A avoids over-firing on conditions).
-        var a = new TestRecord("QUST", 0x00100005, Edid: "QC", Full: "Quest C", Subs:
+        // An if-guarded SetStage to ANOTHER quest must NOT start it (Phase-A avoids over-firing cross-quest).
+        var a = new TestRecord("QUST", 0x00100006, Edid: "QC", Full: "Quest C", Subs:
         [
-            ("DATA", Data(0x01)),
+            ("DATA", Data(0x01)), ("SCRI", U32(0x00100016)),
             ("INDX", I16(10)), ("QSDT", [0x00]),
                 ("SCTX", Z("SetObjectiveDisplayed QC 10 1\nif SomeVar == 1\nSetStage QD 10\nendif")),
             ("QOBJ", I16(10)), ("NNAM", Z("C objective")),
         ]);
-        var d = new TestRecord("QUST", 0x00100006, Edid: "QD", Full: "Quest D", Subs:
+        var d = new TestRecord("QUST", 0x00100007, Edid: "QD", Full: "Quest D", Subs:
         [
             ("DATA", Data(0x00)),
             ("INDX", I16(10)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QD 10 1")),
             ("QOBJ", I16(10)), ("NNAM", Z("D objective")),
         ]);
 
-        var pip = Compute(a, d);
+        var pip = Compute(a, d, Scpt(0x00100016, "SetStage QC 10"));
 
         Assert.Single(pip.Quests);                          // only Quest C
         Assert.DoesNotContain(pip.Quests, x => x.Name == "Quest D");

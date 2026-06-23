@@ -953,6 +953,25 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     objective-target ref, §6 #10, or a `CHANGE_QUEST_OBJECTIVES` status), which won't help the no-delta intros but
     would prune the 37 false positives. Plus the standalone **formType-7 decode** to recover the Goodsprings chain.
     `QuestPipboy` + `pipboy` + 4 synthetic tests are the validated framework; the seed is the open problem.
+    **PROGRESS 2026-06-23 (cont.) — GameMode-script seeding lands the chosen precision lever; Save 57 goes 42 → 15 → 8.**
+    FNV masters keep quest **SCPT script source** too, so `TesPlugin` now reads the `SCPT` group, extracts each
+    script's `Begin GameMode … End` block, and links it to its quest via `SCRI` (`QuestDefinition.GameModeScript`;
+    CLI `qscript` prints it). `QuestPipboy` replaced the "seed every SGE quest at its lowest stage" with: **an SGE
+    quest reaches a stage via its OWN GameMode `SetStage`** — followed condition-blind **only when it targets the
+    quest's lowest (startup) stage**, because GameMode also holds if-guarded *catcher* `SetStage`s to late/recovery
+    stages (e.g. Ring-a-Ding-Ding!'s `if … SetStage VMQTops 80`) that must not fire. Two-step measurement on Save 57:
+    (1) reach via GameMode self-`SetStage` condition-blind → **15** (drops the ~27 SGE quests with *no* GameMode block:
+    Still in the Dark / Climb Ev'ry Mountain / …); (2) gate that to the startup stage → **8** (drops the catcher-driven
+    over-fires showing completed/late objectives: Bighorners / The White Wash / …). **Result vs the 7 ground truth:**
+    the **4 SGE DLC-intro quests are correct** (Sierra Madre / Happy Trails Expedition / Midnight / The Reunion, Active
+    + right objective); **4 false positives remain** (Caesar's Favor, Caesar's Hire, Don't Tread on the Bear!, Wild
+    Card: Ace in the Hole — SGE quests whose startup `SetStage` is gated by a world condition not yet met, so they need
+    Phase-B condition evaluation); **3 still missed** (the Goodsprings chain Ain't That a Kick / Back in the Saddle /
+    They Went That-a-Way — reached stages live in the undecoded **formType-7** bitmask, no save anchor). So the two
+    remaining levers are now sharply scoped: **(a) light condition evaluation** of the startup `SetStage` guard to cut
+    the 4 FPs (e.g. honour `GetStage <self> == 0` / `GetQuestRunning`), and **(b) formType-7 decode** to recover the 3
+    Goodsprings quests. Pinned by a new synthetic test (`Sge_quest_whose_gamemode_only_catcher_sets_a_late_stage…`);
+    1109 tests green.
 
 ---
 

@@ -684,7 +684,17 @@ static void QuestScriptDump(FalloutSave s, string savePath, string formIdArg, st
 
     Console.WriteLine($"0x{q.FormId:X8}  {q.Name ?? "(no name)"}  [EDID {q.Edid ?? "?"}]");
     Console.WriteLine($"  DATA 0x{q.DataFlags:X2}  StartGameEnabled={q.StartGameEnabled}  PlayerFacing={q.IsPlayerFacing}  " +
-        $"stages={q.Stages.Count} objectives={q.Objectives.Count}\n");
+        $"stages={q.Stages.Count} objectives={q.Objectives.Count}");
+    if (q.GameModeScript is { } gm)
+    {
+        Console.WriteLine("  --- GameMode script (startup) ---");
+        foreach (var ln in gm.Split('\n'))
+            if (ln.Trim().Length > 0) Console.WriteLine($"  | {ln.TrimEnd()}");
+        Console.WriteLine("  --- GameMode SetStage/StartQuest effects ---");
+        foreach (var e in QuestScript.Parse(gm).Where(e => e.Verb is QuestScriptVerb.SetStage or QuestScriptVerb.StartQuest))
+            Console.WriteLine($"      {(e.Conditional ? "?" : " ")} {e.Verb} {e.TargetQuestEdid} {(e.Verb == QuestScriptVerb.SetStage ? e.Arg1.ToString() : "")}");
+    }
+    Console.WriteLine();
     foreach (var st in q.Stages.OrderBy(x => x.Index))
     {
         var log = st.LogText is { Length: > 0 } ? $"  \"{st.LogText}\"" : "";
