@@ -47,11 +47,12 @@ public class QuestPipboyTests
     ]);
 
     [Fact]
-    public void FormType7_quest_with_script_changeflag_is_completed_and_propagates_to_its_chain()
+    public void FormType7_quest_with_completed_pattern_is_completed_and_propagates_to_its_chain()
     {
-        // ROADMAP §6 #16 save-anchored seed: VCG01's formType-7 change form carries bit30 (SCRIPT) -> its completing
-        // stage ran -> VCG01 completed AND stage 200 hands off (StartQuest VMQ01 + SetStage VMQ01 10) -> VMQ01 active.
-        var save = QuestSave.Build(ft7FormId: ChargenFormId, ft7Flags: 0x40000000); // bit30 set
+        // ROADMAP §6 #16 save-anchored seed: VCG01's formType-7 change form matches the validated "completed" pattern
+        // 0xC0000000 (bit31 + bit30) -> its completing stage ran -> VCG01 completed AND stage 200 hands off
+        // (StartQuest VMQ01 + SetStage VMQ01 10) -> VMQ01 active.
+        var save = QuestSave.Build(ft7FormId: ChargenFormId, ft7Flags: 0xC0000000);
         var pip = Compute(save, ChargenQuest(), HandoffQuest());
 
         var vcg01 = Assert.Single(pip.Quests, q => q.Name == "Ain't That a Kick");
@@ -62,11 +63,26 @@ public class QuestPipboyTests
     }
 
     [Fact]
-    public void FormType7_quest_without_script_changeflag_does_not_fire_the_chain()
+    public void FormType7_quest_not_yet_completed_does_not_fire_the_chain()
     {
-        // Same masters, but the formType-7 record lacks bit30 (the in-Doc-Mitchell's-house state, before stage 200).
-        // Nothing reaches the completing stage, so neither the chargen quest nor its hand-off is shown.
-        var save = QuestSave.Build(ft7FormId: ChargenFormId, ft7Flags: 0x80000000); // bit30 NOT set
+        // The in-Doc-Mitchell's-house state: VCG01's record is 0x80000000 (bit30 not yet added). Nothing reaches the
+        // completing stage, so neither the chargen quest nor its hand-off is shown.
+        var save = QuestSave.Build(ft7FormId: ChargenFormId, ft7Flags: 0x80000000);
+        var pip = Compute(save, ChargenQuest(), HandoffQuest());
+
+        Assert.DoesNotContain(pip.Quests, q => q.Name == "Ain't That a Kick");
+        Assert.DoesNotContain(pip.Quests, q => q.Name == "They Went That-a-Way");
+    }
+
+    [Fact]
+    public void FormType7_objective_record_family_0x60000000_does_not_fire_the_seed()
+    {
+        // Regression for the corpus-validated over-firing case: a player-facing formType-7 quest can also carry a
+        // DIFFERENT objective-state record flagged 0x60000000 (bit29 + bit30) — e.g. "Ant Misbehavin'"
+        // (VNellisInfestation) carries this throughout its life across the whole corpus. bit30 is set there too, so a
+        // bit30-only gate would wrongly mark it completed; the tightened pattern (bits 30+31 set, bit29 clear) must
+        // NOT fire on it.
+        var save = QuestSave.Build(ft7FormId: ChargenFormId, ft7Flags: 0x60000000);
         var pip = Compute(save, ChargenQuest(), HandoffQuest());
 
         Assert.DoesNotContain(pip.Quests, q => q.Name == "Ain't That a Kick");

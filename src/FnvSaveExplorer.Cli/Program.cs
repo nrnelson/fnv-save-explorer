@@ -69,7 +69,7 @@ var command = args[0];
 var path = args[1];
 
 // Most commands take a save file; `edlscan`/`invsig`/`notescan` take a folder of saves.
-if (command is "edlscan" or "invsig" or "notescan")
+if (command is "edlscan" or "invsig" or "notescan" or "q7corpus")
 {
     if (!Directory.Exists(path))
     {
@@ -135,6 +135,9 @@ try
         case "q7scan":
             Q7Scan(FalloutSave.Load(path), path,
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
+            break;
+        case "q7corpus":
+            Q7Corpus(path, args.Length > 2 ? args[2] : null);
             break;
         case "edlscan":
             EdlScan(path);
@@ -1277,6 +1280,52 @@ static void Walk(FalloutSave s)
     Console.WriteLine("\n12 largest change forms:");
     foreach (var cf in s.EnumerateChangeForms().OrderByDescending(c => c.DataLength).Take(12))
         Console.WriteLine($"   @0x{cf.Offset:X}  iref {cf.Iref,6} -> 0x{cf.FormId:X8}  type 0x{cf.TypeByte:X2}  flags 0x{cf.ChangeFlags:X8}  len {cf.DataLength,7:N0}");
+}
+
+static void Q7Corpus(string dir, string? dataDir)
+{
+    // ROADMAP §6 #16 validation: across an entire corpus, tally every player-facing formType-7 quest whose change
+    // form carries bit30 (the save-anchored seed's input). For each distinct quest report how many saves it appears
+    // in, whether it has a completing (QSDT-0x01) stage (= the seed fires + marks it completed), and what that stage
+    // propagates (StartQuest/SetStage to other quests = the seed's blast radius). A quest here that is NOT genuinely
+    // completed would be a false positive of the bit30 generalization.
+    var saves = Directory.EnumerateFiles(dir, "*.fos").OrderBy(x => x).ToList();
+    var dbCache = new Dictionary<string, PluginDatabase>();
+    var agg = new Dictionary<uint, (string? Name, bool Fires, int Saves, string Prop)>();
+    int scanned = 0, skipped = 0;
+    foreach (var f in saves)
+    {
+        FalloutSave s;
+        try { s = FalloutSave.Load(f); } catch { skipped++; continue; }
+        var key = string.Join("|", s.Plugins);
+        if (!dbCache.TryGetValue(key, out var db))
+            dbCache[key] = db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(f));
+        if (db.Count == 0) { skipped++; continue; }
+        scanned++;
+        var seen = new HashSet<uint>();
+        foreach (var cf in s.EnumerateChangeForms())
+        {
+            if (cf.FormType != 0x07 || (cf.ChangeFlags & 0xE0000000u) != 0xC0000000u) continue; // VCG01 "completed" pattern
+            var q = db.Quest(cf.FormId);
+            if (q is not { IsPlayerFacing: true } || !seen.Add(cf.FormId)) continue;
+            var cap = q.Stages.Where(x => (x.Flags & 0x01) != 0).Select(x => (int?)x.Index).Max();
+            var prop = "";
+            if (cap is { } c)
+            {
+                var stage = q.Stages.FirstOrDefault(x => x.Index == c);
+                if (stage is not null)
+                    prop = string.Join(", ", QuestScript.Parse(stage.ScriptText)
+                        .Where(e => e.Verb is QuestScriptVerb.StartQuest or QuestScriptVerb.SetStage)
+                        .Select(e => $"{e.Verb} {e.TargetQuestEdid}{(e.Verb == QuestScriptVerb.SetStage ? $" {e.Arg1}" : "")}"));
+            }
+            var prev = agg.GetValueOrDefault(cf.FormId);
+            agg[cf.FormId] = (q.Name, cap is not null, prev.Saves + 1, prop);
+        }
+    }
+    Console.WriteLine($"Scanned {scanned} saves ({skipped} skipped, {dbCache.Count} distinct load orders) in {dir}\n");
+    Console.WriteLine($"{"FormID",-12} {"saves",5} {"seed",5}  name / completing-stage propagation");
+    foreach (var (formId, v) in agg.OrderByDescending(kv => kv.Value.Saves))
+        Console.WriteLine($"0x{formId:X8}  {v.Saves,5} {(v.Fires ? "FIRES" : "  -  ")}  \"{v.Name}\"{(v.Prop.Length > 0 ? $"  ->[{v.Prop}]" : "")}");
 }
 
 static void Q7Scan(FalloutSave s, string savePath, string? dataDir)

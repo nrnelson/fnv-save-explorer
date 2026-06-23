@@ -1066,6 +1066,26 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     length-field width). Tooling: CLI `cf` (dump change form by resolved FormID) + `q7scan` (formType-7 quest/bit30
     audit). All quest/script/pipboy tests green; the only failing tests are the pre-existing chargen inventory-decode
     edge case (§4i, unrelated).
+    **PROGRESS 2026-06-23 (cont.) — the bit30 seed was validated against the FULL corpus (649 saves) and the gate
+    TIGHTENED from "bit30 set" to the exact VCG01 completion pattern; zero spurious quests confirmed.** New CLI
+    `q7corpus <dir>` aggregates, across a whole save folder (caching the masters DB per load order), every
+    player-facing formType-7 quest whose change form matches the seed pattern. The first pass (gate = bit30 alone)
+    surfaced a FALSE POSITIVE: "Ant Misbehavin'" (VNellisInfestation `0x001083DE`) carries `changeFlags 0x60000000`
+    (bit29+bit30, len 9) — a DIFFERENT, unvalidated objective-state record family that also has bit30, present
+    identically across 59 base-VNV saves. bit30 alone is therefore NOT specific to completion. **Fix:** the seed now
+    requires the exact VCG01-validated pattern `(flags & 0xE0000000) == 0xC0000000` (bits 30+31 set, bit29 clear),
+    excluding the `0x60000000`/`0xE0000000` objective-record family. **Re-validated across all three corpora (66
+    vanilla + 98 base VNV + 485 VNV Extended = 649 saves): the seed fires on exactly TWO quests** — VCG01 "Ain't That
+    a Kick" (everywhere) and VMS33 "The Finger of Suspicion" (Extended only, 439 saves). VMS33 *independently confirms*
+    the signal: its record cycles through `0x00040000` (untriggered empty ref-template, 6 saves) → `0x80000000` (active,
+    not completed — 1 save, len 335, no prefix) → `0xC0000000` (completed — 439 saves, len 340, the `XX 00 00 00 7C`
+    prefix appears), the SAME `0x80000000 → 0xC0000000` completion transition as VCG01 on an unrelated quest. The gate
+    correctly excludes VMS33's active/untriggered states. **Net: the generalization adds zero spurious Pip-Boy
+    entries** (it also correctly recovers VMS33 as completed where applicable — a recall gain on Extended). Residual
+    nuance (documented, not a false positive): a quest that reached its *fail* stage (QSDT `0x02`) while the record is
+    `0xC0000000` would be labelled completed rather than failed, since complete-vs-fail needs the still-undecoded
+    thermometer; the quest's *presence* is correct either way. Pinned by a third synthetic test
+    (`FormType7_objective_record_family_0x60000000_does_not_fire_the_seed`). Tooling: `q7corpus`.
 
 ---
 
