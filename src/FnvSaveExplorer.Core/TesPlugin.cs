@@ -168,7 +168,7 @@ public sealed class TesPlugin
             if (!string.IsNullOrEmpty(name))
                 forms.Add((formId, name, sig, noteType)); // sig is the record type (WEAP/ARMO/ALCH/AMMO/MISC/…)
             if (sig == "QUST")
-                quests.Add(ParseQuest(formId, subs, localized, full));
+                quests.Add(ParseQuest(formId, subs, localized, full, edid));
         }
     }
 
@@ -185,7 +185,7 @@ public sealed class TesPlugin
     /// </list>
     /// Parsing is defensive: a malformed/short subrecord is skipped rather than throwing.
     /// </summary>
-    private static QuestDefinition ParseQuest(uint formId, List<(string Type, byte[] Data)> subs, bool localized, string? full)
+    private static QuestDefinition ParseQuest(uint formId, List<(string Type, byte[] Data)> subs, bool localized, string? full, string? edid)
     {
         var stages = new List<QuestStageDef>();
         var objectives = new List<QuestObjectiveDef>();
@@ -194,14 +194,16 @@ public sealed class TesPlugin
         int? pendingStage = null;
         byte pendingFlags = 0;
         string? pendingLog = null;
+        string? pendingScript = null; // SCTX result-script source text for the stage (ROADMAP §6 #16)
 
         void FlushStage()
         {
             if (pendingStage is { } idx)
-                stages.Add(new QuestStageDef(idx, pendingFlags, pendingLog));
+                stages.Add(new QuestStageDef(idx, pendingFlags, pendingLog, pendingScript));
             pendingStage = null;
             pendingFlags = 0;
             pendingLog = null;
+            pendingScript = null;
         }
 
         int curObjIndex = 0;
@@ -236,6 +238,10 @@ public sealed class TesPlugin
                 case "CNAM" when pendingStage is not null && !localized:
                     pendingLog ??= ZString(sub);
                     break;
+                case "SCTX" when pendingStage is not null:
+                    // A stage may carry several log-entry result scripts; concatenate so the interpreter scans them all.
+                    pendingScript = pendingScript is null ? ZString(sub) : pendingScript + "\n" + ZString(sub);
+                    break;
                 case "QOBJ":
                     FlushStage();
                     FlushObjective();
@@ -254,7 +260,7 @@ public sealed class TesPlugin
         FlushStage();
         FlushObjective();
 
-        return new QuestDefinition(formId, stages, objectives, dataFlags, full);
+        return new QuestDefinition(formId, stages, objectives, dataFlags, full, edid);
     }
 
     /// <summary>R&amp;D (ROADMAP §6 #16): dump the raw subrecords of one <c>QUST</c> record from a plugin file,
@@ -397,8 +403,11 @@ public sealed class TesPlugin
 
 /// <summary>One stage of a <c>QUST</c> definition: its <paramref name="Index"/> (the <c>INDX</c> stage index),
 /// the raw <c>QSDT</c> <paramref name="Flags"/> byte (kept raw — its completion/fail bit semantics are not yet
-/// FNV-verified, ROADMAP §6 #10), and the Pip-Boy log-entry text (<c>CNAM</c>), or null when none.</summary>
-public sealed record QuestStageDef(int Index, byte Flags, string? LogText);
+/// FNV-verified, ROADMAP §6 #10), the Pip-Boy log-entry text (<c>CNAM</c>), and the stage's <b>result-script
+/// source text</b> (<c>SCTX</c>, all of the stage's log-entry scripts concatenated) — the literal
+/// <c>SetObjectiveDisplayed</c>/<c>SetStage</c>/<c>CompleteQuest</c> calls the Pip-Boy interpreter scans
+/// (ROADMAP §6 #16). All are null when the stage records none.</summary>
+public sealed record QuestStageDef(int Index, byte Flags, string? LogText, string? ScriptText = null);
 
 /// <summary>One objective of a <c>QUST</c> definition: its <paramref name="Index"/> (<c>QOBJ</c>), display
 /// <paramref name="Text"/> (<c>NNAM</c>), and the FormIDs of its target reference(s) (<c>QSTA</c>) — the placed
@@ -413,10 +422,13 @@ public sealed record QuestObjectiveDef(int Index, string? Text, IReadOnlyList<ui
 /// <c>0x01</c> = <b>Start Game Enabled</b> (the engine starts the quest at game load), bit2 <c>0x04</c> =
 /// Allow repeated conversation topics, bit3 <c>0x08</c> = Allow repeated stages. <see cref="Name"/> is the
 /// quest's <c>FULL</c> display name (null when the quest has none — a dialogue/script container that never
-/// appears in the Pip-Boy); a player-facing quest has a name <i>and</i> objectives (ROADMAP §6 #16).</para></summary>
+/// appears in the Pip-Boy); a player-facing quest has a name <i>and</i> objectives (ROADMAP §6 #16).
+/// <see cref="Edid"/> is the quest's editor id (e.g. <c>VMQ01</c>): script calls like
+/// <c>SetStage VMQ01 10</c> name their target quest by editor id, so the interpreter resolves them via
+/// it.</para></summary>
 public sealed record QuestDefinition(
     uint FormId, IReadOnlyList<QuestStageDef> Stages, IReadOnlyList<QuestObjectiveDef> Objectives,
-    byte DataFlags = 0, string? Name = null)
+    byte DataFlags = 0, string? Name = null, string? Edid = null)
 {
     /// <summary>The quest's <c>DATA</c> "Start Game Enabled" flag (bit0): the engine starts these at game load,
     /// so a Start-Game-Enabled quest with a displayed objective shows in the Pip-Boy with no save delta.</summary>

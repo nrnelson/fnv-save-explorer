@@ -175,6 +175,10 @@ try
             QuestDebug(FalloutSave.Load(path), path,
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
             break;
+        case "qscript":
+            QuestScriptDump(FalloutSave.Load(path), path, args[2],
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path && a != args[2]));
+            break;
         case "qrec":
         {
             // qrec <plugin.esm> <localFormIdHex> — dump a QUST record's raw subrecords (R&D §6 #16).
@@ -639,6 +643,35 @@ static void QuestDebug(FalloutSave s, string savePath, string? dataDir)
     }
 
     static string Truncate(string v, int max) => v.Length <= max ? v : v[..(max - 1)] + "…";
+}
+
+// R&D (ROADMAP §6 #16): for one quest, print its masters definition (EDID/name/SGE) and, per stage, the
+// parsed quest-script effects (QuestScript.Parse over the stage's SCTX). Validates the whole extraction
+// pipeline end-to-end on real masters data: TesPlugin SCTX -> QuestDefinition -> QuestScript effects.
+static void QuestScriptDump(FalloutSave s, string savePath, string formIdArg, string? dataDir)
+{
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    if (db.Count == 0) { Console.WriteLine("Needs the game Data folder."); return; }
+
+    var formId = ParseOffset(formIdArg);
+    var q = db.Quest(formId);
+    if (q is null) { Console.WriteLine($"No QUST definition for 0x{formId:X8} in the masters."); return; }
+
+    Console.WriteLine($"0x{q.FormId:X8}  {q.Name ?? "(no name)"}  [EDID {q.Edid ?? "?"}]");
+    Console.WriteLine($"  DATA 0x{q.DataFlags:X2}  StartGameEnabled={q.StartGameEnabled}  PlayerFacing={q.IsPlayerFacing}  " +
+        $"stages={q.Stages.Count} objectives={q.Objectives.Count}\n");
+    foreach (var st in q.Stages.OrderBy(x => x.Index))
+    {
+        var log = st.LogText is { Length: > 0 } ? $"  \"{st.LogText}\"" : "";
+        Console.WriteLine($"  stage {st.Index,-3} (QSDT 0x{st.Flags:X2}){log}");
+        foreach (var e in QuestScript.Parse(st.ScriptText))
+        {
+            var idx = e.Verb is QuestScriptVerb.StartQuest or QuestScriptVerb.StopQuest or QuestScriptVerb.CompleteQuest
+                or QuestScriptVerb.FailQuest or QuestScriptVerb.CompleteAllObjectives ? "" : $" {e.Arg1}";
+            var onOff = e.Verb is QuestScriptVerb.SetObjectiveDisplayed or QuestScriptVerb.SetObjectiveCompleted ? $" ={e.Arg2}" : "";
+            Console.WriteLine($"      {(e.Conditional ? "?" : " ")} {e.Verb} {e.TargetQuestEdid}{idx}{onOff}");
+        }
+    }
 }
 
 static void NoteScan(string dir)
