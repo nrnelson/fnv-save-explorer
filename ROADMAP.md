@@ -1174,6 +1174,23 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       thing needed to measure it. Shipped: `TesPlugin.DialogueInfos`, `PluginDatabase.DialogueInfoEffects`, the
       QuestPipboy dialogue seed, CLI `qfired`, wired into `pipboy` + the GUI; 4 new tests. Full suite green except the
       pre-existing chargen inventory edge case.
+    **PROGRESS 2026-06-23 — Save 57 is now a FULL 7/7 EXACT ORACLE MATCH (0 false positives): "Back in the Saddle"
+    solved.** The user's intuition — that an object/event mechanism analogous to the said-INFO must complete VCG02 —
+    was right, and it's *also* dialogue. Extended `qaudit --who` to scan dialogue INFOs + all quest verbs; it showed
+    VCG02 is **stopped/completed by dialogue**: INFO `0x00104C5B` does `StopQuest VCG02` (and `0x0015D97E` does
+    `CompleteQuest VCG02`). `0x00104C5B` is present (said) in Save 57. The dialogue seed previously applied only
+    `StartQuest`/`SetStage`; it now also applies non-conditional `CompleteQuest`/`StopQuest` (→ completed/greyed) and
+    `FailQuest` (→ failed), and **reaches every stage ≤ the highest said stage** (so a said `SetStage` to a non-display
+    stage like VCG02's 10 still reconstructs the earlier objective display). **Result: `pipboy` on Save 57 = the exact
+    7: 5 active (Happy Trails / Midnight / Sierra Madre / The Reunion / They Went That-a-Way) + 2 completed (Ain't That
+    a Kick / Back in the Saddle), 0 false positives.** q11 still correct (Ghost Town Gunfight active, no spurious
+    greyed quests). **Net for §6 #16:** the interpreter reconstructs the early-game Pip-Boy EXACTLY by combining
+    masters quest scripts + Start-Game-Enabled startup + the formType-7 completion anchor + the said-INFO dialogue
+    seed (start/advance/complete/stop), all gated on save signals so precision stays at 0 FP. The remaining unknown is
+    *mid/late-game recall* — only measurable with a mid-game Pip-Boy screenshot oracle. Precision caveat carried
+    forward: a quest a said-INFO `StopQuest`s while it had reached a display stage is shown completed/greyed; a quest
+    started-then-genuinely-abandoned (rare) could be mislabelled completed. Pinned by `Dialogue_stopped_quest_shows_
+    completed_greyed`; full suite green except the pre-existing chargen inventory edge case.
 
 ---
 

@@ -1350,26 +1350,31 @@ static void QuestAudit(FalloutSave s, string savePath, string? dataDir, bool lis
     foreach (var q in db.Quests.Values)
         if (!string.IsNullOrEmpty(q.Edid)) byEdid[q.Edid] = q;
 
-    // --who <EDID>: list every quest whose script SetStage/StartQuest-targets <EDID> (which starts it, and how).
+    // --who <EDID>: list every QUST stage/GameMode script AND every dialogue INFO whose result script targets
+    // <EDID> with ANY quest verb (Start/Set/Stop/Complete/Fail) — i.e. everything that controls that quest.
     if (who is not null)
     {
-        Console.WriteLine($"Quests whose QUST scripts start/advance '{who}':");
         var found = false;
+        void Show(string src, IEnumerable<QuestScriptEffect> effects)
+        {
+            foreach (var e in effects.Where(e => string.Equals(e.TargetQuestEdid, who, StringComparison.OrdinalIgnoreCase)))
+            {
+                found = true;
+                var arg = e.Verb is QuestScriptVerb.SetStage or QuestScriptVerb.SetObjectiveDisplayed or QuestScriptVerb.SetObjectiveCompleted ? $" {e.Arg1}" : "";
+                Console.WriteLine($"  {src,-34} {(e.Conditional ? "?" : " ")}{e.Verb}{arg}");
+            }
+        }
+        Console.WriteLine($"QUST scripts that control '{who}':");
         foreach (var q in db.Quests.Values)
         {
-            var stages = q.Stages.Select(st => (Label: $"stage {st.Index}", Text: (string?)st.ScriptText))
-                .Append((Label: "GameMode", Text: q.GameModeScript));
-            foreach (var (label, text) in stages.Where(x => x.Text is not null))
-                foreach (var e in QuestScript.Parse(text).Where(e =>
-                    e.Verb is QuestScriptVerb.StartQuest or QuestScriptVerb.SetStage &&
-                    string.Equals(e.TargetQuestEdid, who, StringComparison.OrdinalIgnoreCase)))
-                {
-                    found = true;
-                    Console.WriteLine($"  {q.Edid,-22} (0x{q.FormId:X8}{(q.StartGameEnabled ? " SGE" : "")}) {label}: " +
-                        $"{(e.Conditional ? "?" : " ")}{e.Verb}{(e.Verb == QuestScriptVerb.SetStage ? $" {e.Arg1}" : "")}");
-                }
+            foreach (var st in q.Stages)
+                Show($"{q.Edid} stage {st.Index}", QuestScript.Parse(st.ScriptText));
+            Show($"{q.Edid} GameMode", QuestScript.Parse(q.GameModeScript));
         }
-        if (!found) Console.WriteLine("  (no QUST script references it — started only by dialogue/activators)");
+        Console.WriteLine($"\nDialogue INFOs that control '{who}':");
+        foreach (var (infoFormId, effects) in db.DialogueInfoEffects)
+            Show($"INFO 0x{infoFormId:X8}", effects);
+        if (!found) Console.WriteLine("  (nothing references it)");
         return;
     }
 

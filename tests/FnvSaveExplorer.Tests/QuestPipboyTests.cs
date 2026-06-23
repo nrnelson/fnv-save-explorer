@@ -56,6 +56,21 @@ public class QuestPipboyTests
     }
 
     [Fact]
+    public void Dialogue_stopped_quest_shows_completed_greyed()
+    {
+        // "Back in the Saddle" case: one said-INFO starts + stages the quest, another said-INFO StopQuests it (the
+        // tutorial's end). Both INFOs are present in the save -> the quest is started, reached its display stage, and
+        // stopped -> it shows in the Pip-Boy's completed (greyed) section. Both 0x0010A050 and 0x0010A001 are change
+        // forms in QuestSave.Build().
+        var pip = ComputeWithDialogue(QuestSave.Build(), [DialogueQuest()],
+            (0x0010A050u, "StartQuest QDLG\nSetStage QDLG 5"),
+            (0x0010A001u, "StopQuest QDLG"));
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Dialogue Quest");
+        Assert.Equal(PipboyQuestState.Completed, q.State);
+    }
+
+    [Fact]
     public void Dialogue_started_quest_is_excluded_when_its_info_is_absent_from_the_save()
     {
         // The precision guarantee: INFO 0x0010A099 is NOT a change form in the save (the line was never said), so the

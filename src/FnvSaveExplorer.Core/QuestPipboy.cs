@@ -158,6 +158,13 @@ public sealed class QuestPipboy
             var saidInfoPresent = new HashSet<uint>();
             foreach (var cf in save.EnumerateChangeForms())
                 saidInfoPresent.Add(cf.FormId);
+
+            // The said-INFOs happened in an unknown order, so accumulate their NET effect per quest rather than
+            // applying in dictionary order: a quest is started if any said-INFO starts/stages it; it reached up to
+            // the highest non-conditional stage any of them set; and it is done if any non-conditionally completes
+            // or stops it (a started-then-stopped quest — e.g. the "Back in the Saddle" tutorial ended by INFO
+            // 0x00104C5B's StopQuest — shows greyed in the Pip-Boy's completed section).
+            var maxStage = new Dictionary<QState, int>();
             foreach (var (infoFormId, effects) in db.DialogueInfoEffects)
             {
                 if (!saidInfoPresent.Contains(infoFormId))
@@ -166,12 +173,31 @@ public sealed class QuestPipboy
                 {
                     if (Resolve(e.TargetQuestEdid) is not { } target)
                         continue;
-                    if (e.Verb == QuestScriptVerb.StartQuest)
-                        target.Running = true;
-                    else if (e.Verb == QuestScriptVerb.SetStage && !e.Conditional)
-                        Reach(target, e.Arg1);
+                    switch (e.Verb)
+                    {
+                        case QuestScriptVerb.StartQuest:
+                            target.Running = true;
+                            break;
+                        case QuestScriptVerb.SetStage when !e.Conditional:
+                            target.Running = true;
+                            maxStage[target] = Math.Max(maxStage.GetValueOrDefault(target, int.MinValue), e.Arg1);
+                            break;
+                        case QuestScriptVerb.CompleteQuest when !e.Conditional:
+                        case QuestScriptVerb.StopQuest when !e.Conditional:
+                            target.Completed = true;
+                            break;
+                        case QuestScriptVerb.FailQuest when !e.Conditional:
+                            target.Failed = true;
+                            break;
+                    }
                 }
             }
+            // Reach every stage up to the highest one a said-INFO set, so the quest's objective-display state is
+            // reconstructed (a single said SetStage to a non-display stage, like VCG02's stage 10, otherwise shows
+            // nothing). Mirrors the formType-7 completion seed's "reach <= cap".
+            foreach (var (target, cap) in maxStage)
+                foreach (var sd in target.Def.Stages.Where(s => s.Index <= cap))
+                    Reach(target, sd.Index);
         }
 
         // ---- Fixpoint: run reached-stage scripts; non-conditional SetStage/StartQuest expand the running set. ----
