@@ -33,10 +33,16 @@ public class QuestPipboyTests
     private static TestRecord ChargenQuest() => new("QUST", ChargenFormId, Edid: "VCG01", Full: "Ain't That a Kick", Subs:
     [
         ("DATA", Data(0x11)),                                          // Start-Game-Enabled (as the real VCG01)
-        ("INDX", I16(10)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed VCG01 10 1")),
+        // Mirror VCG01's real objective quirks: obj 10 displayed+completed; obj 30 SetObjectiveCompleted only (never
+        // explicitly displayed); obj 40 SetObjectiveDisplayed only (never explicitly completed). All three must show
+        // for the completed quest, all ticked (the engine greys a completed quest's objectives).
+        ("INDX", I16(10)), ("QSDT", [0x00]),
+            ("SCTX", Z("SetObjectiveDisplayed VCG01 10 1\nSetObjectiveCompleted VCG01 10 1\nSetObjectiveCompleted VCG01 30 1\nSetObjectiveDisplayed VCG01 40 1")),
         ("INDX", I16(200)), ("QSDT", [0x01]),                          // completing stage: hands off to VMQ01
             ("SCTX", Z("StartQuest VMQ01\nSetStage VMQ01 10")),
-        ("QOBJ", I16(10)), ("NNAM", Z("Use the Vit-o-matic Vigor Tester")),
+        ("QOBJ", I16(10)), ("NNAM", Z("Walk to the Vit-o-matic Vigor Tester")),
+        ("QOBJ", I16(30)), ("NNAM", Z("Use the Vit-o-matic Vigor Tester")),
+        ("QOBJ", I16(40)), ("NNAM", Z("Follow Doc Mitchell to the exit")),
     ]);
 
     private static TestRecord HandoffQuest() => new("QUST", 0x0010A002, Edid: "VMQ01", Full: "They Went That-a-Way", Subs:
@@ -57,6 +63,9 @@ public class QuestPipboyTests
 
         var vcg01 = Assert.Single(pip.Quests, q => q.Name == "Ain't That a Kick");
         Assert.Equal(PipboyQuestState.Completed, vcg01.State);
+        // All three objectives show (incl. obj 30 which was only SetObjectiveCompleted), all ticked, descending index.
+        Assert.Equal([40, 30, 10], vcg01.Objectives.Select(o => o.Index));
+        Assert.All(vcg01.Objectives, o => Assert.True(o.Completed));
 
         var vmq01 = Assert.Single(pip.Quests, q => q.Name == "They Went That-a-Way");
         Assert.Equal(PipboyQuestState.Active, vmq01.State);            // started purely by the formType-7 hand-off

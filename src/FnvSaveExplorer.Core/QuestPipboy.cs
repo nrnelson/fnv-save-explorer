@@ -211,20 +211,29 @@ public sealed class QuestPipboy
         {
             if (!st.Def.IsPlayerFacing)
                 continue;
-            var displayed = st.ObjDisplayed.Where(o => o.Value).Select(o => o.Key).ToHashSet();
+            // A completed objective shows in the Pip-Boy even if the stage script only SetObjectiveCompleted it
+            // without an explicit SetObjectiveDisplayed (e.g. VCG01 obj 30 "Use the Vit-o-matic Vigor Tester") — so
+            // the displayed set is the union of displayed-and-completed objectives.
+            var displayed = st.ObjDisplayed.Where(o => o.Value).Select(o => o.Key)
+                .Concat(st.ObjCompleted.Where(o => o.Value).Select(o => o.Key))
+                .ToHashSet();
             if (displayed.Count == 0 || !(st.Running || st.Completed || st.Failed))
                 continue;
 
+            var allShownCompleted = displayed.All(i => st.ObjCompleted.GetValueOrDefault(i));
+            var state = st.Failed ? PipboyQuestState.Failed
+                : st.Completed || allShownCompleted ? PipboyQuestState.Completed
+                : PipboyQuestState.Active;
+
+            // The Pip-Boy lists objectives most-recent first (descending index), and a quest greyed as Completed shows
+            // ALL its objectives ticked — the engine completes them on quest completion even when the stage script
+            // only displayed them (e.g. VCG01 obj 40/50 are SetObjectiveDisplayed but never SetObjectiveCompleted).
             var objectives = st.Def.Objectives
                 .Where(o => displayed.Contains(o.Index))
-                .OrderBy(o => o.Index)
-                .Select(o => new PipboyObjective(o.Index, o.Text, st.ObjCompleted.GetValueOrDefault(o.Index)))
+                .OrderByDescending(o => o.Index)
+                .Select(o => new PipboyObjective(
+                    o.Index, o.Text, state == PipboyQuestState.Completed || st.ObjCompleted.GetValueOrDefault(o.Index)))
                 .ToList();
-
-            var allDone = objectives.Count > 0 && objectives.All(o => o.Completed);
-            var state = st.Failed ? PipboyQuestState.Failed
-                : st.Completed || allDone ? PipboyQuestState.Completed
-                : PipboyQuestState.Active;
 
             quests.Add(new PipboyQuest(st.Def.FormId, st.Def.Name, state, objectives, st.Def.StartGameEnabled));
         }
