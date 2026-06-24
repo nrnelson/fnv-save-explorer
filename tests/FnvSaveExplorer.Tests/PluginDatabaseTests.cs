@@ -294,6 +294,36 @@ internal static class EsmBuilder
         return [.. b];
     }
 
+    /// <summary>Like <see cref="PluginWithDialogue"/> but the INFO records are supplied directly, so they can carry
+    /// arbitrary subrecords (e.g. a <c>CTDA</c> condition alongside or instead of an <c>SCTX</c> result script).</summary>
+    public static byte[] PluginWithDialogueInfos(IEnumerable<string> masters, IEnumerable<TestRecord> records, IEnumerable<TestRecord> infoRecords)
+    {
+        var b = new List<byte>();
+        b.AddRange(Header(masters));
+        foreach (var group in records.GroupBy(r => r.Type))
+            b.AddRange(Group(group.Key, group.Select(Record)));
+
+        var topicChildren = GroupRaw(U32(0x00009999), 7, infoRecords.Select(Record));
+        var dialContent = new List<byte>();
+        dialContent.AddRange(Record(new TestRecord("DIAL", 0x00009999, Edid: "TestTopic", Full: null)));
+        dialContent.AddRange(topicChildren);
+        b.AddRange(GroupRaw(Encoding.ASCII.GetBytes("DIAL"), 0, [[.. dialContent]]));
+        return [.. b];
+    }
+
+    /// <summary>Builds a 28-byte FNV <c>CTDA</c> subrecord payload: <c>[op&lt;&lt;5][unused 3][f32 value]
+    /// [u32 function][u32 param1][u32 param2][run-on 4][reference 4]</c> (ROADMAP §6 #16 CTDA spike).</summary>
+    public static byte[] Ctda(byte op, float compareValue, uint function, uint param1, uint param2 = 0)
+    {
+        var d = new byte[28];
+        d[0] = (byte)(op << 5);
+        BinaryPrimitives.WriteSingleLittleEndian(d.AsSpan(4), compareValue);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(8), function);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(12), param1);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(16), param2);
+        return d;
+    }
+
     private static byte[] Sub(string type, byte[] data)
     {
         var b = new List<byte>();

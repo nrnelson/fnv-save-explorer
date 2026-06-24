@@ -143,6 +143,10 @@ try
             QuestFired(FalloutSave.Load(path), path,
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
             break;
+        case "qcond":
+            QuestConditions(FalloutSave.Load(path), path,
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
+            break;
         case "qaudit":
         {
             var whoIdx = Array.IndexOf(args, "--who");
@@ -1334,6 +1338,64 @@ static void QuestFired(FalloutSave s, string savePath, string? dataDir)
         var pf = q is { IsPlayerFacing: true } ? "" : "  (not player-facing)";
         Console.WriteLine($"  0x{questId:X8}  \"{q?.Name ?? "?"}\"{pf}  [{string.Join(", ", effectDetail[questId].Distinct())}]  <- INFO {string.Join(", ", infos.Distinct().Select(i => $"0x{i:X8}"))}");
     }
+}
+
+static void QuestConditions(FalloutSave s, string savePath, string? dataDir)
+{
+    // ROADMAP §6 #16 CTDA spike: a dialogue INFO the player SAID has a change form in the save, so its CTDA
+    // conditions held when it fired. A said-INFO carrying a quest-state condition (GetStage/GetQuestCompleted X)
+    // is therefore proof X reached that state. This probe lists, per player-facing quest, every such condition on
+    // a said-INFO, and computes a conservative "implied completed" set (a condition that requires X completed /
+    // X at >= its completing stage) to gauge whether this is a precision-safe completion signal.
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath), withDialogue: true);
+    if (db.Count == 0) { Console.WriteLine("Needs the game Data folder."); return; }
+
+    var present = s.EnumerateChangeForms().Select(cf => cf.FormId).ToHashSet();
+    static string OpStr(byte op) => op switch { 0 => "==", 1 => "!=", 2 => ">", 3 => ">=", 4 => "<", 5 => "<=", _ => "?" };
+
+    // quest FormId -> conditions seen on said-INFOs (deduped text)
+    var perQuest = new Dictionary<uint, SortedSet<string>>();
+    var impliedCompleted = new HashSet<uint>();
+    var saidWithCond = 0;
+    foreach (var (infoFormId, conditions) in db.DialogueInfoConditions)
+    {
+        if (!present.Contains(infoFormId))
+            continue;
+        saidWithCond++;
+        foreach (var c in conditions)
+        {
+            if (db.Quest(c.QuestFormId) is not { IsPlayerFacing: true } q)
+                continue;
+            var p2 = c.Function == QuestFunction.GetStageDone ? $" {c.Param2}" : "";
+            (perQuest.TryGetValue(c.QuestFormId, out var set) ? set : perQuest[c.QuestFormId] = [])
+                .Add($"{c.Function}{p2} {OpStr(c.Op)} {c.CompareValue:g}");
+
+            // Completion implication: a said-INFO whose condition proves X reached a completing stage (QSDT 0x01).
+            // Use the MIN completing stage — reaching ANY complete-flagged stage finishes the quest (monotonic).
+            var completeStage = q.Stages.Where(st => (st.Flags & 0x01) != 0).Select(st => (int?)st.Index).Min();
+            var implies = c.Function switch
+            {
+                QuestFunction.GetQuestCompleted => c.Op is 0 or 3 && c.CompareValue >= 1,                       // == / >= 1
+                QuestFunction.GetStage when completeStage is { } cs => c.Op is 0 or 2 or 3 && c.CompareValue >= cs, // == / > / >= a completing stage
+                QuestFunction.GetStageDone when completeStage is { } cs => c.Param2 >= cs && c.Op is 0 or 3 && c.CompareValue >= 1,
+                _ => false,
+            };
+            if (implies)
+                impliedCompleted.Add(c.QuestFormId);
+        }
+    }
+
+    Console.WriteLine($"said-INFOs carrying quest-state conditions: {saidWithCond}; player-facing quests they reference: {perQuest.Count}\n");
+    foreach (var (questId, conds) in perQuest.OrderBy(kv => db.Quest(kv.Key)?.Name, StringComparer.OrdinalIgnoreCase))
+    {
+        var done = impliedCompleted.Contains(questId) ? "  => IMPLIED COMPLETED" : "";
+        Console.WriteLine($"  0x{questId:X8}  \"{db.Quest(questId)?.Name}\"{done}");
+        foreach (var c in conds)
+            Console.WriteLine($"        {c}");
+    }
+    Console.WriteLine($"\nIMPLIED-COMPLETED player-facing quests ({impliedCompleted.Count}):");
+    foreach (var id in impliedCompleted.OrderBy(i => db.Quest(i)?.Name, StringComparer.OrdinalIgnoreCase))
+        Console.WriteLine($"  \"{db.Quest(id)?.Name}\"  0x{id:X8}");
 }
 
 static void QuestAudit(FalloutSave s, string savePath, string? dataDir, bool list, string? who = null)

@@ -36,6 +36,65 @@ public class QuestPipboyTests
         return QuestPipboy.Compute(save, db);
     }
 
+    // Builds masters whose dialogue INFO records are supplied directly (so they can carry a CTDA condition).
+    private static QuestPipboy ComputeWithDialogueInfos(byte[] saveBytes, IEnumerable<TestRecord> records, params TestRecord[] infoRecords)
+    {
+        using var dir = new TempDataFolder();
+        dir.Write("A.esm", EsmBuilder.PluginWithDialogueInfos([], records, infoRecords));
+        var save = FalloutSave.Parse(saveBytes);
+        var db = PluginDatabase.Build(save.Plugins, dir.Path, withDialogue: true);
+        return QuestPipboy.Compute(save, db);
+    }
+
+    // A quest started+shown by a said-INFO, with a completing (QSDT 0x01) stage at 100. Used by the CTDA tests.
+    private static TestRecord CompletableQuest() => new("QUST", 0x00100030, Edid: "QCMP", Full: "Completable Quest", Subs:
+    [
+        ("DATA", Data(0x00)),
+        ("INDX", I16(5)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QCMP 5 1")),
+        ("INDX", I16(100)), ("QSDT", [0x01]),                          // completing stage (never reached by SetStage)
+        ("QOBJ", I16(5)), ("NNAM", Z("Do the thing")),
+    ]);
+
+    [Fact]
+    public void Said_info_ctda_precondition_completes_a_running_quest()
+    {
+        // ROADMAP §6 #16 CTDA: said-INFO 0x0010A001 (present in QuestSave.Build) carries GetStage QCMP >= 100 — its
+        // completing stage — proving QCMP reached completion. QCMP is started+shown active by said-INFO 0x0010A050;
+        // the CTDA reclassifies it from active to completed.
+        var pip = ComputeWithDialogueInfos(QuestSave.Build(), [CompletableQuest()],
+            new TestRecord("INFO", 0x0010A050, null, null, Subs: [("SCTX", Z("SetStage QCMP 5"))]),
+            new TestRecord("INFO", 0x0010A001, null, null,
+                Subs: [("CTDA", EsmBuilder.Ctda(op: 3, compareValue: 100, function: (uint)QuestFunction.GetStage, param1: 0x00100030))]));
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Completable Quest");
+        Assert.Equal(PipboyQuestState.Completed, q.State);
+    }
+
+    [Fact]
+    public void Said_info_ctda_below_completing_stage_leaves_quest_active()
+    {
+        // Guard: GetStage QCMP >= 50 (below the completing stage 100) proves nothing about completion — stays active.
+        var pip = ComputeWithDialogueInfos(QuestSave.Build(), [CompletableQuest()],
+            new TestRecord("INFO", 0x0010A050, null, null, Subs: [("SCTX", Z("SetStage QCMP 5"))]),
+            new TestRecord("INFO", 0x0010A001, null, null,
+                Subs: [("CTDA", EsmBuilder.Ctda(op: 3, compareValue: 50, function: (uint)QuestFunction.GetStage, param1: 0x00100030))]));
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Completable Quest");
+        Assert.Equal(PipboyQuestState.Active, q.State);
+    }
+
+    [Fact]
+    public void Ctda_completion_does_not_surface_a_quest_that_is_not_running()
+    {
+        // Precision guard: the CTDA completion only RECLASSIFIES already-running quests. With no said-INFO starting
+        // QCMP, the GetStage>=100 condition must NOT pull it into the Pip-Boy (no add, only reclassify).
+        var pip = ComputeWithDialogueInfos(QuestSave.Build(), [CompletableQuest()],
+            new TestRecord("INFO", 0x0010A001, null, null,
+                Subs: [("CTDA", EsmBuilder.Ctda(op: 3, compareValue: 100, function: (uint)QuestFunction.GetStage, param1: 0x00100030))]));
+
+        Assert.DoesNotContain(pip.Quests, x => x.Name == "Completable Quest");
+    }
+
     private static TestRecord DialogueQuest() => new("QUST", 0x00100010, Edid: "QDLG", Full: "Dialogue Quest", Subs:
     [
         ("DATA", Data(0x00)),                                          // not SGE, not a QUST-propagation target

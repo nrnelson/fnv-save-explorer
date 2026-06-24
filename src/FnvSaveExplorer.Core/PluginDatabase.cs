@@ -43,8 +43,9 @@ public sealed class PluginDatabase
 
     private readonly HashSet<uint> _dialogueStarted; // quest FormIDs an INFO StartQuest/SetStage-targets (Phase B)
     private readonly Dictionary<uint, IReadOnlyList<QuestScriptEffect>> _dialogueInfoEffects; // INFO FormID -> its result-script effects
+    private readonly Dictionary<uint, IReadOnlyList<InfoCondition>> _dialogueInfoConditions; // INFO FormID -> its quest-state preconditions
 
-    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null)
+    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null, Dictionary<uint, IReadOnlyList<InfoCondition>>? dialogueInfoConditions = null)
     {
         _names = names;
         _types = types;
@@ -55,6 +56,7 @@ public sealed class PluginDatabase
         ResolvedPlugins = resolved;
         _dialogueStarted = dialogueStarted ?? [];
         _dialogueInfoEffects = dialogueInfoEffects ?? [];
+        _dialogueInfoConditions = dialogueInfoConditions ?? [];
     }
 
     /// <summary>Quest FormIDs (save-space) that a dialogue <c>INFO</c> result script <c>StartQuest</c>/<c>SetStage</c>
@@ -68,6 +70,12 @@ public sealed class PluginDatabase
     /// (not background-init)" signal the Pip-Boy interpreter seeds from. Empty unless built with
     /// <c>withDialogue: true</c>.</summary>
     public IReadOnlyDictionary<uint, IReadOnlyList<QuestScriptEffect>> DialogueInfoEffects => _dialogueInfoEffects;
+
+    /// <summary>Dialogue <c>INFO</c> FormIDs (save-space) → that INFO's quest-state <c>CTDA</c> preconditions
+    /// (ROADMAP §6 #16 CTDA spike). An INFO present in the save was SAID, so its conditions held when it fired;
+    /// a <c>GetQuestCompleted X</c>/<c>GetStage X &gt;= N</c> condition is therefore proof X reached that state.
+    /// Empty unless built with <c>withDialogue: true</c>.</summary>
+    public IReadOnlyDictionary<uint, IReadOnlyList<InfoCondition>> DialogueInfoConditions => _dialogueInfoConditions;
 
     /// <summary>An empty database; every <see cref="Resolve"/> returns <c>null</c>.</summary>
     public static readonly PluginDatabase Empty = new([], [], [], [], null, null, []);
@@ -101,6 +109,7 @@ public sealed class PluginDatabase
         var resolved = new List<string>();
         var dialogueTargetEdids = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // INFO StartQuest/SetStage targets
         var infoEffects = new Dictionary<uint, IReadOnlyList<QuestScriptEffect>>(); // save-space INFO FormID -> effects
+        var infoConditions = new Dictionary<uint, IReadOnlyList<InfoCondition>>(); // save-space INFO FormID -> quest-state preconditions
 
         // Case-insensitive load-order index, for mapping a plugin's masters back to save indices.
         var indexOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -162,13 +171,25 @@ public sealed class PluginDatabase
             // Dialogue INFO result-script effects target quests by editor id; collect the StartQuest/SetStage
             // targets (per INFO, re-keying the INFO's FormID into save space) so they resolve to quest FormIDs once
             // every plugin's quests are known (Phase B).
-            foreach (var (infoFormId, effects) in plugin.DialogueInfos)
+            foreach (var (infoFormId, effects, conditions) in plugin.DialogueInfos)
             {
                 foreach (var e in effects)
                     if (e.Verb is QuestScriptVerb.StartQuest or QuestScriptVerb.SetStage && !string.IsNullOrEmpty(e.TargetQuestEdid))
                         dialogueTargetEdids.Add(e.TargetQuestEdid);
-                if (Remap(infoFormId, remap) is { } saveInfoFormId)
+                if (Remap(infoFormId, remap) is not { } saveInfoFormId)
+                    continue;
+                if (effects.Count > 0)
                     infoEffects[saveInfoFormId] = effects; // later (load-order) plugin overrides win, like names
+                // Re-key each quest-state precondition's target quest FormID into save space (CTDA spike).
+                if (conditions.Count > 0)
+                {
+                    var rekeyed = new List<InfoCondition>(conditions.Count);
+                    foreach (var c in conditions)
+                        if (Remap(c.QuestFormId, remap) is { } q)
+                            rekeyed.Add(c with { QuestFormId = q });
+                    if (rekeyed.Count > 0)
+                        infoConditions[saveInfoFormId] = rekeyed;
+                }
             }
 
             resolved.Add(loadOrder[i]);
@@ -180,7 +201,7 @@ public sealed class PluginDatabase
             if (q.Edid is { } edid && dialogueTargetEdids.Contains(edid))
                 dialogueStarted.Add(q.FormId);
 
-        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects);
+        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects, infoConditions);
     }
 
     /// <summary>Re-keys a plugin-local FormID into save space using the plugin's high-byte → save-index

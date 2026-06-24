@@ -51,6 +51,21 @@ public sealed class QuestPipboy
 
     private QuestPipboy(IReadOnlyList<PipboyQuest> quests) => Quests = quests;
 
+    /// <summary>True when a said-INFO's quest-state <see cref="InfoCondition"/> proves its target quest reached a
+    /// completing (QSDT-0x01) stage — so the quest is completed. Uses the quest's <i>minimum</i> completing stage,
+    /// since reaching any complete-flagged stage finishes the quest. Matches the <c>qcond</c> probe rule.</summary>
+    private static bool ImpliesCompleted(InfoCondition c, QuestDefinition def)
+    {
+        var minComplete = def.Stages.Where(s => (s.Flags & CompleteQuestStageFlag) != 0).Select(s => (int?)s.Index).Min();
+        return c.Function switch
+        {
+            QuestFunction.GetQuestCompleted => c.Op is 0 or 3 && c.CompareValue >= 1,                          // == / >= 1
+            QuestFunction.GetStage when minComplete is { } cs => c.Op is 0 or 2 or 3 && c.CompareValue >= cs,  // == / > / >= a completing stage
+            QuestFunction.GetStageDone when minComplete is { } cs => c.Param2 >= cs && c.Op is 0 or 3 && c.CompareValue >= 1,
+            _ => false,
+        };
+    }
+
     /// <summary>Per-quest runtime state accumulated while interpreting reached-stage scripts.</summary>
     private sealed class QState
     {
@@ -259,6 +274,31 @@ public sealed class QuestPipboy
                         target.Failed = true;
                         break;
                 }
+            }
+        }
+
+        // ---- CTDA precondition completion (ROADMAP §6 #16): a dialogue INFO the player SAID has a change form in
+        // the save, so its CTDA conditions held when it fired. A said-INFO carrying a quest-state condition that
+        // proves quest X reached a completing stage — GetStage X >= a QSDT-0x01 stage, GetStageDone X <complete>,
+        // or GetQuestCompleted X — means X is completed (monotonic: completion is permanent). This recovers the
+        // event-completed quests (Ghost Town Gunfight, Come Fly With Me, …) whose own change form carries no
+        // completion bit but whose completion gated some later line of dialogue the player then said. Applied ONLY
+        // to quests we ALREADY surface as running, so it strictly reclassifies a shown-active quest to completed —
+        // it can neither add a Pip-Boy entry nor drop one (precision-safe). Validated 100% precise (13/13 truth-
+        // completed) on the Save 420 oracle. ----
+        if (db.DialogueInfoConditions.Count > 0)
+        {
+            var saidPresent = new HashSet<uint>();
+            foreach (var cf in save.EnumerateChangeForms())
+                saidPresent.Add(cf.FormId);
+            foreach (var (infoFormId, conditions) in db.DialogueInfoConditions)
+            {
+                if (!saidPresent.Contains(infoFormId))
+                    continue;
+                foreach (var c in conditions)
+                    if (states.TryGetValue(c.QuestFormId, out var target) && target is { Running: true, Completed: false }
+                        && ImpliesCompleted(c, target.Def))
+                        target.Completed = true;
             }
         }
 

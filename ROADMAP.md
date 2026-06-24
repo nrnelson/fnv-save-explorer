@@ -1336,6 +1336,26 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     mislabels with no FP risk. This is the next build; it is sizable and depends on getting the FNV CTDA layout +
     quest-function opcodes right, so it should start as a feasibility spike (read CTDA on a few known chain INFOs,
     confirm the predecessor-completion conditions exist) before wiring into QuestPipboy.
+    **PROGRESS 2026-06-24 (cont.) — CTDA-on-said-INFO completion SHIPPED; recall lifted with ZERO precision loss.
+    Save 122 13→15, Save 420 28→32, Save 57 held 7/7.** Built the decode: `TesPlugin` now parses INFO `CTDA`
+    subrecords (28-byte FNV layout) keeping the quest-state functions whose first param is a quest —
+    `GetQuestRunning`(56)/`GetStage`(58)/`GetStageDone`(59)/`GetQuestCompleted`(397) — surfaced as
+    `PluginDatabase.DialogueInfoConditions` (re-keyed to save space). `QuestPipboy.Compute` adds a completion pass:
+    a said-INFO (present as a change form) fired, so its conditions held; a condition proving the quest reached a
+    completing (QSDT-0x01) stage — `GetStage X >= minCompleteStage`, `GetStageDone X <complete>`, or
+    `GetQuestCompleted X` — marks X completed. **Precision-safe by construction:** applied ONLY to quests already
+    surfaced as running, so it strictly reclassifies a shown-active quest to completed (never adds/drops an entry).
+    The `qcond` CLI probe validated the signal on Save 420 first: **13 quests implied-completed, ALL 13 truth-
+    completed (100% precision)** — 4 were active-shown mislabels (Ghost Town Gunfight, Come Fly With Me, Can You
+    Find It in Your Heart?, Restoring Hope). Key calibration: use the quest's MIN completing stage (reaching any
+    QSDT-0x01 stage finishes it) — the first pass used max and under-fired. **Results (all gains mislabel→correct,
+    FP/missed unchanged):** Save 57 = 7/7; Save 122 = 13→15 correct (mislabelled 6→4); Save 420 = 28→32 correct
+    (mislabelled 19→15), precision still 94%. Most quest-state CTDA on a said-INFO is the INFO's OWN quest gating
+    (dialogue happens DURING the quest, so it rarely proves completion); the win is the subset where a LATER quest's
+    dialogue is gated on an earlier quest's completion. 3 synthetic tests pin it
+    (`Said_info_ctda_precondition_completes_a_running_quest` + below-completing-stage guard + not-running/no-add
+    guard). Tooling: CLI `qcond`. Remaining gaps: bucket-C event-completed quests with no said-INFO completion gate
+    (the documented tail) + the 21 missed (mostly completed-and-dropped) on Save 420.
 
 ---
 

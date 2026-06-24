@@ -71,7 +71,7 @@ public sealed class TesPlugin
     /// needs it. The <b>INFO's FormID matters</b>: when the player says that line the engine writes a change form
     /// for the INFO, so its presence in the save is the "this dialogue actually fired" signal that distinguishes a
     /// truly-started quest from a background-initialized one (Phase B step 2).</summary>
-    public IReadOnlyList<(uint InfoFormId, IReadOnlyList<QuestScriptEffect> Effects)> DialogueInfos { get; }
+    public IReadOnlyList<(uint InfoFormId, IReadOnlyList<QuestScriptEffect> Effects, IReadOnlyList<InfoCondition> Conditions)> DialogueInfos { get; }
 
     /// <summary>All dialogue result-script quest effects, flattened across <see cref="DialogueInfos"/>.</summary>
     public IEnumerable<QuestScriptEffect> DialogueEffects => DialogueInfos.SelectMany(i => i.Effects);
@@ -81,7 +81,7 @@ public sealed class TesPlugin
         IReadOnlyList<string> masters,
         IReadOnlyList<(uint, string, string, int)> forms,
         IReadOnlyList<QuestDefinition> quests,
-        IReadOnlyList<(uint, IReadOnlyList<QuestScriptEffect>)> dialogueInfos)
+        IReadOnlyList<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)> dialogueInfos)
     {
         FileName = fileName;
         Masters = masters;
@@ -119,7 +119,7 @@ public sealed class TesPlugin
         // ---- top-level groups ----
         var forms = new List<(uint, string, string, int)>();
         var quests = new List<QuestDefinition>();
-        var dialogueInfos = new List<(uint, IReadOnlyList<QuestScriptEffect>)>();
+        var dialogueInfos = new List<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)>();
         // SCPT FormID -> (GameMode block source, declared local-variable names) (ROADMAP §6 #16)
         var scripts = new Dictionary<uint, (string GameMode, List<string> Locals)>();
         while (true)
@@ -161,7 +161,8 @@ public sealed class TesPlugin
     /// "Topic Children" sub-groups — collecting the quest-affecting calls in each <c>INFO</c>'s result-script
     /// source text (<c>SCTX</c>). Recurses through nested <c>GRUP</c>s and skips non-<c>INFO</c> records (the
     /// <c>DIAL</c> topics themselves). ROADMAP §6 #16 Phase B.</summary>
-    private static void ReadInfoEffects(Stream fs, long contentSize, List<(uint, IReadOnlyList<QuestScriptEffect>)> infos)
+    private static void ReadInfoEffects(
+        Stream fs, long contentSize, List<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)> infos)
     {
         var end = fs.Position + contentSize;
         while (fs.Position < end)
@@ -186,12 +187,39 @@ public sealed class TesPlugin
             if ((flags & CompressedFlag) != 0)
                 data = Decompress(data);
             var effects = new List<QuestScriptEffect>();
+            var conditions = new List<InfoCondition>();
             foreach (var (type, sub) in ParseSubrecords(data))
+            {
                 if (type == "SCTX" && ZString(sub) is { Length: > 0 } src)
                     effects.AddRange(QuestScript.Parse(src));
-            if (effects.Count > 0)
-                infos.Add((formId, effects)); // keyed by INFO FormID so the save's said-INFO change form can be matched
+                else if (type == "CTDA" && ParseQuestCondition(sub) is { } c)
+                    conditions.Add(c);
+            }
+            // Keep an INFO if it carries quest effects (Phase B seed) OR a quest-state precondition (CTDA spike) —
+            // its presence as a save change form means the line was SAID, so both its effects fired and its
+            // conditions held at that time.
+            if (effects.Count > 0 || conditions.Count > 0)
+                infos.Add((formId, effects, conditions)); // keyed by INFO FormID so the said-INFO change form matches
         }
+    }
+
+    /// <summary>Decodes a 28-byte FNV <c>CTDA</c> subrecord, returning the condition only when it is one of the
+    /// quest-state functions (<see cref="QuestFunction"/>) whose first parameter is a quest FormID — the signal
+    /// the precondition spike needs. Returns null for any other function (skipped). Plugin-local FormID; re-keyed
+    /// by <see cref="PluginDatabase"/>.</summary>
+    private static InfoCondition? ParseQuestCondition(byte[] ctda)
+    {
+        if (ctda.Length < 28)
+            return null;
+        var span = ctda.AsSpan();
+        var op = (byte)(ctda[0] >> 5);                                       // comparison operator (high 3 bits)
+        var compare = BinaryPrimitives.ReadSingleLittleEndian(span[4..]);    // value compared against
+        var func = BinaryPrimitives.ReadUInt32LittleEndian(span[8..]);       // function opcode
+        var param1 = BinaryPrimitives.ReadUInt32LittleEndian(span[12..]);    // quest FormID (for these functions)
+        var param2 = BinaryPrimitives.ReadUInt32LittleEndian(span[16..]);    // stage (GetStageDone)
+        if (!Enum.IsDefined(typeof(QuestFunction), (int)func))
+            return null;
+        return new InfoCondition((QuestFunction)func, param1, op, compare, (int)param2);
     }
 
     /// <summary>Reads the records (and defensively skips any nested groups) inside one top-level item group.</summary>
@@ -555,6 +583,21 @@ public sealed record QuestStageDef(int Index, byte Flags, string? LogText, strin
 /// <paramref name="Text"/> (<c>NNAM</c>), and the FormIDs of its target reference(s) (<c>QSTA</c>) — the placed
 /// refs whose save-side enable-state encodes whether the objective is active (ROADMAP §6 #10).</summary>
 public sealed record QuestObjectiveDef(int Index, string? Text, IReadOnlyList<uint> TargetFormIds);
+
+/// <summary>One quest-state <c>CTDA</c> condition on a dialogue <c>INFO</c> (ROADMAP §6 #16 CTDA spike). FNV
+/// CTDA is 28 bytes: <c>[op+flags 1][unused 3][compare value f32 4][function index u32 4][param1 4][param2 4]
+/// [run-on 4][reference 4]</c>. We keep only the quest-state functions whose first parameter is a quest:
+/// <see cref="QuestFunction.GetStage"/> (param2 unused), <see cref="QuestFunction.GetStageDone"/> (param2 =
+/// stage), <see cref="QuestFunction.GetQuestRunning"/>/<see cref="QuestFunction.GetQuestCompleted"/>.
+/// <see cref="QuestFormId"/> is the param1 quest FormID (<b>plugin-local</b>; re-keyed into save space by
+/// <see cref="PluginDatabase"/>). <see cref="Op"/> is the comparison operator (<c>type &gt;&gt; 5</c>:
+/// 0=Eq 1=Ne 2=Gt 3=Ge 4=Lt 5=Le) and <see cref="CompareValue"/> the value it is compared against — so an
+/// INFO the player SAID carrying <c>GetStage X &gt;= N</c> / <c>GetQuestCompleted X == 1</c> is proof X reached
+/// that state when the line fired (monotonic for completion).</summary>
+public sealed record InfoCondition(QuestFunction Function, uint QuestFormId, byte Op, float CompareValue, int Param2);
+
+/// <summary>The FNV script-function opcodes (CTDA function index) that query another quest's state by FormID.</summary>
+public enum QuestFunction { GetQuestRunning = 56, GetStage = 58, GetStageDone = 59, GetQuestCompleted = 397 }
 
 /// <summary>A <c>QUST</c> record's decoded structure: its FormID (plugin-local as read from a
 /// <see cref="TesPlugin"/>, re-keyed into save space by <see cref="PluginDatabase"/>) plus its stages and
