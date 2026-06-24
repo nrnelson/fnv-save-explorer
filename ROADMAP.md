@@ -1310,6 +1310,32 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     **Net:** with all three oracles now persisted and measurable, angles 1 and 4 are both walled by the same
     event-completion boundary; the only remaining under-explored angle is #2 (objective-target-ref enable-state),
     which the §6 #10 work already flagged as murky (markers didn't map 1:1 to objectives).
+    **PROGRESS 2026-06-24 (cont.) — bucketed the 18 "shown-active/actually-completed" mislabels by what their save
+    record actually holds, and found that the "rich change form" bucket is a MIRAGE (the records are REFR/alias
+    stubs, not quest progress). Decided the path with the user: precision-safe automated decode first; bucket C
+    (no-record) is a documented tail (no in-game captures for now).** `cf` census on Save 420:
+    - **~6 have NO change form at all** (Ghost Town Gunfight 0x00104EAE, Ring-a-Ding-Ding! 0x0011345D, Come Fly
+      With Me, Guess Who I Saw Today, Wang Dang, You Can Depend on Me) — zero save record of any type/FormID. Their
+      completed state is recomputed by the engine at load from *other* save data (dead-NPC change forms, globals,
+      other quests). This is bucket C — needs world-state modeling, deferred.
+    - **~5 are the empty bit18 template** (len 293, flags 0x00040000 = "script ran", no progress data).
+    - **~3 looked like they carried quest stage/objective blocks (bit31/bit29 set) but DON'T.** Dumped
+      "They Went That-a-Way" (0x000842DD, formType-2, 650 B, flags 0x20000802): the payload is a **REFR record** —
+      a MOVE block (`00 01 CF` cell + pos/rot floats) followed by alias/REFR fields — with **no
+      CHANGE_QUEST_OBJECTIVES (objIndex,status) block** matching VMQ01's masters objective indices (10/20/25/30…).
+      Because the record is REFR-layout, bit29/bit31 are **REFR change-flags**, not the QUST objective/stage flags;
+      the FormType byte is a layout discriminator (same as the VCG02/Sierra Madre alias-stub finding). So
+      **"decode the ref-style quest change forms for completion" (step 1) is NOT viable — the completion data is
+      genuinely not in these records.** `QuestLog.Read` already attempts them (it classifies by RecordType==QUST,
+      not formType) and correctly finds nothing decodable, which is why it surfaces only 9 clean-QUST quests.
+    **Consequence — the only viable PRECISION-SAFE automated lever left is the CTDA-on-said-INFO precondition graph
+    (a new decode):** an INFO the player SAID (present as a change form) fired because its CTDA conditions held at
+    that time; a condition like `GetQuestCompleted X`/`GetStage X >= N` on a said-INFO is therefore proof X reached
+    that state (monotonic for completion). Decoding INFO `CTDA` subrecords (not currently read — TesPlugin reads
+    only SCTX) and back-propagating to RECLASSIFY already-surfaced active quests to completed would fix chain
+    mislabels with no FP risk. This is the next build; it is sizable and depends on getting the FNV CTDA layout +
+    quest-function opcodes right, so it should start as a feasibility spike (read CTDA on a few known chain INFOs,
+    confirm the predecessor-completion conditions exist) before wiring into QuestPipboy.
 
 ---
 
