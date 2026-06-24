@@ -1287,8 +1287,29 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       fired touched "Happy Trails Expedition", itself an existing false positive. On Save 122 (the measurable oracle)
       it changed nothing (still 13/24). Reverted; no code shipped. This is the same boundary as Phase C: VMQ01's
       completion lives in whatever fires `SetStage VMQ01 100`, which is not a said-INFO present in Save 420 (else the
-      existing dialogue seed would already grey it). The remaining concrete angles are #2 (objective-target-ref
-      enable-state) and #4 (CHANGE_QUEST flags on quests that have a change form) — both still under-explored.
+      existing dialogue seed would already grey it).
+    **PROGRESS 2026-06-24 (cont.) — full Save 420 oracle restored (user re-supplied the 68-quest log), and with it
+    angle 4 (change-form completion flags) + the QuestLog-feed idea were probed and found WALLED.** `save420.oracle`
+    now reproduces the documented baseline exactly (28 correct / 19 mislabelled / 3 FP / 21 missed, 94% precision),
+    so late-game is measurable again. The 19 mislabels split 18 "shown active, actually completed" (the event-
+    completion wall) + 1 reverse ("Bleed Me Dry" shown completed via an SGE seed, actually active). Probes with the
+    measurable oracle:
+    - **Angle 4 (CHANGE_QUEST flag/contents): no signal.** `cf` on the 18 active-shown/completed-actually quests vs
+      the 7 correctly-active ones: no distinguishing flag. "They Went That-a-Way" (completed) = type-0x42
+      `0x20000802` (bit29 objectives, NO bit31 stages); "For the Republic, Part 2" (active) = `0x80040807` (bit31
+      stages set); "Aba Daba Honeymoon" (active) = `0x00040802`. Completed has *fewer* flags than active, the
+      opposite of a completion bit. And most truth-completed quests (Ring-a-Ding-Ding!, Come Fly With Me, You Can
+      Depend on Me) have **no change form at all**, so no per-quest signal exists to read.
+    - **QuestLog-feed (surface §6 #10's decoded `[Completed]` quests in the Pip-Boy): a 1:1 precision wash.** The §6
+      #10 reader decodes state for only **9 of 68** quests on Save 420 (objective status mostly `[unknown]`). Of its
+      two `[Completed]` player-facing quests, one ("Climb Ev'ry Mountain") is a genuine missed-completed (a recall
+      gain) but the other ("Why Can't We Be Friends?") is completed-and-dropped → NOT in the Pip-Boy (a false
+      positive), and its `[Active]` set is led by "Welcome to the Big Empty" — the canonical background-init trap.
+      Feeding them in is +1 correct / +1 FP, the same ~1:1 trade B2 and the SGE radios hit. No save-readable
+      discriminator separates "completed, still in log" from "completed, dropped off". **Kept out** (precision-first).
+    **Net:** with all three oracles now persisted and measurable, angles 1 and 4 are both walled by the same
+    event-completion boundary; the only remaining under-explored angle is #2 (objective-target-ref enable-state),
+    which the §6 #10 work already flagged as murky (markers didn't map 1:1 to objectives).
 
 ---
 
