@@ -107,6 +107,13 @@ public sealed class TesPlugin
     /// <see cref="PluginDatabase"/>. Empty unless the plugin was read with <c>readActors: true</c>.</summary>
     public IReadOnlyList<(uint ActorFormId, uint ScriptFormId)> ActorScripts { get; }
 
+    /// <summary>Placed <c>ACHR</c>/<c>ACRE</c> reference FormID → its <c>NAME</c> base actor FormID (ROADMAP §6 #16
+    /// Stage 2), by descending the <c>CELL</c>/<c>WRLD</c> groups the normal reader skips. Needed to bind a
+    /// runtime-SPAWNED actor: a created reference is instanced from a placed template <c>ACHR</c>, so resolving
+    /// that template → base NPC_ → script recovers the spawned kill (e.g. the 6th Ghost Town Gunfight ganger).
+    /// Plugin-local; re-keyed by <see cref="PluginDatabase"/>. Empty unless read with <c>readActors: true</c>.</summary>
+    public IReadOnlyList<(uint RefFormId, uint BaseFormId)> PlacedActorBases { get; }
+
     private TesPlugin(
         string fileName,
         IReadOnlyList<string> masters,
@@ -115,7 +122,8 @@ public sealed class TesPlugin
         IReadOnlyList<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)> dialogueInfos,
         IReadOnlyList<CounterIncrement> counterIncrements,
         IReadOnlyList<ExternalQuestEffect> externalQuestEffects,
-        IReadOnlyList<(uint, uint)> actorScripts)
+        IReadOnlyList<(uint, uint)> actorScripts,
+        IReadOnlyList<(uint, uint)> placedActorBases)
     {
         FileName = fileName;
         Masters = masters;
@@ -125,6 +133,7 @@ public sealed class TesPlugin
         CounterIncrements = counterIncrements;
         ExternalQuestEffects = externalQuestEffects;
         ActorScripts = actorScripts;
+        PlacedActorBases = placedActorBases;
     }
 
     public static TesPlugin Load(string path, bool readDialogue = false, bool readActors = false)
@@ -164,6 +173,7 @@ public sealed class TesPlugin
         var counterIncrements = new List<CounterIncrement>(); // qualified `set Quest.counter to counter ± N` (Stage 1)
         var externalQuestEffects = new List<ExternalQuestEffect>(); // completing effects from any SCPT (Stage 1)
         var actorScripts = new Dictionary<uint, uint>(); // base NPC_/CREA FormID -> SCRI script (Stage 2)
+        var placedBases = new Dictionary<uint, uint>(); // placed ACHR/ACRE FormID -> NAME base actor (Stage 2)
         while (true)
         {
             var gsig = ReadSignature(fs);
@@ -187,6 +197,8 @@ public sealed class TesPlugin
                 ReadInfoEffects(fs, contentSize, dialogueInfos); // descend DIAL -> Topic Children -> INFO (Phase B)
             else if (groupType == 0 && labelType is "NPC_" or "CREA" && readActors)
                 ReadActorScripts(fs, contentSize, actorScripts); // base actor -> SCRI (Stage 2 kill-completion)
+            else if (groupType == 0 && labelType is "CELL" or "WRLD" && readActors)
+                ReadPlacedActors(fs, contentSize, placedBases); // placed ACHR -> base (Stage 2 spawned-kill binding)
             else
                 fs.Seek(contentSize, SeekOrigin.Current); // skip the whole group without reading its bytes
         }
@@ -199,7 +211,8 @@ public sealed class TesPlugin
                     quests[i] = quests[i] with { GameModeScript = s.GameMode, LocalVars = s.Locals };
 
         return new TesPlugin(fileName, masters, forms, quests, dialogueInfos, counterIncrements, externalQuestEffects,
-            actorScripts.Select(kv => (kv.Key, kv.Value)).ToList());
+            actorScripts.Select(kv => (kv.Key, kv.Value)).ToList(),
+            placedBases.Select(kv => (kv.Key, kv.Value)).ToList());
     }
 
     /// <summary>Descends a dialogue (<c>DIAL</c>) group — which nests <c>INFO</c> records inside per-topic
@@ -490,6 +503,38 @@ public sealed class TesPlugin
                 if (type == "SCRI" && sub.Length >= 4)
                 {
                     actorScripts[formId] = BinaryPrimitives.ReadUInt32LittleEndian(sub);
+                    break;
+                }
+        }
+    }
+
+    /// <summary>Recursively descends a <c>CELL</c>/<c>WRLD</c> group, recording each placed <c>ACHR</c>/<c>ACRE</c>
+    /// reference's <c>NAME</c> (its base actor FormID) — the placed-ref → base map a runtime-spawned actor is bound
+    /// through (ROADMAP §6 #16 Stage 2). Non-actor records are skipped cheaply (only their header is read).</summary>
+    private static void ReadPlacedActors(Stream fs, long contentSize, Dictionary<uint, uint> placedBases)
+    {
+        var end = fs.Position + contentSize;
+        while (fs.Position < end)
+        {
+            var sig = ReadSignature(fs);
+            if (sig is null) break;
+            var size = ReadU32(fs);
+            if (sig == "GRUP")
+            {
+                ReadExactly(fs, 16);
+                ReadPlacedActors(fs, (long)size - HeaderSize, placedBases); // recurse into block/subblock/children
+                continue;
+            }
+            var flags = ReadU32(fs);
+            var formId = ReadU32(fs);
+            ReadExactly(fs, 8);
+            if (sig is not ("ACHR" or "ACRE")) { fs.Seek(size, SeekOrigin.Current); continue; } // placed actors only
+            var data = ReadExactly(fs, (int)size);
+            if ((flags & CompressedFlag) != 0) data = Decompress(data);
+            foreach (var (type, sub) in ParseSubrecords(data))
+                if (type == "NAME" && sub.Length >= 4)
+                {
+                    placedBases[formId] = BinaryPrimitives.ReadUInt32LittleEndian(sub); // base actor FormID
                     break;
                 }
         }

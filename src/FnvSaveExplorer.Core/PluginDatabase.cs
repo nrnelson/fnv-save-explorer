@@ -47,10 +47,11 @@ public sealed class PluginDatabase
     private readonly IReadOnlyList<CounterIncrement> _counterIncrements; // qualified `set Quest.counter` increments (§6 #16 Stage 1)
     private readonly IReadOnlyList<ExternalQuestEffect> _externalQuestEffects; // completing effects from any SCPT (§6 #16 Stage 1)
     private readonly IReadOnlyDictionary<uint, uint> _actorScripts; // base actor FormID -> SCRI script (§6 #16 Stage 2)
+    private readonly IReadOnlyDictionary<uint, uint> _placedActorBases; // placed ACHR FormID -> base actor (§6 #16 Stage 2)
     private IReadOnlyList<CounterGate>? _counterGates; // lazily-built counter-gated completion graph
     private IReadOnlyList<ExternalCompletion>? _externalCompletions; // lazily-built external event-completion graph
 
-    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null, Dictionary<uint, IReadOnlyList<InfoCondition>>? dialogueInfoConditions = null, IReadOnlyList<CounterIncrement>? counterIncrements = null, IReadOnlyList<ExternalQuestEffect>? externalQuestEffects = null, IReadOnlyDictionary<uint, uint>? actorScripts = null)
+    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null, Dictionary<uint, IReadOnlyList<InfoCondition>>? dialogueInfoConditions = null, IReadOnlyList<CounterIncrement>? counterIncrements = null, IReadOnlyList<ExternalQuestEffect>? externalQuestEffects = null, IReadOnlyDictionary<uint, uint>? actorScripts = null, IReadOnlyDictionary<uint, uint>? placedActorBases = null)
     {
         _names = names;
         _types = types;
@@ -65,6 +66,7 @@ public sealed class PluginDatabase
         _counterIncrements = counterIncrements ?? [];
         _externalQuestEffects = externalQuestEffects ?? [];
         _actorScripts = actorScripts ?? new Dictionary<uint, uint>();
+        _placedActorBases = placedActorBases ?? new Dictionary<uint, uint>();
     }
 
     /// <summary>Quest FormIDs (save-space) that a dialogue <c>INFO</c> result script <c>StartQuest</c>/<c>SetStage</c>
@@ -107,6 +109,11 @@ public sealed class PluginDatabase
     /// Empty unless the database was built with <c>withActors: true</c>.</summary>
     public IReadOnlyDictionary<uint, uint> ActorScripts => _actorScripts;
 
+    /// <summary>Placed <c>ACHR</c> reference FormID (save-space) → its base actor FormID — used to bind a
+    /// runtime-spawned actor through its placed template (ROADMAP §6 #16 Stage 2). Empty unless built with
+    /// <c>withActors: true</c>.</summary>
+    public IReadOnlyDictionary<uint, uint> PlacedActorBases => _placedActorBases;
+
     /// <summary>An empty database; every <see cref="Resolve"/> returns <c>null</c>.</summary>
     public static readonly PluginDatabase Empty = new([], [], [], [], null, null, []);
 
@@ -143,6 +150,7 @@ public sealed class PluginDatabase
         var counterIncrements = new List<CounterIncrement>(); // qualified counter increments, ScriptFormId re-keyed (§6 #16 Stage 1)
         var externalQuestEffects = new List<ExternalQuestEffect>(); // completing effects from any SCPT, ScriptFormId re-keyed
         var actorScripts = new Dictionary<uint, uint>(); // base actor FormID -> SCRI, both re-keyed to save space (§6 #16 Stage 2)
+        var placedActorBases = new Dictionary<uint, uint>(); // placed ACHR FormID -> base actor, both re-keyed (§6 #16 Stage 2)
 
         // Case-insensitive load-order index, for mapping a plugin's masters back to save indices.
         var indexOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -237,6 +245,9 @@ public sealed class PluginDatabase
             foreach (var (actorFormId, scriptFormId) in plugin.ActorScripts)
                 if (Remap(actorFormId, remap) is { } a && Remap(scriptFormId, remap) is { } sc)
                     actorScripts[a] = sc;
+            foreach (var (refFormId, baseFormId) in plugin.PlacedActorBases)
+                if (Remap(refFormId, remap) is { } r && Remap(baseFormId, remap) is { } b)
+                    placedActorBases[r] = b;
 
             resolved.Add(loadOrder[i]);
         }
@@ -247,7 +258,7 @@ public sealed class PluginDatabase
             if (q.Edid is { } edid && dialogueTargetEdids.Contains(edid))
                 dialogueStarted.Add(q.FormId);
 
-        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects, infoConditions, counterIncrements, externalQuestEffects, actorScripts);
+        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects, infoConditions, counterIncrements, externalQuestEffects, actorScripts, placedActorBases);
     }
 
     /// <summary>Re-keys a plugin-local FormID into save space using the plugin's high-byte → save-index

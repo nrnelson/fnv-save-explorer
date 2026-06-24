@@ -338,23 +338,30 @@ static void GlobalDataDump(FalloutSave s, string savePath, int type, string? dat
 static void CounterDerive(FalloutSave s, string savePath, string? dataDir)
 {
     // ROADMAP §6 #16 Stage 2: re-derive event-completed quests from the type-2 death registry, mirroring what
-    // QuestPipboy does. A unique killed actor is recorded by its base FormID, bound to the script it runs via
-    // db.ActorScripts (built withActors). (a) single-kill: a ViaKill external completion whose script-bearing
-    // actor is dead. (b) counter-gated: how many dead script-bearing actors a gate has vs its threshold (a
-    // leveled/spawned target has no readable base, so this can fall short — the gtg pair binds 5 of 6).
+    // QuestPipboy does. A unique killed actor is recorded by its base FormID; a runtime-spawned one as a created
+    // reference whose template (a placed ACHR) resolves to that base. Both bind to the script the base runs.
     var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath), withActors: true);
     if (db.Count == 0) { Console.WriteLine("Needs the game Data folder."); return; }
 
     var dead = s.DeadReferences();
-    Console.WriteLine($"dead references (type-2 status 1): {dead.Count};  scripted actors: {db.ActorScripts.Count}\n");
-    int DeadCountRunningAnyOf(IReadOnlySet<uint> scripts) =>
-        db.ActorScripts.Count(kv => scripts.Contains(kv.Value) && dead.Contains(kv.Key));
+    uint ScriptOf(uint f) =>
+        db.ActorScripts.TryGetValue(f, out var sc) ? sc
+        : db.PlacedActorBases.TryGetValue(f, out var b) && db.ActorScripts.TryGetValue(b, out var sc2) ? sc2 : 0;
+    // Scripts run by a spawned (created) dead actor, one set per created reference.
+    var createdScripts = s.CreatedReferenceForms()
+        .Select(c => c.ReferencedFormIds.Select(ScriptOf).Where(x => x != 0).ToHashSet())
+        .Where(set => set.Count > 0).ToList();
+    Console.WriteLine($"dead references (type-2): {dead.Count};  scripted actors: {db.ActorScripts.Count};  placed actors: {db.PlacedActorBases.Count};  created refs w/ scripts: {createdScripts.Count}\n");
+    int DeadCountRunningAnyOf(IReadOnlySet<uint> scripts) => dead.Count(d => scripts.Contains(ScriptOf(d)));
 
-    Console.WriteLine("--- counter-gated (count N kills >= threshold) ---");
+    Console.WriteLine("--- counter-gated (count N kills >= threshold; incl. spawned via created refs) ---");
     foreach (var gate in db.CounterGates.Where(g => g.Bound && g.ExternallyIncremented))
     {
-        var derived = DeadCountRunningAnyOf(gate.IncrementScripts.ToHashSet());
-        Console.WriteLine($"  \"{gate.QuestName}\" [{gate.QuestEdid}]  {gate.Counter} >= {gate.Threshold}  derived={derived}  => {(derived >= gate.Threshold ? "COMPLETE" : "not yet (binding falls short — spawned target unresolved)")}");
+        var inc = gate.IncrementScripts.ToHashSet();
+        var directDead = DeadCountRunningAnyOf(inc);
+        var spawnedDead = createdScripts.Count(set => set.Overlaps(inc));
+        var derived = directDead + spawnedDead;
+        Console.WriteLine($"  \"{gate.QuestName}\" [{gate.QuestEdid}]  {gate.Counter} >= {gate.Threshold}  derived={derived} ({directDead} placed + {spawnedDead} spawned)  => {(derived >= gate.Threshold ? "COMPLETE" : "not yet")}");
     }
 
     // Single-kill external completions: an OnDeath script on a unique actor completes the quest (the Save-420

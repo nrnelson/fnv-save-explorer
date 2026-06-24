@@ -265,6 +265,34 @@ public sealed class FalloutSave
     public IReadOnlySet<uint> DeadReferences() =>
         StateChangedRefs().Where(r => r.Status == 1 && r.FormId != 0).Select(r => r.FormId).ToHashSet();
 
+    /// <summary>Each runtime-<b>created</b> reference change form (FormID high byte <c>0xFF</c>) paired with the
+    /// save-space FormIDs its data references (ROADMAP §6 #16 Stage 2). A spawned actor is created from a placed
+    /// <b>template</b> reference, whose FormID it embeds; resolving that template → base actor → script binds the
+    /// spawned kill (the 6th Ghost Town Gunfight ganger). RefIDs end a <c>0x7C</c>-delimited field, so the last 3
+    /// bytes of each token are taken as a candidate refID (this also recovers the template at the tail of the
+    /// un-delimited MOVE block). The caller filters the referenced FormIDs to actual templates of interest.</summary>
+    public IEnumerable<(uint CreatedFormId, IReadOnlyList<uint> ReferencedFormIds)> CreatedReferenceForms()
+    {
+        foreach (var cf in EnumerateChangeForms())
+        {
+            if ((cf.FormId >> 24) != 0xFF || cf.DataLength <= 0)
+                continue;
+            var refs = new HashSet<uint>();
+            foreach (var tok in ReferenceChangeForm.Tokenize(_raw.AsSpan(cf.DataOffset, cf.DataLength), cf.DataOffset))
+            {
+                var b = tok.Bytes;
+                if (b.Length < 3)
+                    continue;
+                var raw = (b[^3] << 16) | (b[^2] << 8) | b[^1]; // refID fields end at the 0x7C delimiter
+                var formId = ResolveRefId(raw);
+                if (formId != 0)
+                    refs.Add(formId);
+            }
+            if (refs.Count > 0)
+                yield return (cf.FormId, refs.ToList());
+        }
+    }
+
     private List<GlobalData> ParseGlobalDataTable(uint offset, uint count)
     {
         var list = new List<GlobalData>((int)Math.Min(count, 1024));

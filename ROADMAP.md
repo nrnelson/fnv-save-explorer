@@ -1553,6 +1553,27 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     precision-critical path; proposed, not yet shipped (single-kill win stands). This also clarifies the earlier
     "reload re-derives from save data alone" note: TRUE (it re-derives from the dead gangers) but the rule is
     engine-internal, so a static evaluator must reconstruct it rather than read a stored flag.
+    **PROGRESS 2026-06-24 (cont.) — SHIPPED: counter-gated completion incl. the runtime-SPAWNED ganger. Ghost Town
+    Gunfight now flips to COMPLETED on `gtg-complete` (and stays ACTIVE on `gtg-active`), with ZERO oracle
+    regression.** Built the static replication of the engine's re-derivation:
+    - **`TesPlugin` re-adds the placed-ACHR scan** (`CELL`/`WRLD` descent → `PlacedActorBases`: placed ACHR →
+      base NPC_), threaded through `PluginDatabase` (re-keyed). Needed to resolve a spawned actor's template.
+    - **`FalloutSave.CreatedReferenceForms()`** enumerates runtime-created (`0xFF`) change forms and the FormIDs
+      their data embeds (taking the last 3 bytes of each `0x7C`-delimited token, which recovers the template refID
+      at the tail of the un-delimited MOVE block).
+    - **`QuestPipboy` counter pass (re-enabled, gated to running):** for a counter-gate, count actors running the
+      increment script that are dead = (a) dead registry **bases** (the 5 unique gangers) + (b) **created
+      references** whose embedded template resolves (placed ACHR → base → script) to a ganger base (the 1 spawned
+      ganger: `0xFF001334` → ACHR `0x00104C75` → NPC_ `0x00104C74` `GSPGHM` → script `0x00105D4D`). The two kinds
+      are disjoint (a spawned ganger isn't a registry base), so they sum without double-count → **6 ≥ 6 →
+      completed**. On `gtg-active` both are 0 → stays active. Single-kill quests stay on their own (non-counter) path.
+    - **Validation:** `gtg-active` GTG ACTIVE, `gtg-complete` GTG COMPLETED; **Save 57 = 7/7, Save 122 = 16,
+      Save 420 = 34, all FP counts unchanged** (the counter pass fires on nothing spurious — GTG isn't running on
+      the modded oracles, and no other counter-gate's actors reach threshold). `counterderive` reports
+      `derived=6 (5 placed + 1 spawned)`. 2 synthetic tests pin it (2 dead ganger-NPCs → counter-quest completed;
+      1 dead → stays active). Cost: the worldspace ACHR scan adds ~1–2 s to `pipboy` (acceptable). **Net: GTG —
+      the canonical bucket-C kill-count quest — is now recovered end-to-end by replicating the masters rule against
+      the persisted dead actors, exactly what the engine does internally at load.**
 
 ---
 

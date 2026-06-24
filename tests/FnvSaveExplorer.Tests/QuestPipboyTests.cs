@@ -170,6 +170,48 @@ public class QuestPipboyTests
         Assert.Equal(PipboyQuestState.Active, q.State);
     }
 
+    // A running (SGE) counter-gated quest (Ghost Town Gunfight shape): its GameMode completes the quest (SetStage
+    // to QSDT-complete stage 100) only inside `if nKillCount >= 2`; two "ganger" NPCs run an OnDeath script that
+    // increments QCOUNT.nKillCount. Their deaths re-derive the counter.
+    private static TestRecord[] CounterQuestRecords() =>
+    [
+        new("QUST", 0x00100009, Edid: "QCOUNT", Full: "Counter Quest", Subs:
+        [
+            ("DATA", Data(0x01)), ("SCRI", U32(0x0010005A)),
+            ("INDX", I16(10)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QCOUNT 10 1")),
+            ("INDX", I16(100)), ("QSDT", [0x01]),                                  // completing stage (counter-gated)
+            ("QOBJ", I16(10)), ("NNAM", Z("Defeat the gang")),
+        ]),
+        new("SCPT", 0x0010005A, Edid: "SQCOUNT", Full: null, Subs:               // quest GameMode: startup + counter gate
+            [("SCTX", Z("short nKillCount\nBegin GameMode\nSetStage QCOUNT 10\nif nKillCount >= 2\nSetStage QCOUNT 100\nendif\nEnd"))]),
+        new("SCPT", 0x0010005B, Edid: "SINC", Full: null, Subs:                  // the gangers' OnDeath increment
+            [("SCTX", Z("short x\nBegin OnDeath\nset QCOUNT.nKillCount to (QCOUNT.nKillCount + 1)\nEnd"))]),
+        new("NPC_", 0x00100050, Edid: "GANG1", Full: null, Subs: [("SCRI", U32(0x0010005B))]),
+        new("NPC_", 0x00100051, Edid: "GANG2", Full: null, Subs: [("SCRI", U32(0x0010005B))]),
+    ];
+
+    [Fact]
+    public void Counter_gate_completes_when_enough_ganger_actors_are_dead()
+    {
+        // Both gangers dead -> re-derived nKillCount = 2 >= 2 -> the running quest is reclassified to completed
+        // (ROADMAP §6 #16 Stage 2, the Ghost Town Gunfight mechanism replicated statically).
+        var pip = ComputeWithActors(QuestSave.Build(deadActorFormIds: [0x00100050, 0x00100051]), CounterQuestRecords());
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Counter Quest");
+        Assert.Equal(PipboyQuestState.Completed, q.State);
+    }
+
+    [Fact]
+    public void Counter_gate_stays_active_below_threshold()
+    {
+        // Only one ganger dead -> count 1 < 2 -> the quest stays active (precision guard: one of N kills must NOT
+        // complete a counter-gated quest — this is why counter-gated quests are excluded from the single-kill path).
+        var pip = ComputeWithActors(QuestSave.Build(deadActorFormIds: [0x00100050]), CounterQuestRecords());
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Counter Quest");
+        Assert.Equal(PipboyQuestState.Active, q.State);
+    }
+
     private static TestRecord DialogueQuest() => new("QUST", 0x00100010, Edid: "QDLG", Full: "Dialogue Quest", Subs:
     [
         ("DATA", Data(0x00)),                                          // not SGE, not a QUST-propagation target
