@@ -150,7 +150,7 @@ public class QuestLogTests
 internal static class QuestSave
 {
     public static byte[] Build(uint questFlags = 0xA0000000, int objStatus = 1,
-        uint? ft7FormId = null, uint ft7Flags = 0)
+        uint? ft7FormId = null, uint ft7Flags = 0, uint[]? deadActorFormIds = null)
     {
         var b = new List<byte>();
         void Str(string s) => b.AddRange(Encoding.Latin1.GetBytes(s));
@@ -185,13 +185,21 @@ internal static class QuestSave
         // ---- Body: File Location Table, FormID array, then the two change forms ----
         var bodyStart = b.Count;
         var formIdArrayOffset = bodyStart + 32;             // right after the 8-u32 FLT
-        uint[] formIds =
-        [
+        var formIdList = new List<uint>
+        {
             0x00000007,           // iref 0
             0x0010A001,           // iref 1 -> the quest
             0x0010A050,           // iref 2 -> the objective's target reference
-            .. (ft7FormId is { } f7 ? new[] { f7 } : []), // iref 3 -> optional formType-7 quest record (ROADMAP §6 #16)
-        ];
+        };
+        if (ft7FormId is { } f7) formIdList.Add(f7);                  // iref 3 -> optional formType-7 quest record
+        // Dead actors (ROADMAP §6 #16 Stage 2): each gets an iref; the type-2 registry references it by that iref.
+        var deadIrefs = new List<int>();
+        foreach (var d in deadActorFormIds ?? [])
+        {
+            deadIrefs.Add(formIdList.Count);
+            formIdList.Add(d);
+        }
+        var formIds = formIdList.ToArray();
         var changeFormsOffset = formIdArrayOffset + 4 + formIds.Length * 4;
 
         // Quest stage-list change form (formType 9, u16 length): a header field then two stage entries —
@@ -221,13 +229,33 @@ internal static class QuestSave
 
         var globalData3Offset = changeFormsOffset + questRec.Count + targetRec.Count + ft7Rec.Count;
 
+        // GlobalData type-2 "TES" state-changed-ref registry (ROADMAP §6 #16 Stage 2): a record [type:u32=2][len:u32]
+        // then [vsval count][7C] count×([refId:3 BE][7C][status:2 LE=1][7C]) [tail]. Each refId is a type-0 refId =
+        // an iref into the FormID array, so it resolves back to the dead actor. Placed AFTER the change forms (which
+        // end at globalData3Offset), and GlobalData1Offset points here.
+        var gd1 = new List<byte>();
+        if (deadIrefs.Count > 0)
+        {
+            var payload = new List<byte> { (byte)((deadIrefs.Count << 2) | 0), 0x7C }; // vsval count (1-byte) + 7C
+            foreach (var iref in deadIrefs)
+            {
+                payload.AddRange([(byte)(iref >> 16), (byte)(iref >> 8), (byte)iref]); payload.Add(0x7C); // refId 3B BE
+                payload.AddRange([0x01, 0x00]); payload.Add(0x7C);                                         // status u16 = 1
+            }
+            payload.AddRange([0x05, 0x00, 0x00, 0x00]);                                                    // fixed tail
+            var t = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(t, 2); gd1.AddRange(t);          // type = 2
+            BinaryPrimitives.WriteUInt32LittleEndian(t, (uint)payload.Count); gd1.AddRange(t);             // length
+            gd1.AddRange(payload);
+        }
+        var globalData1Offset = globalData3Offset; // the type-2 table sits right after the change forms
+
         // FLT (8 u32) — must sit exactly at bodyStart.
         U32((uint)formIdArrayOffset);  // [0] FormIdArrayCountOffset
         U32((uint)globalData3Offset);  // [1] UnknownTable3Offset
-        U32((uint)formIdArrayOffset);  // [2] GlobalData1Offset (unused here)
+        U32((uint)globalData1Offset);  // [2] GlobalData1Offset (the type-2 registry, when present)
         U32((uint)changeFormsOffset);  // [3] ChangeFormsOffset
-        U32((uint)globalData3Offset);  // [4] GlobalData3Offset (= end of change forms)
-        U32(0);                        // [5] GlobalData1Count
+        U32((uint)globalData3Offset);  // [4] GlobalData3Offset (= end of change forms; enum stops here)
+        U32((uint)(gd1.Count > 0 ? 1 : 0)); // [5] GlobalData1Count
         U32(0);                        // [6] GlobalData3Count
         U32((uint)(ft7FormId is null ? 2 : 3)); // [7] ChangeFormCount
 
@@ -237,6 +265,7 @@ internal static class QuestSave
         b.AddRange(questRec);
         b.AddRange(targetRec);
         b.AddRange(ft7Rec);
+        b.AddRange(gd1);
 
         var bytes = b.ToArray();
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(headerSizeAt, 4), (uint)(screenshotStart - 15));

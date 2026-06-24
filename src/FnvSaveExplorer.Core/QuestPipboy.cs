@@ -348,6 +348,34 @@ public sealed class QuestPipboy
             // the Pip-Boy" quest flag is decoded, which would let it be done safely (ROADMAP §6 #16).
         }
 
+        // ---- Single-kill completion (ROADMAP §6 #16 Stage 2): re-derive event-completed quests from the save's
+        // GlobalData type-2 death registry. A UNIQUE killed actor is recorded by its base FormID, so a dead base
+        // that runs an OnDeath/OnHit quest-completion script (a SetStage to a completing stage / CompleteQuest)
+        // proves that script fired — the quest is completed (e.g. "I Fought the Law" once its boss is dead).
+        // Gated to ALREADY-RUNNING quests, so it can only reclassify a shown-active quest to completed — never add
+        // a Pip-Boy entry or drop one (precision-safe). COUNTER-gated quests (e.g. Ghost Town Gunfight's
+        // `nGangerDeathCount >= 6`) are EXCLUDED: their OnDeath SetStage is guarded by a count threshold, so a
+        // single death must not complete them — and re-deriving the count is walled anyway (a leveled/spawned
+        // target has no readable base: the gtg pair binds only 5 of 6, ROADMAP §6 #16). ----
+        if (db.ActorScripts.Count > 0)
+        {
+            var dead = save.DeadReferences();
+            if (dead.Count > 0)
+            {
+                // Scripts that at least one DEAD base actor runs — the OnDeath blocks that have fired.
+                var firedScripts = new HashSet<uint>();
+                foreach (var (actor, script) in db.ActorScripts)
+                    if (dead.Contains(actor))
+                        firedScripts.Add(script);
+
+                if (firedScripts.Count > 0)
+                    foreach (var comp in db.ExternalCompletions)
+                        if (comp is { ViaKill: true, ViaCounter: false } && states.TryGetValue(comp.QuestFormId, out var t)
+                            && t is { Running: true, Completed: false } && comp.Scripts.Any(firedScripts.Contains))
+                            t.Completed = true;
+            }
+        }
+
         // ---- Apply each quest's reached-stage objective effects in stage order to settle objective state. ----
         foreach (var st in states.Values)
         {

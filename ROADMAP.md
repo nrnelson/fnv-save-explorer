@@ -1471,6 +1471,38 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       are NOT kill-reachable. Honest framing confirmed: the bucket-C prize is real but modest. 8 synthetic tests pin
       the parsing + analyzer; full suite unchanged (the 8 pre-existing `Real_saves_*` inventory/SPECIAL failures are
       unrelated). Next: Stage 2 (re-derive the counter from the GlobalData type-2 death registry, prototype on gtg).
+    **PROGRESS 2026-06-24 (cont.) — STAGE 2 SHIPPED: single-kill completion from the death registry (precision-safe
+    recall, Save 122 15→16 + Save 420 33→34, 0 FP) — and the COUNTER path (Ghost Town Gunfight) characterised as a
+    spawned-actor WALL.** Built the save-state half on the gtg controlled pair:
+    - **`FalloutSave.StateChangedRefs()` / `DecodeStateChangedRefs()` (Stage 2a, committed separately):** decode
+      the type-2 registry `[vsval count] + count×([refID:3] 7C [u16 status] 7C)`; `status 1 = death` (gtg pair: 0
+      vs the 6 killed gangers). `DeadReferences()` + CLI `deaths`. Save 420 = 209 dead of 451 mixed entries.
+    - **KEY DISCOVERY — the registry records a UNIQUE killed actor by its NPC_ BASE FormID, not a placed ref.**
+      Grepping the esm, the 6 gtg "refs" (0x00104C67 etc.) are **NPC_ records**, and their `SCRI` is the
+      increment/OnDeath SCPT (0x00104C69 / 0x00105D4D). So the binding the prior sessions called a wall is
+      DIRECT: a dead registry entry IS a base actor; read `NPC_`/`CREA` `SCRI` (cheap — no worldspace descent;
+      `TesPlugin.Read(readActors:true)` → `PluginDatabase.ActorScripts`, re-keyed) and a dead base that runs an
+      `OnDeath` quest-completion script proves that script fired. (A placed-ACHR `CELL`/`WRLD` scan was built +
+      measured — 200 ms, but the gtg bosses bind DIRECT, so it was removed; generic non-unique actors would need
+      it, a future lever.)
+    - **SHIPPED single-kill completion (`QuestPipboy`):** for an ALREADY-RUNNING player-facing quest with a ViaKill
+      (`OnDeath`/`OnHit`) external completion whose script-bearing actor is DEAD, mark it completed. Gated to
+      running ⇒ reclassify-only (never adds/drops a Pip-Boy entry ⇒ provably no new FP). **Counter-gated quests are
+      EXCLUDED from this path** (critical fix: VMS16's OnDeath `SetStage 100` is guarded by `nGangerDeathCount >= 6`,
+      so one ganger death must NOT complete it — a "killed 2, fled" save would be a FP). **Results: Save 57 = 7/7
+      held; Save 122 15→16 (I Fought the Law); Save 420 33→34 (I Fought the Law); FP/precision unchanged
+      everywhere.** 2 synthetic e2e tests pin it (a boss in a synthetic type-2 registry completes the quest; empty
+      registry leaves it active) + the decode tests.
+    - **COUNTER path (GTG) is a WALL — documented, not shipped.** Re-deriving `nGangerDeathCount` from dead
+      ganger-bases gives **5 of 6**: the 6th Goodsprings ganger is a runtime-SPAWNED ref (`0x0015EAE9` — not in the
+      masters, no change form, not in Created Objects type-4), so its base→script link is unreadable. 5 < 6, so the
+      counter never reaches threshold — gtg-complete stays ACTIVE (the honest partial). The counter pass was
+      prototyped (`counterderive` CLI) but NOT wired into `QuestPipboy` (no win + it would ignore the OnDeath's
+      objective-state guard = residual FP risk). So bucket-C counter-completion remains walled on spawned/leveled
+      targets; single-kill unique-boss completion is the recoverable slice. **Net Stage 2: +1 Save 122, +1 Save 420,
+      0 FP, gtg pair validates the mechanism (single-kill fires; counter 5/6 documented).** The other Save-420
+      kill-mislabels (Ring-a-Ding-Ding!, That Lucky Old Sun) bind but their completing actor isn't in the registry
+      (cleaned up / different mechanism) — partial coverage by design, as planned.
 
 ---
 

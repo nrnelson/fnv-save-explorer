@@ -46,10 +46,11 @@ public sealed class PluginDatabase
     private readonly Dictionary<uint, IReadOnlyList<InfoCondition>> _dialogueInfoConditions; // INFO FormID -> its quest-state preconditions
     private readonly IReadOnlyList<CounterIncrement> _counterIncrements; // qualified `set Quest.counter` increments (§6 #16 Stage 1)
     private readonly IReadOnlyList<ExternalQuestEffect> _externalQuestEffects; // completing effects from any SCPT (§6 #16 Stage 1)
+    private readonly IReadOnlyDictionary<uint, uint> _actorScripts; // base actor FormID -> SCRI script (§6 #16 Stage 2)
     private IReadOnlyList<CounterGate>? _counterGates; // lazily-built counter-gated completion graph
     private IReadOnlyList<ExternalCompletion>? _externalCompletions; // lazily-built external event-completion graph
 
-    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null, Dictionary<uint, IReadOnlyList<InfoCondition>>? dialogueInfoConditions = null, IReadOnlyList<CounterIncrement>? counterIncrements = null, IReadOnlyList<ExternalQuestEffect>? externalQuestEffects = null)
+    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null, Dictionary<uint, IReadOnlyList<InfoCondition>>? dialogueInfoConditions = null, IReadOnlyList<CounterIncrement>? counterIncrements = null, IReadOnlyList<ExternalQuestEffect>? externalQuestEffects = null, IReadOnlyDictionary<uint, uint>? actorScripts = null)
     {
         _names = names;
         _types = types;
@@ -63,6 +64,7 @@ public sealed class PluginDatabase
         _dialogueInfoConditions = dialogueInfoConditions ?? [];
         _counterIncrements = counterIncrements ?? [];
         _externalQuestEffects = externalQuestEffects ?? [];
+        _actorScripts = actorScripts ?? new Dictionary<uint, uint>();
     }
 
     /// <summary>Quest FormIDs (save-space) that a dialogue <c>INFO</c> result script <c>StartQuest</c>/<c>SetStage</c>
@@ -100,6 +102,11 @@ public sealed class PluginDatabase
         _externalCompletions ??= CounterGatedQuests.BuildExternalCompletions(
             _quests.Values, _externalQuestEffects, CounterGates.Where(g => g.Bound).Select(g => g.QuestFormId).ToHashSet());
 
+    /// <summary>Base actor FormID (save-space) → its <c>SCRI</c> script FormID — the link used to bind a dead
+    /// registry entry (a unique killed actor) to the script that completes a quest (ROADMAP §6 #16 Stage 2).
+    /// Empty unless the database was built with <c>withActors: true</c>.</summary>
+    public IReadOnlyDictionary<uint, uint> ActorScripts => _actorScripts;
+
     /// <summary>An empty database; every <see cref="Resolve"/> returns <c>null</c>.</summary>
     public static readonly PluginDatabase Empty = new([], [], [], [], null, null, []);
 
@@ -107,23 +114,23 @@ public sealed class PluginDatabase
     /// Builds a database for <paramref name="save"/>, auto-detecting the game <c>Data</c> folder (or using an
     /// override) and, when given, an MO2 <paramref name="modsFolder"/> for mod plugins.
     /// </summary>
-    public static PluginDatabase ForSave(FalloutSave save, string? dataFolderOverride = null, string? modsFolder = null, bool withDialogue = false)
+    public static PluginDatabase ForSave(FalloutSave save, string? dataFolderOverride = null, string? modsFolder = null, bool withDialogue = false, bool withActors = false)
     {
         var folder = GameDataLocator.FindDataFolder(dataFolderOverride);
         var paths = CollectPlugins(folder, modsFolder);
-        return paths.Count == 0 ? Empty : Build(save.Plugins, paths, folder, modsFolder, withDialogue);
+        return paths.Count == 0 ? Empty : Build(save.Plugins, paths, folder, modsFolder, withDialogue, withActors);
     }
 
     /// <summary>Builds a database from a load order and an explicit game <c>Data</c> folder.</summary>
-    public static PluginDatabase Build(IReadOnlyList<string> loadOrder, string dataFolder, bool withDialogue = false)
-        => Build(loadOrder, CollectPlugins(dataFolder, null), dataFolder, null, withDialogue);
+    public static PluginDatabase Build(IReadOnlyList<string> loadOrder, string dataFolder, bool withDialogue = false, bool withActors = false)
+        => Build(loadOrder, CollectPlugins(dataFolder, null), dataFolder, null, withDialogue, withActors);
 
     /// <summary>Builds a database from a load order and a plugin-name → file-path map (used in tests).</summary>
-    public static PluginDatabase Build(IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, bool withDialogue = false)
-        => Build(loadOrder, pluginPaths, null, null, withDialogue);
+    public static PluginDatabase Build(IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, bool withDialogue = false, bool withActors = false)
+        => Build(loadOrder, pluginPaths, null, null, withDialogue, withActors);
 
     private static PluginDatabase Build(
-        IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, string? dataFolder, string? modsFolder, bool withDialogue = false)
+        IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, string? dataFolder, string? modsFolder, bool withDialogue = false, bool withActors = false)
     {
         var names = new Dictionary<uint, string>();
         var types = new Dictionary<uint, string>();
@@ -135,6 +142,7 @@ public sealed class PluginDatabase
         var infoConditions = new Dictionary<uint, IReadOnlyList<InfoCondition>>(); // save-space INFO FormID -> quest-state preconditions
         var counterIncrements = new List<CounterIncrement>(); // qualified counter increments, ScriptFormId re-keyed (§6 #16 Stage 1)
         var externalQuestEffects = new List<ExternalQuestEffect>(); // completing effects from any SCPT, ScriptFormId re-keyed
+        var actorScripts = new Dictionary<uint, uint>(); // base actor FormID -> SCRI, both re-keyed to save space (§6 #16 Stage 2)
 
         // Case-insensitive load-order index, for mapping a plugin's masters back to save indices.
         var indexOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -149,7 +157,7 @@ public sealed class PluginDatabase
             TesPlugin plugin;
             try
             {
-                plugin = TesPlugin.Load(file, withDialogue);
+                plugin = TesPlugin.Load(file, withDialogue, withActors);
             }
             catch (SaveFormatException)
             {
@@ -225,6 +233,10 @@ public sealed class PluginDatabase
             foreach (var e in plugin.ExternalQuestEffects)
                 if (Remap(e.ScriptFormId, remap) is { } saveScriptId)
                     externalQuestEffects.Add(e with { ScriptFormId = saveScriptId });
+            // Re-key both the base actor FormID and its script FormID into save space (Stage 2). Later plugins win.
+            foreach (var (actorFormId, scriptFormId) in plugin.ActorScripts)
+                if (Remap(actorFormId, remap) is { } a && Remap(scriptFormId, remap) is { } sc)
+                    actorScripts[a] = sc;
 
             resolved.Add(loadOrder[i]);
         }
@@ -235,7 +247,7 @@ public sealed class PluginDatabase
             if (q.Edid is { } edid && dialogueTargetEdids.Contains(edid))
                 dialogueStarted.Add(q.FormId);
 
-        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects, infoConditions, counterIncrements, externalQuestEffects);
+        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects, infoConditions, counterIncrements, externalQuestEffects, actorScripts);
     }
 
     /// <summary>Re-keys a plugin-local FormID into save space using the plugin's high-byte → save-index

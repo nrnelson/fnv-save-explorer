@@ -119,6 +119,57 @@ public class QuestPipboyTests
         Assert.DoesNotContain(pip.Quests, x => x.Name == "Completable Quest");
     }
 
+    // ---- ROADMAP §6 #16 Stage 2: single-kill completion from the type-2 death registry ----
+
+    private static QuestPipboy ComputeWithActors(byte[] saveBytes, params TestRecord[] records)
+    {
+        using var dir = new TempDataFolder();
+        dir.Write("A.esm", EsmBuilder.Plugin([], records));
+        var save = FalloutSave.Parse(saveBytes);
+        var db = PluginDatabase.Build(save.Plugins, dir.Path, withActors: true);
+        return QuestPipboy.Compute(save, db);
+    }
+
+    // A running (SGE) boss-kill quest whose boss NPC's OnDeath script SetStages it to its completing stage 100.
+    private const uint BossFormId = 0x00100040;
+    private static TestRecord[] KillQuestRecords() =>
+    [
+        new("QUST", 0x00100008, Edid: "QKILL", Full: "Kill Quest", Subs:
+        [
+            ("DATA", Data(0x01)), ("SCRI", U32(0x00100018)),                       // SGE -> runs at load
+            ("INDX", I16(10)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QKILL 10 1")),
+            ("INDX", I16(100)), ("QSDT", [0x01]),                                  // completing stage
+            ("QOBJ", I16(10)), ("NNAM", Z("Kill the boss")),
+        ]),
+        Scpt(0x00100018, "SetStage QKILL 10"),                                    // GameMode: start at stage 10
+        // The boss NPC, scripted with an OnDeath block that completes the quest.
+        new("NPC_", BossFormId, Edid: "NBOSS", Full: "The Boss", Subs: [("SCRI", U32(0x00100019))]),
+        new("SCPT", 0x00100019, Edid: "SBOSS", Full: null, Subs: [("SCTX", Z("scn SBOSS\nBegin OnDeath\nSetStage QKILL 100\nEnd"))]),
+    ];
+
+    [Fact]
+    public void Single_kill_completes_a_running_quest_when_the_boss_is_dead()
+    {
+        // The boss NPC (0x00100040) is in the type-2 death registry, and its OnDeath script SetStages QKILL to its
+        // completing stage -> the quest is reclassified from active to completed (ROADMAP §6 #16 Stage 2).
+        var save = QuestSave.Build(deadActorFormIds: [BossFormId]);
+        var pip = ComputeWithActors(save, KillQuestRecords());
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Kill Quest");
+        Assert.Equal(PipboyQuestState.Completed, q.State);
+    }
+
+    [Fact]
+    public void Single_kill_leaves_quest_active_when_the_boss_is_not_dead()
+    {
+        // Same quest, but the registry is empty (no boss death) -> the quest stays active (precision guard: the
+        // completion fires ONLY when the script-bearing actor is actually dead).
+        var pip = ComputeWithActors(QuestSave.Build(), KillQuestRecords());
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Kill Quest");
+        Assert.Equal(PipboyQuestState.Active, q.State);
+    }
+
     private static TestRecord DialogueQuest() => new("QUST", 0x00100010, Edid: "QDLG", Full: "Dialogue Quest", Subs:
     [
         ("DATA", Data(0x00)),                                          // not SGE, not a QUST-propagation target

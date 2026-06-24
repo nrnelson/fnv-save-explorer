@@ -101,6 +101,12 @@ public sealed class TesPlugin
     /// terminal, …) — the broader event-completion sizing alongside the counter-gated subset.</summary>
     public IReadOnlyList<ExternalQuestEffect> ExternalQuestEffects { get; }
 
+    /// <summary>Base <c>NPC_</c>/<c>CREA</c> actor FormID → its attached <c>SCRI</c> script FormID (ROADMAP §6 #16
+    /// Stage 2). The type-2 death registry records a UNIQUE killed actor by its base form, so this links a dead
+    /// registry entry to the script (e.g. an <c>OnDeath</c> quest-completion). Plugin-local; re-keyed by
+    /// <see cref="PluginDatabase"/>. Empty unless the plugin was read with <c>readActors: true</c>.</summary>
+    public IReadOnlyList<(uint ActorFormId, uint ScriptFormId)> ActorScripts { get; }
+
     private TesPlugin(
         string fileName,
         IReadOnlyList<string> masters,
@@ -108,7 +114,8 @@ public sealed class TesPlugin
         IReadOnlyList<QuestDefinition> quests,
         IReadOnlyList<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)> dialogueInfos,
         IReadOnlyList<CounterIncrement> counterIncrements,
-        IReadOnlyList<ExternalQuestEffect> externalQuestEffects)
+        IReadOnlyList<ExternalQuestEffect> externalQuestEffects,
+        IReadOnlyList<(uint, uint)> actorScripts)
     {
         FileName = fileName;
         Masters = masters;
@@ -117,18 +124,21 @@ public sealed class TesPlugin
         DialogueInfos = dialogueInfos;
         CounterIncrements = counterIncrements;
         ExternalQuestEffects = externalQuestEffects;
+        ActorScripts = actorScripts;
     }
 
-    public static TesPlugin Load(string path, bool readDialogue = false)
+    public static TesPlugin Load(string path, bool readDialogue = false, bool readActors = false)
     {
         using var fs = File.OpenRead(path);
-        return Read(fs, Path.GetFileName(path), readDialogue);
+        return Read(fs, Path.GetFileName(path), readDialogue, readActors);
     }
 
     /// <summary>Parses a plugin from an arbitrary (seekable) stream — used by tests with an in-memory plugin.
     /// <paramref name="readDialogue"/> additionally descends into the <c>DIAL</c> group to collect <c>INFO</c>
-    /// result-script quest effects (off by default — it is the heaviest group; ROADMAP §6 #16 Phase B).</summary>
-    public static TesPlugin Read(Stream fs, string fileName, bool readDialogue = false)
+    /// result-script quest effects (off by default — it is the heaviest group; ROADMAP §6 #16 Phase B).
+    /// <paramref name="readActors"/> reads <c>NPC_</c>/<c>CREA</c> <c>SCRI</c> links for the Stage-2 kill-completion
+    /// binding (cheap — base-actor groups only, no worldspace descent).</summary>
+    public static TesPlugin Read(Stream fs, string fileName, bool readDialogue = false, bool readActors = false)
     {
         // ---- TES4 header record (always first) ----
         var sig = ReadSignature(fs) ?? throw new SaveFormatException($"{fileName}: empty file", 0);
@@ -153,6 +163,7 @@ public sealed class TesPlugin
         var scripts = new Dictionary<uint, (string GameMode, List<string> Locals)>();
         var counterIncrements = new List<CounterIncrement>(); // qualified `set Quest.counter to counter ± N` (Stage 1)
         var externalQuestEffects = new List<ExternalQuestEffect>(); // completing effects from any SCPT (Stage 1)
+        var actorScripts = new Dictionary<uint, uint>(); // base NPC_/CREA FormID -> SCRI script (Stage 2)
         while (true)
         {
             var gsig = ReadSignature(fs);
@@ -174,6 +185,8 @@ public sealed class TesPlugin
                 ReadRecords(fs, contentSize, localized, forms, quests, scripts, counterIncrements, externalQuestEffects);
             else if (groupType == 0 && labelType == "DIAL" && readDialogue)
                 ReadInfoEffects(fs, contentSize, dialogueInfos); // descend DIAL -> Topic Children -> INFO (Phase B)
+            else if (groupType == 0 && labelType is "NPC_" or "CREA" && readActors)
+                ReadActorScripts(fs, contentSize, actorScripts); // base actor -> SCRI (Stage 2 kill-completion)
             else
                 fs.Seek(contentSize, SeekOrigin.Current); // skip the whole group without reading its bytes
         }
@@ -185,7 +198,8 @@ public sealed class TesPlugin
                 if (quests[i].ScriptFormId != 0 && scripts.TryGetValue(quests[i].ScriptFormId, out var s))
                     quests[i] = quests[i] with { GameModeScript = s.GameMode, LocalVars = s.Locals };
 
-        return new TesPlugin(fileName, masters, forms, quests, dialogueInfos, counterIncrements, externalQuestEffects);
+        return new TesPlugin(fileName, masters, forms, quests, dialogueInfos, counterIncrements, externalQuestEffects,
+            actorScripts.Select(kv => (kv.Key, kv.Value)).ToList());
     }
 
     /// <summary>Descends a dialogue (<c>DIAL</c>) group — which nests <c>INFO</c> records inside per-topic
@@ -452,6 +466,33 @@ public sealed class TesPlugin
             }
         }
         return sb.Length > 0 ? sb.ToString() : null;
+    }
+
+    /// <summary>Reads base <c>NPC_</c>/<c>CREA</c> records' <c>SCRI</c> (their attached script FormID) — the
+    /// actor↔script link the Stage-2 kill-completion binding needs (ROADMAP §6 #16). A unique killed actor is
+    /// recorded in the save's type-2 death registry by its base form, so this maps that base to the script whose
+    /// <c>OnDeath</c> block completes a quest.</summary>
+    private static void ReadActorScripts(Stream fs, long contentSize, Dictionary<uint, uint> actorScripts)
+    {
+        var end = fs.Position + contentSize;
+        while (fs.Position < end)
+        {
+            var sig = ReadSignature(fs);
+            if (sig is null) break;
+            var size = ReadU32(fs);
+            if (sig == "GRUP") { ReadExactly(fs, 16); fs.Seek((long)size - HeaderSize, SeekOrigin.Current); continue; }
+            var flags = ReadU32(fs);
+            var formId = ReadU32(fs);
+            ReadExactly(fs, 8);
+            var data = ReadExactly(fs, (int)size);
+            if ((flags & CompressedFlag) != 0) data = Decompress(data);
+            foreach (var (type, sub) in ParseSubrecords(data))
+                if (type == "SCRI" && sub.Length >= 4)
+                {
+                    actorScripts[formId] = BinaryPrimitives.ReadUInt32LittleEndian(sub);
+                    break;
+                }
+        }
     }
 
     /// <summary>Splits a script's source text into its <c>Begin &lt;Type&gt; … End</c> blocks, yielding each block's
