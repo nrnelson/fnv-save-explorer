@@ -1406,6 +1406,17 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       fragile path). Nothing speculative shipped (no-guess rule). **Net: bucket C is re-characterised — kill events
       ARE in the save (GlobalData type-2 death registry + ACHR death state); the wall is the kill-target↔quest
       binding, not absence of signal. Dataset kept: `gtg-active.fos` / `gtg-complete.fos` (vanilla Saves folder).**
+    **RELOAD TEST (user-confirmed): loading `gtg-complete` STILL shows Ghost Town Gunfight completed** (and even
+    restores the un-picked level-2 perk prompt) — so the completion is genuinely PERSISTED and the engine
+    re-derives it from save data alone. The signal we have access to is therefore SUFFICIENT; the only missing
+    piece is decoding it + the per-quest binding. This upgrades bucket C from "walled" to "recoverable in principle,
+    pending a GlobalData type-2 decode + per-quest kill-target mapping." Concrete next step (sizable, partial,
+    hard-to-validate on the modded oracles since late-game registries differ): (1) decode GlobalData type-2 ("TES")
+    structure — the `[count][7C](ref,status)…` death/kill registry; (2) resolve its refs; (3) for quests whose
+    `QSTA` objective-target IS the killed actor, mark the objective complete when its target is in the registry
+    (the §6 #10 angle-2, now with a concrete signal). VMS16 itself won't benefit (its QSTA targets are markers, not
+    the killed actors — its binding is compiled `OnDeath` only), so this is a partial, per-quest-shaped win, not a
+    general solution. Pursue only with a validation plan (it can't be measured on the three oracles cleanly).
 
 ---
 
