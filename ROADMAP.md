@@ -1496,7 +1496,16 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     - **COUNTER path (GTG) is a WALL — documented, not shipped.** Re-deriving `nGangerDeathCount` from dead
       ganger-bases gives **5 of 6**: the 6th Goodsprings ganger is a runtime-SPAWNED ref (`0x0015EAE9` — not in the
       masters, no change form, not in Created Objects type-4), so its base→script link is unreadable. 5 < 6, so the
-      counter never reaches threshold — gtg-complete stays ACTIVE (the honest partial). The counter pass was
+      counter never reaches threshold — gtg-complete stays ACTIVE (the honest partial). **Verified the seam (the
+      user asked which one is missing): it is NOT the named NPC. Joe Cobb's base NPC_ is `0x00104C67` (his ref
+      `GSJoeCobbRef` 0x00104C68 NAMEs that base), which IS one of the bound 5 — Joe Cobb runs his own increment
+      script `0x00104C69`; the other 4 share the generic ganger script `0x00105D4D`. So the 5 bound = Joe Cobb + 4
+      editor-PLACED gangers, all bindable; the unbindable 6th is a generic RUNTIME-SPAWNED ganger (Goodsprings
+      spawns extras via the trigger system — `GSJoeCobbTriggerRef` exists). The seam is placed-vs-spawned, not
+      named-vs-generic.** Tempting-but-rejected heuristic: the 6 deaths sit at consecutive registry slots (refIds
+      `0x21BC`–`0x21C1`, added together), so an unresolvable dead ref batched with bound gangers COULD be assumed a
+      ganger and counted — but that's a guess (the next spawned ref elsewhere might be a brahmin/settler), a net-FP
+      risk, so left out per precision-first. The counter pass was
       prototyped (`counterderive` CLI) but NOT wired into `QuestPipboy` (no win + it would ignore the OnDeath's
       objective-state guard = residual FP risk). So bucket-C counter-completion remains walled on spawned/leveled
       targets; single-kill unique-boss completion is the recoverable slice. **Net Stage 2: +1 Save 122, +1 Save 420,
