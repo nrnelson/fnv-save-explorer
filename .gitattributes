@@ -1,0 +1,4 @@
+# The reconciliation harness is run with bash; CRLF breaks the shebang and appends \r to
+# parsed quest names. Keep these LF on every platform.
+docs/pipboy-oracles/reconcile.sh text eol=lf
+docs/pipboy-oracles/*.oracle      text eol=lf
