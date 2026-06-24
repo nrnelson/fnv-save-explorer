@@ -1241,6 +1241,22 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     with the remaining gaps being this runtime-state boundary, not a missed field.** Further mid/late-game gains would
     require either modeling per-quest world-state completion (impractical/fragile, partial coverage) or more
     ground-truth oracles to safely tune heuristics — i.e. they need new data or accept the boundary, not more decoding.
+    **PROGRESS 2026-06-24 — SECOND mid-game oracle (VNV Extended Save 420, late-game: user-counted 13 active + 55
+    completed = 68 quests) confirms the boundary, and PRECISION HOLDS AT SCALE.** Reconciliation: **28 fully correct,
+    19 mislabelled, 3 false positives, 21 missed** (computed 50). Key reads:
+    - **Precision is strong even late-game: 94%** (47/50) — only **3 false positives, the SAME stable ones** as Save
+      122: Happy Trails Expedition + Sierra Madre Grand Opening! (SGE DLC-radios suppressed by the DLC-delay mod) and
+      The Finger of Suspicion (a formType-7 quest that completes then drops OFF the Pip-Boy, so its 0xC0000000
+      "completed" flag over-reports). No new FP classes at scale — the interpreter does not "explode" on a busy save.
+    - **The 19 mislabelled are all the event-completed class** (shown active, actually completed) — the Phase-C wall.
+    - **The 21 missed split into ~5 dialogue/event-started actives** (Wild Card series, The House Always Wins II,
+      Beware the Wrath of Caesar!, Heartache) **and ~16 event-completed quests** that can't be shown completed.
+    - **Re-evaluated B2 (apply conditional dialogue SetStage) against BOTH oracles**: Save 420 +3 correct / +3 FP,
+      Save 122 +1 / +1 — a consistent ~1:1 recall-for-precision trade. **Kept DROPPED** (precision-first: a wrong entry
+      is worse than an absent one). Save 57 stays 7/7; Save 122 stays 13/24.
+    **Bottom line across three oracles:** early/vanilla = exact (7/7); mid-game = 13/24 (~81% present); late-game =
+    28/68 (69% present) at 94% precision. Accuracy degrades with playthrough length purely because more quests have
+    completed via world events (the unrecoverable class), while precision stays high.
 
 ---
 
