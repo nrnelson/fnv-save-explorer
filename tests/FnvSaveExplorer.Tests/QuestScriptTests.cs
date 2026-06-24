@@ -120,4 +120,57 @@ public class QuestScriptTests
         Assert.Empty(QuestScript.Parse(null));
         Assert.Empty(QuestScript.Parse("   \n ; just a comment\n"));
     }
+
+    // ---- ROADMAP §6 #16 Stage 1: counter increments + counter-guard detection ----
+
+    [Fact]
+    public void Parses_real_powder_ganger_ondeath_counter_increment()
+    {
+        // The actual Goodsprings Powder Ganger OnDeath script from FalloutNV.esm — the increment that feeds
+        // Ghost Town Gunfight's `nGangerDeathCount >= 6` completion guard (parenthesised, qualified RHS).
+        const string sctx =
+            "scn VMS16GangerScript\n" +
+            "Begin OnDeath\n" +
+            "   set VMS16.nGangerDeathCount to (VMS16.nGangerDeathCount + 1)\n" +
+            "End";
+
+        var inc = Assert.Single(QuestScript.ParseCounterIncrements(sctx));
+        Assert.Equal("VMS16", inc.QuestEdid);
+        Assert.Equal("nGangerDeathCount", inc.Counter);
+        Assert.Equal(1, inc.Delta);
+    }
+
+    [Fact]
+    public void Counter_increment_handles_bare_form_and_decrement_and_ignores_resets()
+    {
+        // Bare self form (QuestEdid empty), a decrement, and a reset that must NOT be treated as an increment.
+        var bare = Assert.Single(QuestScript.ParseCounterIncrements("set nHostages to nHostages + 2"));
+        Assert.Equal("", bare.QuestEdid);
+        Assert.Equal("nHostages", bare.Counter);
+        Assert.Equal(2, bare.Delta);
+
+        var dec = Assert.Single(QuestScript.ParseCounterIncrements("set VFoo.nCount to VFoo.nCount - 1"));
+        Assert.Equal(-1, dec.Delta);
+
+        Assert.Empty(QuestScript.ParseCounterIncrements("set VFoo.nCount to 0"));        // reset, not an increment
+        Assert.Empty(QuestScript.ParseCounterIncrements("set VFoo.nCount to OtherVar + 1")); // RHS isn't the counter
+    }
+
+    [Fact]
+    public void Finds_counter_comparison_in_a_guard()
+    {
+        var counters = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "nGangerDeathCount" };
+
+        var hit = QuestScript.FindCounterComparison("nGangerDeathCount >= 6", counters);
+        Assert.NotNull(hit);
+        Assert.Equal(("nGangerDeathCount", ">=", 6), (hit.Value.Counter, hit.Value.Op, hit.Value.Threshold));
+
+        // Reversed form flips the operator; a qualified name matches on its suffix.
+        var rev = QuestScript.FindCounterComparison("6 <= VMS16.nGangerDeathCount", counters);
+        Assert.NotNull(rev);
+        Assert.Equal((">=", 6), (rev.Value.Op, rev.Value.Threshold));
+
+        // A guard testing a non-counter (a do-once flag not in the set) is not matched.
+        Assert.Null(QuestScript.FindCounterComparison("DoOnce == 0", counters));
+    }
 }

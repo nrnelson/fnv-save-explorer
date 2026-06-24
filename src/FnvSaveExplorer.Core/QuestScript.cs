@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace FnvSaveExplorer.Core;
 
 /// <summary>The quest-affecting script verbs the Pip-Boy interpreter understands (ROADMAP §6 #16). FNV masters
@@ -154,6 +156,103 @@ public static class QuestScript
         }
         return sets;
     }
+
+    /// <summary>Extracts counter <b>increments</b> from script text (ROADMAP §6 #16 Stage 1) — assignments of the
+    /// form <c>set &lt;q&gt;.&lt;v&gt; to &lt;q&gt;.&lt;v&gt; ± N</c> (qualified: <c>QuestEdid</c> names the quest
+    /// the counter belongs to — the actor <c>OnDeath</c>-style form
+    /// <c>set VMS16.nGangerDeathCount to (VMS16.nGangerDeathCount + 1)</c>) and the bare
+    /// <c>set &lt;v&gt; to &lt;v&gt; ± N</c> (<c>QuestEdid</c> = <c>""</c> — the script's own quest). Only TRUE
+    /// increments are returned: the right-hand side must reference the same variable, so a plain reset
+    /// (<c>set v to 0</c>) is excluded. Parenthesised RHS is tolerated. <c>Delta</c> is the signed step (+1, -1, …).
+    /// These are the kill/collect counters a quest's GameMode then gates completion on (<see cref="FindCounterComparison"/>).</summary>
+    public static IReadOnlyList<(string QuestEdid, string Counter, int Delta)> ParseCounterIncrements(string? sctx)
+    {
+        if (string.IsNullOrWhiteSpace(sctx))
+            return [];
+
+        var result = new List<(string, string, int)>();
+        foreach (var rawLine in sctx.Split('\n'))
+        {
+            var tokens = Tokens(rawLine, out _);
+            // set <lhs> to <rhs...>   (a 4+-token assignment; "set"/"to" case-insensitive)
+            if (tokens.Length < 4 || !tokens[0].Equals("set", StringComparison.OrdinalIgnoreCase) ||
+                !tokens[2].Equals("to", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var lhs = tokens[1];
+            string edid = "", counter = lhs;
+            var dot = lhs.IndexOf('.');
+            if (dot > 0) { edid = lhs[..dot]; counter = lhs[(dot + 1)..]; }
+            if (counter.Length == 0)
+                continue;
+
+            // RHS: the remaining tokens with parentheses split out, so "(VMS16.nGangerDeathCount + 1)" tokenises to
+            // the variable, the operator, and the literal.
+            var rhs = string.Join(' ', tokens[3..]).Replace("(", " ").Replace(")", " ");
+            if (TryIncrementDelta(rhs, edid, counter, out var delta))
+                result.Add((edid, counter, delta));
+        }
+        return result;
+    }
+
+    /// <summary>True when <paramref name="rhs"/> is the same variable plus/minus an integer literal (a true
+    /// increment), yielding the signed <paramref name="delta"/>. Requires the variable to appear on the RHS so a
+    /// reset (<c>set v to 0</c>) is rejected.</summary>
+    private static bool TryIncrementDelta(string rhs, string edid, string counter, out int delta)
+    {
+        delta = 0;
+        var qualified = edid.Length > 0 ? edid + "." + counter : counter;
+        var toks = rhs.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (!toks.Any(t => t.Equals(qualified, StringComparison.OrdinalIgnoreCase) ||
+                           t.Equals(counter, StringComparison.OrdinalIgnoreCase)))
+            return false; // RHS doesn't reference the counter — a reset/assignment, not an increment
+        for (var i = 0; i + 1 < toks.Length; i++)
+            if ((toks[i] == "+" || toks[i] == "-") && int.TryParse(toks[i + 1], out var n))
+            {
+                delta = toks[i] == "-" ? -n : n;
+                return true;
+            }
+        return false;
+    }
+
+    // A `<var> <op> <int>` comparison (e.g. `nGangerDeathCount >= 6`); the identifier allows dots for a qualified
+    // `Quest.counter` form. The reversed `<int> <op> <var>` is matched separately (with the operator flipped).
+    private static readonly Regex CounterCmp =
+        new(@"([A-Za-z_][A-Za-z0-9_.]*)\s*(==|!=|>=|<=|>|<)\s*(\d+)", RegexOptions.Compiled);
+    private static readonly Regex CounterCmpReversed =
+        new(@"(\d+)\s*(==|!=|>=|<=|>|<)\s*([A-Za-z_][A-Za-z0-9_.]*)", RegexOptions.Compiled);
+
+    /// <summary>Finds, in a guard's source text, a comparison of one of <paramref name="counters"/> against an
+    /// integer literal — <c>&lt;counter&gt; &lt;op&gt; &lt;N&gt;</c> (or the reversed <c>&lt;N&gt; &lt;op&gt;
+    /// &lt;counter&gt;</c>, operator flipped) — returning the matched counter name (its post-dot suffix for a
+    /// qualified form), comparison operator, and threshold. This is how a quest's GameMode counter-gate
+    /// (<c>nGangerDeathCount >= 6</c>) is detected (ROADMAP §6 #16 Stage 1). Returns null when the guard tests no
+    /// listed counter.</summary>
+    public static (string Counter, string Op, int Threshold)? FindCounterComparison(
+        string? guard, IReadOnlyCollection<string> counters)
+    {
+        if (string.IsNullOrWhiteSpace(guard) || counters.Count == 0)
+            return null;
+        var set = counters as ISet<string> ?? new HashSet<string>(counters, StringComparer.OrdinalIgnoreCase);
+
+        static string Suffix(string id) { var d = id.LastIndexOf('.'); return d >= 0 ? id[(d + 1)..] : id; }
+
+        foreach (Match m in CounterCmp.Matches(guard))
+        {
+            var name = Suffix(m.Groups[1].Value);
+            if (set.Contains(name) && int.TryParse(m.Groups[3].Value, out var n))
+                return (name, m.Groups[2].Value, n);
+        }
+        foreach (Match m in CounterCmpReversed.Matches(guard))
+        {
+            var name = Suffix(m.Groups[3].Value);
+            if (set.Contains(name) && int.TryParse(m.Groups[1].Value, out var n))
+                return (name, Flip(m.Groups[2].Value), n);
+        }
+        return null;
+    }
+
+    private static string Flip(string op) => op switch { ">" => "<", "<" => ">", ">=" => "<=", "<=" => ">=", _ => op };
 }
 
 /// <summary>

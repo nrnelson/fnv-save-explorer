@@ -1434,6 +1434,43 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     compiled-script quest↔kill-target binding, which is not in readable save+masters data.** A validatable
     assassination/bounty quest (objective `QSTA` = the actual killed NPC) would be the only way to test a partial
     death-state angle; none of the current oracles or captures provide one.
+    **PROGRESS 2026-06-24 (cont.) — STAGE 1 of the static save-condition evaluator SHIPPED: the counter/event-gated
+    completion graph + `qgate` probe, which SIZES the bucket-C prize before investing in the harder save-state half.**
+    The completion logic for kill-completed quests is readable SCTX, so this is a masters-only, save-independent
+    analysis (no `QuestPipboy.Compute` change → all three oracles + the gtg pair are byte-for-byte unregressed:
+    Save 57 = 7/7, Save 122 = 15/24, Save 420 = 33/68; gtg still both active). Built:
+    - `QuestScript.ParseCounterIncrements` — harvests `set <Quest>.<counter> to <counter> ± N` increments (qualified
+      = names its quest by editor id, the actor `OnDeath` form; or bare self) from script SCTX; rejects resets.
+      `QuestScript.FindCounterComparison` — detects a counter-gate guard `<counter> <op> N` (e.g. `nGangerDeathCount
+      >= 6`), incl. the reversed form.
+    - `TesPlugin` now scans the FULL SCTX of **every** `SCPT` (not just the quest-linked GameMode block) for (a)
+      qualified counter increments and (b) quest-completing effects (`CompleteQuest`/`CompleteAllObjectives`/
+      `SetStage`-to-QSDT-complete), tagged with their `Begin <block>` type via a new `SplitBlocks` — so an `OnDeath`
+      completion (kill-reachable from the save death registry) is told apart from a `GameMode` world-poll.
+    - `CounterGatedQuests` (new) builds two graphs: the **counter-gated** completions (a counter-guarded self-
+      completion whose counter is incremented somewhere) and the broader **external event-completion** graph (a
+      quest completed by a `SCPT` other than its own — the single-kill cases with no counter). `PluginDatabase`
+      aggregates both (re-keying each `ScriptFormId` into save space for Stage 2's script→actor map) and exposes
+      `CounterGates`/`ExternalCompletions`. CLI `qgate <save>` dumps them + the headline.
+    **DELIVERABLE (honest size of the prize, measured on both vanilla and the VNV-Extended Save-420 load order):**
+    - **counter-gated completions (count N kills/events → complete, the Ghost Town Gunfight shape): 4** — VMS16
+      Ghost Town Gunfight (`nGangerDeathCount >= 6`, vanilla; the mod bumps it to 7), VMS20 Boulder City Showdown
+      (`nDeathsGreatKhans >= 6`), VNipton Booted (`NumHostages >= 2`), NVDLC03HQBuddy All My Friends Have Off
+      Switches (`iComputer >= 1`). All externally (actor `OnDeath`) incremented. (3 more "gates" are do-once/timer
+      flags — `doonce == 0` / `GotJessupNote == 0` / `fBorousTimer > 0` — correctly reported UNBOUND, not counters.)
+    - **single-kill completions (one `OnDeath`/`OnHit` script SetStages/CompletesQuest, NO counter): 8** — I Fought
+      the Law (VMS02), How Little We Know (VMS21), Ring-a-Ding-Ding! (VMQTops), That Lucky Old Sun (VMS03), We Are
+      Legion (VDeadSea), Wheel of Fortune (VMS44), Crazy Crazy Crazy (VMS57), Return to Sender (VMS52).
+    - **=> CLEAN kill-reachable prize (death-registry-recoverable): 12 quests.** The broader "completed by any
+      external script" upper bound is 66, but the other 54 are `GameMode` world-polls / `OnActivate` / scripted DLC
+      sequences whose triggers aren't a simple save signal — reachability varies, NOT counted as clean.
+    - **Real recall on Save 420 specifically:** of the 13 quests currently mislabelled active-should-be-completed,
+      exactly **3 are in the clean kill-reachable set** (I Fought the Law, Ring-a-Ding-Ding!, That Lucky Old Sun),
+      so a perfect Stage 2 lifts Save 420 33→36 (+ the gtg controlled pair). The other mislabels (Guess Who I Saw
+      Today, My Kind Of Town, Wang Dang Atomic Tango, …) complete via non-kill mechanisms (activators/dialogue) and
+      are NOT kill-reachable. Honest framing confirmed: the bucket-C prize is real but modest. 8 synthetic tests pin
+      the parsing + analyzer; full suite unchanged (the 8 pre-existing `Real_saves_*` inventory/SPECIAL failures are
+      unrelated). Next: Stage 2 (re-derive the counter from the GlobalData type-2 death registry, prototype on gtg).
 
 ---
 

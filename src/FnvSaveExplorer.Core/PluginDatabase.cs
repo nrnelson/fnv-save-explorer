@@ -44,8 +44,12 @@ public sealed class PluginDatabase
     private readonly HashSet<uint> _dialogueStarted; // quest FormIDs an INFO StartQuest/SetStage-targets (Phase B)
     private readonly Dictionary<uint, IReadOnlyList<QuestScriptEffect>> _dialogueInfoEffects; // INFO FormID -> its result-script effects
     private readonly Dictionary<uint, IReadOnlyList<InfoCondition>> _dialogueInfoConditions; // INFO FormID -> its quest-state preconditions
+    private readonly IReadOnlyList<CounterIncrement> _counterIncrements; // qualified `set Quest.counter` increments (§6 #16 Stage 1)
+    private readonly IReadOnlyList<ExternalQuestEffect> _externalQuestEffects; // completing effects from any SCPT (§6 #16 Stage 1)
+    private IReadOnlyList<CounterGate>? _counterGates; // lazily-built counter-gated completion graph
+    private IReadOnlyList<ExternalCompletion>? _externalCompletions; // lazily-built external event-completion graph
 
-    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null, Dictionary<uint, IReadOnlyList<InfoCondition>>? dialogueInfoConditions = null)
+    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null, Dictionary<uint, IReadOnlyList<InfoCondition>>? dialogueInfoConditions = null, IReadOnlyList<CounterIncrement>? counterIncrements = null, IReadOnlyList<ExternalQuestEffect>? externalQuestEffects = null)
     {
         _names = names;
         _types = types;
@@ -57,6 +61,8 @@ public sealed class PluginDatabase
         _dialogueStarted = dialogueStarted ?? [];
         _dialogueInfoEffects = dialogueInfoEffects ?? [];
         _dialogueInfoConditions = dialogueInfoConditions ?? [];
+        _counterIncrements = counterIncrements ?? [];
+        _externalQuestEffects = externalQuestEffects ?? [];
     }
 
     /// <summary>Quest FormIDs (save-space) that a dialogue <c>INFO</c> result script <c>StartQuest</c>/<c>SetStage</c>
@@ -76,6 +82,23 @@ public sealed class PluginDatabase
     /// a <c>GetQuestCompleted X</c>/<c>GetStage X &gt;= N</c> condition is therefore proof X reached that state.
     /// Empty unless built with <c>withDialogue: true</c>.</summary>
     public IReadOnlyDictionary<uint, IReadOnlyList<InfoCondition>> DialogueInfoConditions => _dialogueInfoConditions;
+
+    /// <summary>Counter increments (qualified <c>set Quest.counter to counter ± N</c>) across the load order, with
+    /// each <see cref="CounterIncrement.ScriptFormId"/> re-keyed into save space (ROADMAP §6 #16 Stage 1).</summary>
+    public IReadOnlyList<CounterIncrement> CounterIncrements => _counterIncrements;
+
+    /// <summary>The counter-gated completion graph (built once on first use): the player-facing quests whose
+    /// completion is gated on a runtime counter, with the scripts that increment it. The size of the bucket-C
+    /// prize Stage 2's save-state evaluator targets (ROADMAP §6 #16 Stage 1).</summary>
+    public IReadOnlyList<CounterGate> CounterGates =>
+        _counterGates ??= CounterGatedQuests.Build(_quests.Values, _counterIncrements);
+
+    /// <summary>The broader external event-completion graph (built once on first use): player-facing quests
+    /// completed by a script other than their own (the single-kill/activation completions), with the counter-gated
+    /// subset flagged. Sizes the full bucket-C prize (ROADMAP §6 #16 Stage 1).</summary>
+    public IReadOnlyList<ExternalCompletion> ExternalCompletions =>
+        _externalCompletions ??= CounterGatedQuests.BuildExternalCompletions(
+            _quests.Values, _externalQuestEffects, CounterGates.Where(g => g.Bound).Select(g => g.QuestFormId).ToHashSet());
 
     /// <summary>An empty database; every <see cref="Resolve"/> returns <c>null</c>.</summary>
     public static readonly PluginDatabase Empty = new([], [], [], [], null, null, []);
@@ -110,6 +133,8 @@ public sealed class PluginDatabase
         var dialogueTargetEdids = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // INFO StartQuest/SetStage targets
         var infoEffects = new Dictionary<uint, IReadOnlyList<QuestScriptEffect>>(); // save-space INFO FormID -> effects
         var infoConditions = new Dictionary<uint, IReadOnlyList<InfoCondition>>(); // save-space INFO FormID -> quest-state preconditions
+        var counterIncrements = new List<CounterIncrement>(); // qualified counter increments, ScriptFormId re-keyed (§6 #16 Stage 1)
+        var externalQuestEffects = new List<ExternalQuestEffect>(); // completing effects from any SCPT, ScriptFormId re-keyed
 
         // Case-insensitive load-order index, for mapping a plugin's masters back to save indices.
         var indexOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -192,6 +217,15 @@ public sealed class PluginDatabase
                 }
             }
 
+            // Counter increments target their quest by editor id (no FormID re-key needed), but the ScriptFormId is
+            // a plugin-local form, so re-key it into save space for Stage 2's script→actor mapping (§6 #16 Stage 1).
+            foreach (var inc in plugin.CounterIncrements)
+                if (Remap(inc.ScriptFormId, remap) is { } saveScriptId)
+                    counterIncrements.Add(inc with { ScriptFormId = saveScriptId });
+            foreach (var e in plugin.ExternalQuestEffects)
+                if (Remap(e.ScriptFormId, remap) is { } saveScriptId)
+                    externalQuestEffects.Add(e with { ScriptFormId = saveScriptId });
+
             resolved.Add(loadOrder[i]);
         }
 
@@ -201,7 +235,7 @@ public sealed class PluginDatabase
             if (q.Edid is { } edid && dialogueTargetEdids.Contains(edid))
                 dialogueStarted.Add(q.FormId);
 
-        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects, infoConditions);
+        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects, infoConditions, counterIncrements, externalQuestEffects);
     }
 
     /// <summary>Re-keys a plugin-local FormID into save space using the plugin's high-byte → save-index

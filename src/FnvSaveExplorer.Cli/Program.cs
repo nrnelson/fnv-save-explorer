@@ -151,6 +151,11 @@ try
             QuestConditions(FalloutSave.Load(path), path,
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
             break;
+        case "qgate":
+            QuestCounterGates(FalloutSave.Load(path), path,
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path),
+                args.Contains("--all"));
+            break;
         case "qaudit":
         {
             var whoIdx = Array.IndexOf(args, "--who");
@@ -1425,6 +1430,63 @@ static void QuestConditions(FalloutSave s, string savePath, string? dataDir)
     Console.WriteLine($"\nIMPLIED-COMPLETED player-facing quests ({impliedCompleted.Count}):");
     foreach (var id in impliedCompleted.OrderBy(i => db.Quest(i)?.Name, StringComparer.OrdinalIgnoreCase))
         Console.WriteLine($"  \"{db.Quest(id)?.Name}\"  0x{id:X8}");
+}
+
+static void QuestCounterGates(FalloutSave s, string savePath, string? dataDir, bool all)
+{
+    // ROADMAP §6 #16 Stage 1: the COUNTER-GATED COMPLETION GRAPH. A masters-only, save-independent analysis —
+    // each player-facing quest whose GameMode/stage completes the quest (CompleteQuest / SetStage to a
+    // QSDT-complete stage / CompleteAllObjectives) only inside an `if <counter> <op> N` guard, correlated with the
+    // scripts that increment that counter (an actor OnDeath/event script, or the quest's own script). The headline
+    // number is the honest size of the prize Stage 2's save-state evaluator can reach (the bucket-C event-completed
+    // quests like Ghost Town Gunfight). `--all` also lists unbound gates (counter guard but NO increment found).
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    if (db.Count == 0) { Console.WriteLine("Needs the game Data folder."); return; }
+
+    var gates = db.CounterGates;
+    var byQuest = gates.GroupBy(g => g.QuestFormId)
+        .OrderBy(g => g.First().QuestName, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    Console.WriteLine($"Counter-gated completion graph: {gates.Count} gate(s) across {byQuest.Count} player-facing quest(s)\n");
+    foreach (var grp in byQuest)
+    {
+        var name = grp.First().QuestName;
+        var edid = grp.First().QuestEdid;
+        var bound = grp.Any(g => g.Bound);
+        if (!bound && !all)
+            continue;
+        Console.WriteLine($"  0x{grp.Key:X8}  \"{name}\" [{edid}]{(bound ? "" : "   (UNBOUND — counter never incremented)")}");
+        foreach (var g in grp.OrderBy(g => g.Counter, StringComparer.OrdinalIgnoreCase))
+        {
+            var via = g.ExternallyIncremented
+                ? $"{g.IncrementScripts.Count} ext script(s)" + (g.SelfIncremented ? " + self" : "")
+                : g.SelfIncremented ? "self only" : "NONE";
+            var stage = g.CompletingStage is { } cs ? $"SetStage {cs}" : "CompleteQuest";
+            Console.WriteLine($"        if {g.Counter} {g.Op} {g.Threshold}  =>  {stage}    [increments: {via}]");
+        }
+    }
+
+    // The broader event-completion graph: quests completed by a script other than their own. The script's
+    // begin-block tells a kill-driven completion (OnDeath/OnHit = reachable from the save death registry) from a
+    // per-frame world-poll (GameMode) or activation (OnActivate).
+    var external = db.ExternalCompletions;
+    var kill = external.Where(c => c.ViaKill && !c.ViaCounter).ToList();
+    Console.WriteLine($"\nExternal event-completion graph (completed by a script other than the quest's own): {external.Count} quest(s)");
+    Console.WriteLine($"  -- kill-driven (OnDeath/OnHit), the clean bucket-C shape beyond counters --");
+    foreach (var c in kill)
+        Console.WriteLine($"  0x{c.QuestFormId:X8}  \"{c.QuestName}\" [{c.QuestEdid}]   {c.Scripts.Count} script(s)  blocks=[{string.Join(",", c.Blocks)}]{(c.HasUnconditional ? "  unconditional" : "")}");
+
+    var boundQuests = byQuest.Where(g => g.Any(x => x.Bound)).ToList();
+    var externalQuests = byQuest.Where(g => g.Any(x => x.ExternallyIncremented)).ToList();
+    var killCounter = byQuest.Count(g => g.Any(x => x.Bound)); // counter gates are kill/event counts by construction
+    Console.WriteLine($"\n=== DELIVERABLE (size of the bucket-C prize) ===");
+    Console.WriteLine($"counter-gated completions (count N kills/events, then complete — the Ghost Town Gunfight shape): {boundQuests.Count}");
+    Console.WriteLine($"single-kill completions (one OnDeath/OnHit script completes the quest, NO counter): {kill.Count}");
+    Console.WriteLine($"  => CLEAN kill-reachable prize (counter + single-kill, the death-registry-recoverable set): {killCounter + kill.Count}");
+    Console.WriteLine($"other external completions (GameMode world-poll / OnActivate / scripted DLC — reachability varies): {external.Count - kill.Count - external.Count(c => c.ViaCounter)}");
+    Console.WriteLine($"TOTAL player-facing quests completed by an external script (loose upper bound): {external.Count}");
+    Console.WriteLine($"unbound counter guards (do-once/timer flags, not real counters): {byQuest.Count - boundQuests.Count}");
 }
 
 static void QuestAudit(FalloutSave s, string savePath, string? dataDir, bool list, string? who = null)

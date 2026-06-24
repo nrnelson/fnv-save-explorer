@@ -42,6 +42,15 @@ public sealed class TesPlugin
     /// </summary>
     private static readonly HashSet<string> NamedTypes = [.. ItemTypes, "QUST"];
 
+    /// <summary>The quest verbs that can complete/advance/end a quest — harvested from every <c>SCPT</c> to size the
+    /// event-completion graph (ROADMAP §6 #16 Stage 1). Pure display verbs (<c>SetObjectiveDisplayed</c>,
+    /// <c>StartQuest</c>) are excluded.</summary>
+    private static readonly HashSet<QuestScriptVerb> CompletingVerbs =
+    [
+        QuestScriptVerb.CompleteQuest, QuestScriptVerb.CompleteAllObjectives, QuestScriptVerb.SetStage,
+        QuestScriptVerb.SetObjectiveCompleted, QuestScriptVerb.StopQuest, QuestScriptVerb.FailQuest,
+    ];
+
     /// <summary>The plugin's file name (e.g. <c>FalloutNV.esm</c>).</summary>
     public string FileName { get; }
 
@@ -76,18 +85,38 @@ public sealed class TesPlugin
     /// <summary>All dialogue result-script quest effects, flattened across <see cref="DialogueInfos"/>.</summary>
     public IEnumerable<QuestScriptEffect> DialogueEffects => DialogueInfos.SelectMany(i => i.Effects);
 
+    /// <summary>Counter increments harvested from the FULL source text of every <c>SCPT</c> record — the
+    /// <c>set &lt;Quest&gt;.&lt;counter&gt; to &lt;Quest&gt;.&lt;counter&gt; ± N</c> assignments that bump a quest's
+    /// kill/collect counter from an actor <c>OnDeath</c>/event script (ROADMAP §6 #16 Stage 1). Only the qualified
+    /// form (which names its quest by editor id) is kept here; <see cref="ScriptFormId"/> is plugin-local and
+    /// re-keyed by <see cref="PluginDatabase"/>. The matching counter-gates are built by
+    /// <see cref="CounterGatedQuests"/>.</summary>
+    public IReadOnlyList<CounterIncrement> CounterIncrements { get; }
+
+    /// <summary>Quest-completing effects (<c>SetStage</c>/<c>CompleteQuest</c>/<c>CompleteAllObjectives</c>/
+    /// <c>SetObjectiveCompleted</c>/<c>StopQuest</c>/<c>FailQuest</c>) harvested from the full source text of every
+    /// <c>SCPT</c> record, targeting a quest by editor id (ROADMAP §6 #16 Stage 1). Includes the quests' own scripts;
+    /// the analyzer (<see cref="CounterGatedQuests"/>) filters those out (by <see cref="QuestDefinition.ScriptFormId"/>)
+    /// to find completions driven by an <b>external event script</b> (an actor <c>OnDeath</c>/<c>OnActivate</c>, a
+    /// terminal, …) — the broader event-completion sizing alongside the counter-gated subset.</summary>
+    public IReadOnlyList<ExternalQuestEffect> ExternalQuestEffects { get; }
+
     private TesPlugin(
         string fileName,
         IReadOnlyList<string> masters,
         IReadOnlyList<(uint, string, string, int)> forms,
         IReadOnlyList<QuestDefinition> quests,
-        IReadOnlyList<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)> dialogueInfos)
+        IReadOnlyList<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)> dialogueInfos,
+        IReadOnlyList<CounterIncrement> counterIncrements,
+        IReadOnlyList<ExternalQuestEffect> externalQuestEffects)
     {
         FileName = fileName;
         Masters = masters;
         Forms = forms;
         Quests = quests;
         DialogueInfos = dialogueInfos;
+        CounterIncrements = counterIncrements;
+        ExternalQuestEffects = externalQuestEffects;
     }
 
     public static TesPlugin Load(string path, bool readDialogue = false)
@@ -122,6 +151,8 @@ public sealed class TesPlugin
         var dialogueInfos = new List<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)>();
         // SCPT FormID -> (GameMode block source, declared local-variable names) (ROADMAP §6 #16)
         var scripts = new Dictionary<uint, (string GameMode, List<string> Locals)>();
+        var counterIncrements = new List<CounterIncrement>(); // qualified `set Quest.counter to counter ± N` (Stage 1)
+        var externalQuestEffects = new List<ExternalQuestEffect>(); // completing effects from any SCPT (Stage 1)
         while (true)
         {
             var gsig = ReadSignature(fs);
@@ -140,7 +171,7 @@ public sealed class TesPlugin
 
             var labelType = Encoding.ASCII.GetString(label);
             if (groupType == 0 && (NamedTypes.Contains(labelType) || labelType == "SCPT"))
-                ReadRecords(fs, contentSize, localized, forms, quests, scripts);
+                ReadRecords(fs, contentSize, localized, forms, quests, scripts, counterIncrements, externalQuestEffects);
             else if (groupType == 0 && labelType == "DIAL" && readDialogue)
                 ReadInfoEffects(fs, contentSize, dialogueInfos); // descend DIAL -> Topic Children -> INFO (Phase B)
             else
@@ -154,7 +185,7 @@ public sealed class TesPlugin
                 if (quests[i].ScriptFormId != 0 && scripts.TryGetValue(quests[i].ScriptFormId, out var s))
                     quests[i] = quests[i] with { GameModeScript = s.GameMode, LocalVars = s.Locals };
 
-        return new TesPlugin(fileName, masters, forms, quests, dialogueInfos);
+        return new TesPlugin(fileName, masters, forms, quests, dialogueInfos, counterIncrements, externalQuestEffects);
     }
 
     /// <summary>Descends a dialogue (<c>DIAL</c>) group — which nests <c>INFO</c> records inside per-topic
@@ -226,7 +257,9 @@ public sealed class TesPlugin
     private static void ReadRecords(
         Stream fs, long contentSize, bool localized,
         List<(uint, string, string, int)> forms, List<QuestDefinition> quests,
-        Dictionary<uint, (string GameMode, List<string> Locals)> scripts)
+        Dictionary<uint, (string GameMode, List<string> Locals)> scripts,
+        List<CounterIncrement> counterIncrements,
+        List<ExternalQuestEffect> externalQuestEffects)
     {
         var end = fs.Position + contentSize;
         while (fs.Position < end)
@@ -254,10 +287,23 @@ public sealed class TesPlugin
             if (sig == "SCPT")
             {
                 // A script record: keep its GameMode block + declared local-variable names (from the source text,
-                // SCTX), keyed by FormID, for the quest link above. SCDA is compiled bytecode (ignored).
+                // SCTX), keyed by FormID, for the quest link above. SCDA is compiled bytecode (ignored). Also harvest
+                // counter increments (`set Quest.counter to counter ± N`) from the FULL script — these live in actor
+                // OnDeath/event scripts (no GameMode block of their own), so they must be scanned here, not just on
+                // the quest-linked GameMode (ROADMAP §6 #16 Stage 1).
                 foreach (var (type, sub) in subs)
-                    if (type == "SCTX" && ZString(sub) is { } src && ExtractGameMode(src) is { } gm)
-                        scripts[formId] = (gm, ExtractLocals(src));
+                    if (type == "SCTX" && ZString(sub) is { } src)
+                    {
+                        if (ExtractGameMode(src) is { } gm)
+                            scripts[formId] = (gm, ExtractLocals(src));
+                        foreach (var (questEdid, counter, delta) in QuestScript.ParseCounterIncrements(src))
+                            if (questEdid.Length > 0) // qualified — names its quest; bare ones are ambiguous here
+                                counterIncrements.Add(new CounterIncrement(formId, questEdid, counter, delta));
+                        foreach (var (block, body) in SplitBlocks(src))
+                            foreach (var e in QuestScript.Parse(body))
+                                if (CompletingVerbs.Contains(e.Verb) && !string.IsNullOrEmpty(e.TargetQuestEdid))
+                                    externalQuestEffects.Add(new ExternalQuestEffect(formId, e.TargetQuestEdid, e.Verb, e.Arg1, e.Conditional, block));
+                    }
                 continue;
             }
 
@@ -406,6 +452,45 @@ public sealed class TesPlugin
             }
         }
         return sb.Length > 0 ? sb.ToString() : null;
+    }
+
+    /// <summary>Splits a script's source text into its <c>Begin &lt;Type&gt; … End</c> blocks, yielding each block's
+    /// lower-cased type keyword (<c>gamemode</c>, <c>ondeath</c>, <c>onactivate</c>, …) and its body text (ROADMAP
+    /// §6 #16 Stage 1). The block type is what tells a kill-driven completion (<c>OnDeath</c>) from a per-frame
+    /// world-poll (<c>GameMode</c>). A block ends at a standalone <c>End</c> (not <c>endif</c>).</summary>
+    private static IEnumerable<(string Block, string Text)> SplitBlocks(string? scriptText)
+    {
+        if (string.IsNullOrEmpty(scriptText))
+            yield break;
+        string? block = null;
+        var sb = new StringBuilder();
+        foreach (var raw in scriptText.Split('\n'))
+        {
+            var line = raw;
+            var semi = line.IndexOf(';');
+            if (semi >= 0) line = line[..semi];
+            var trimmed = line.Trim();
+            if (block is null)
+            {
+                if (trimmed.StartsWith("begin", StringComparison.OrdinalIgnoreCase) &&
+                    (trimmed.Length == 5 || char.IsWhiteSpace(trimmed[5])))
+                {
+                    var rest = trimmed[5..].Trim();
+                    var sp = rest.IndexOfAny([' ', '\t']);
+                    block = (sp >= 0 ? rest[..sp] : rest).ToLowerInvariant();
+                    sb.Clear();
+                }
+            }
+            else if (trimmed.Equals("end", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return (block, sb.ToString());
+                block = null;
+            }
+            else
+            {
+                sb.Append(raw).Append('\n');
+            }
+        }
     }
 
     /// <summary>The local-variable type keywords a FNV script declares variables with (case-insensitive).</summary>
