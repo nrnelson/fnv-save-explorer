@@ -1512,6 +1512,47 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       0 FP, gtg pair validates the mechanism (single-kill fires; counter 5/6 documented).** The other Save-420
       kill-mislabels (Ring-a-Ding-Ding!, That Lucky Old Sun) bind but their completing actor isn't in the registry
       (cleaned up / different mechanism) — partial coverage by design, as planned.
+    **DEEP CONTROLLED-DIFF 2026-06-24 (cont., AFK — user pushed "the data IS there, the game obviously knows"):
+    the prior two "wall" framings are BOTH corrected. (a) The 6th ganger IS bindable; (b) GTG completion is NOT
+    persisted as quest state at all — the engine RE-DERIVES it from the 6 dead gangers, via engine-internal logic
+    not present in readable Obscript.** Findings, each vetted on the gtg pair:
+    - **REJECTED off-by-one:** the registry refId resolution is 0-BASED (confirmed: on Save 420, 0-based resolves
+      51/451 entries to real records, 1-based 0/451). The gtg "clean 1-based run" was a coincidence (the 6 gangers
+      sit at contiguous FormID-array indices). So the 6th 0-based entry `0x0015EAE9` is a genuine runtime-created
+      form, the spawned ganger — matching the user's 6th corpse on the ground.
+    - **The 6th ganger IS a scripted ganger (corrects "unbindable"):** the fight inserts a created reference
+      `0xFF001334` (FormType 0, 58 B: a MOVE block + a template ref + a baseball cap) — the spawned ganger's
+      record, which my earlier `cf 0x0015EAE9` missed (the corpse is keyed by its 0xFF created FormId, not the
+      registry's array-form). It references template ACHR `0x00104C75`, whose base NPC_ is `0x00104C74` (`GSPGHM`),
+      which **runs the generic ganger increment script `0x00105D4D`** (the "no SCRI" I first saw was a
+      compressed-NPC_ read failure). So ALL 6 gangers run an increment script: 5 editor-placed bases in the
+      registry + 1 runtime-created actor reachable via its created change-form → template → base.
+    - **GTG completion has NO persisted quest state — exhaustively verified:** VMS16 (0x00104EAE, FormID-array
+      index 1089) has NO change form (`cf` + `quests --raw` + `idiff` all agree; `cf` proven reliable on
+      DeanBarkTimer iref 1090). NOT in formType-7 (`q7scan` identical both saves), NOT in Global Variables (type 3
+      diff = only 2 time-floats), NOT in any GlobalData table (types 0–11 diffed: type-2 = the +6 kills, type-5
+      `2219→36` = combat/havok process settling AFTER the fight, types 3/8/10 = time/counters), NOT in GlobalData3
+      (empty). The only quest-completion trace is Misc Stats "Quests Completed" `2→3` (a bare counter). The 15
+      inserted change forms are all fight SIDE-EFFECTS: 6 REFR ragdoll records (type 0x32), the created corpse, a
+      REPU Goodsprings-reputation delta (`0x00104C22`), a CHAL challenge counter, INFO/IDLE, and 3 enable-markers.
+      Notably the player's "People Killed" stat = 1 — the Goodsprings DEFENDERS killed the other 5 gangers.
+    - **The readable scripts do NOT re-derive completion at load:** VMS16's GameMode gates on the quest-local
+      `nGangerDeathCount` (incremented only in the gangers' `OnDeath`, which doesn't re-fire on load); both ganger
+      scripts (`0x00104C69` Joe Cobb / `0x00105D4D` generic) are `OnDeath`-only with no GameMode re-count; the
+      SGE controller `VFreeformGoodsprings` (0x00104C66) has no VMS16 logic. (Contrast VMS16b "Run Goodsprings Run",
+      the opposite questline, whose GameMode DOES re-derive via `if SunnyRef.GetDead && EasyPeteRef.GetDead && …
+      SetStage 100` — proving the engine pattern exists, just not for VMS16's kill-count path.)
+    **CONCLUSION (fully vetted end-to-end):** the engine marks GTG complete on load by RE-EVALUATING the kill
+    objective against the persisted dead actors with **engine-internal (C++) logic**, not via a persisted
+    completion field and not via readable Obscript. The save contains the INPUT — 6 dead gangers, all bindable to
+    scripted ganger bases — but neither the completion STATE nor the re-derivation RULE-at-load is in readable
+    save+masters. **Static recovery is therefore possible only by REPLICATING the masters rule** (count dead
+    ganger-script actors ≥ 6 → complete), which needs (1) re-adding the placed-ACHR base scan + a created-actor
+    change-form decode (created ref → template ACHR → base NPC_ → SCRI) to bind the spawned 6th, and (2)
+    re-enabling the counter pass gated to running. That's a sizable, somewhat fragile build touching the
+    precision-critical path; proposed, not yet shipped (single-kill win stands). This also clarifies the earlier
+    "reload re-derives from save data alone" note: TRUE (it re-derives from the dead gangers) but the rule is
+    engine-internal, so a static evaluator must reconstruct it rather than read a stored flag.
 
 ---
 
