@@ -48,6 +48,37 @@ public class GlobalDataTests
     }
 
     [Fact]
+    public void StateChangedRefs_decodes_the_gtg_death_registry_layout()
+    {
+        // Mirrors the controlled-diff gtg-complete type-2 payload: vsval count 6 (0x18) then
+        // 6 x ([refID:3] 7C [status u16] 7C). ROADMAP §6 #16 Stage 2.
+        var data = new List<byte> { 0x18, 0x7C };                 // vsval 0x18 >> 2 = 6
+        int[] refIds = [0x0021BC, 0x0021BD, 0x0021BE, 0x0021BF, 0x0021C0, 0x0021C1];
+        foreach (var r in refIds)
+        {
+            data.AddRange([(byte)(r >> 16), (byte)(r >> 8), (byte)r]); data.Add(0x7C); // refID (big-endian 3 bytes)
+            data.AddRange([0x01, 0x00]); data.Add(0x7C);                                // status u16 = 1 (dead)
+        }
+        data.AddRange([0x05, 0x00, 0x00, 0x00]);                  // fixed tail
+
+        // Resolver maps refId -> a FormID (here: +0x102AAB so 0x0021BC -> 0x00104C67, the first ganger).
+        var entries = FalloutSave.DecodeStateChangedRefs([.. data], r => (uint)(r + 0x102AAB));
+
+        Assert.Equal(6, entries.Count);
+        Assert.All(entries, e => Assert.Equal(1, e.Status));
+        Assert.Equal(0x00104C67u, entries[0].FormId);
+        Assert.Equal(0x0021BC, entries[0].RefId);
+    }
+
+    [Fact]
+    public void StateChangedRefs_empty_registry_decodes_to_nothing()
+    {
+        // gtg-active shape: vsval count 0 then the fixed tail.
+        var entries = FalloutSave.DecodeStateChangedRefs([0x00, 0x7C, 0x05, 0x00, 0x00, 0x00], r => (uint)r);
+        Assert.Empty(entries);
+    }
+
+    [Fact]
     public void MiscStatNames_maps_known_indices_and_is_null_out_of_range()
     {
         Assert.Equal(43, MiscStatNames.Count); // FO3/FNV misc-stat array size

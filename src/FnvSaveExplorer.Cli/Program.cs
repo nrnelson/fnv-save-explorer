@@ -110,6 +110,10 @@ try
         case "globals":
             Globals(FalloutSave.Load(path));
             break;
+        case "deaths":
+            Deaths(FalloutSave.Load(path), path,
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
+            break;
         case "stats":
             Stats(FalloutSave.Load(path));
             break;
@@ -324,6 +328,25 @@ static void GlobalDataDump(FalloutSave s, string savePath, int type, string? dat
         }
         else if (f.AsUInt32 is { } v && v != 0) ann = $"   = {v}";
         Console.WriteLine($"  [{i,3}] ({f.Length}B) {hex,-14}{ann}");
+    }
+}
+
+static void Deaths(FalloutSave s, string savePath, string? dataDir)
+{
+    // ROADMAP §6 #16 Stage 2: dump the GlobalData type-2 state-changed-reference registry, the kill signal a
+    // counter/event-gated quest's completion is re-derived from. status 1 = dead (controlled-diff pinned on the
+    // gtg pair); other codes are state changes (semantics not pinned).
+    var refs = s.StateChangedRefs();
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    var byStatus = refs.GroupBy(r => r.Status).OrderBy(g => g.Key);
+    Console.WriteLine($"GlobalData type-2 registry: {refs.Count} state-changed reference(s)");
+    Console.WriteLine($"  status histogram: {string.Join("  ", byStatus.Select(g => $"{g.Key}:{g.Count()}"))}");
+    Console.WriteLine($"  dead (status 1): {refs.Count(r => r.Status == 1)}\n");
+    foreach (var (formId, refId, status) in refs)
+    {
+        var name = db.Resolve(formId) ?? db.RecordType(formId) ?? "";
+        var deadTag = status == 1 ? " [DEAD]" : "";
+        Console.WriteLine($"  refId 0x{refId:X6} -> 0x{formId:X8}  status {status}{deadTag}  {name}");
     }
 }
 

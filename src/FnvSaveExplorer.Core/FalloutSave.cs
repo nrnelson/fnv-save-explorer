@@ -221,6 +221,50 @@ public sealed class FalloutSave
         }
     }
 
+    /// <summary>Decodes the GlobalData type-2 ("TES") <b>state-changed reference registry</b> (ROADMAP §6 #16):
+    /// <c>[vsval count][7C]</c> then <c>count × ([refID:3][7C][u16 status][7C])</c> then a fixed tail. Each entry is
+    /// a reference whose state changed at runtime, resolved to its save-space FormID (via <see cref="ResolveRefId"/>)
+    /// with its raw status code. Controlled-diff pinned on the Ghost Town Gunfight pair: killing the 6 Powder
+    /// Gangers added exactly 6 entries, each <c>status 1</c> — so <c>status 1</c> is the death/kill code (other
+    /// codes 2–7 are state changes whose meaning is not yet pinned — "label, don't guess"). Returns an empty list
+    /// when there is no type-2 record (or it's empty).</summary>
+    public IReadOnlyList<(uint FormId, int RefId, int Status)> StateChangedRefs()
+    {
+        var g = GlobalDataTable1.FirstOrDefault(x => x.Type == 2);
+        return g is null ? [] : DecodeStateChangedRefs(g.Data, ResolveRefId);
+    }
+
+    /// <summary>Decodes a GlobalData type-2 payload into its <c>(FormId, RefId, Status)</c> registry entries, given
+    /// a <paramref name="resolve"/> mapping a raw 3-byte refID to a save-space FormID. Pure/testable — separated
+    /// from <see cref="StateChangedRefs"/> so it can be exercised with a synthetic payload (ROADMAP §6 #16).</summary>
+    public static IReadOnlyList<(uint FormId, int RefId, int Status)> DecodeStateChangedRefs(
+        byte[] data, Func<int, uint> resolve)
+    {
+        var count = ReferenceChangeForm.ReadVsval(data, 0, out var vlen);
+        if (count <= 0)
+            return [];
+        var p = vlen;
+        var result = new List<(uint, int, int)>((int)Math.Min(count, 4096));
+        for (long i = 0; i < count; i++)
+        {
+            if (p < data.Length && data[p] == 0x7C) p++;        // delimiter after the previous field
+            if (p + 3 > data.Length) break;
+            var refId = (data[p] << 16) | (data[p + 1] << 8) | data[p + 2];
+            p += 3;
+            if (p < data.Length && data[p] == 0x7C) p++;        // delimiter between refID and status
+            if (p + 2 > data.Length) break;
+            var status = data[p] | (data[p + 1] << 8);
+            p += 2;
+            result.Add((resolve(refId), refId, status));
+        }
+        return result;
+    }
+
+    /// <summary>The references the type-2 registry records as <b>dead</b> (status 1) — the kill signal a counter/
+    /// event-gated quest's completion is re-derived from (ROADMAP §6 #16 Stage 2).</summary>
+    public IReadOnlySet<uint> DeadReferences() =>
+        StateChangedRefs().Where(r => r.Status == 1 && r.FormId != 0).Select(r => r.FormId).ToHashSet();
+
     private List<GlobalData> ParseGlobalDataTable(uint offset, uint count)
     {
         var list = new List<GlobalData>((int)Math.Min(count, 1024));
