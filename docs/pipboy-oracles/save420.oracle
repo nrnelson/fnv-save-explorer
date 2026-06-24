@@ -1,0 +1,76 @@
+# Save 420 — VNV Extended "Courier", Mojave Wasteland (late-game)
+# Ground truth: user Pip-Boy quest log (2026-06-24). 68 quests = 13 active + 55 completed.
+# This is the LATE-GAME oracle. Documented baseline: 28/68 correct, 19 mislabelled, 3 FP (94% precision).
+# Names are transcribed from the in-game Pip-Boy; mismatches vs the CLI's FULL name show up as a
+# simultaneous false-positive + missed pair for the same quest (reconcile and note, don't fudge truth).
+save = C:\Modding\Viva New Vegas\profiles\Viva New Vegas Extended\saves\Save 420   Courier  Mojave Wasteland  50 52 28.fos
+
+active = Bleed Me Dry
+active = The Reunion
+active = Someone to Watch Over Me
+active = Wild Card: Side Bets
+active = Render Unto Caesar
+active = The House Always Wins, II
+active = The House Always Wins, I
+active = Wild Card: Change in Management
+active = For the Republic, Part 2
+active = Beware the Wrath of Caesar!
+active = Aba Daba Honeymoon
+active = Heartache by the Number
+active = Midnight Science-Fiction Feature!
+
+completed = No, Not Much
+completed = Climb Ev'ry Mountain
+completed = Beyond the Beef
+completed = Pressing Matters
+completed = You Can Depend on Me
+completed = Eyesight to the Blind
+completed = Still in the Dark
+completed = Talent Pool
+completed = Wild Card: You and What Army?
+completed = Big Winner: The Tops
+completed = Ring-a-Ding-Ding!
+completed = How Little We Know
+completed = Oh My Papa
+completed = Don't Make a Beggar of Me
+completed = That Lucky Old Sun
+completed = Left My Heart
+completed = Flags of Our Foul-Ups
+completed = Return to Sender
+completed = There Stands the Grass
+completed = ED-E My Love
+completed = The Coyotes
+completed = The White Wash
+completed = High Times
+completed = Debt Collector
+completed = Wang Dang Atomic Tango
+completed = I Could Make You Care
+completed = Hard Luck Blues
+completed = I Put a Spell on You
+completed = Medical Mystery
+completed = Kings' Gambit
+completed = Things That Go Boom
+completed = Volare!
+completed = Ant Misbehavin'
+completed = Young Hearts
+completed = Sunshine Boogie
+completed = Restoring Hope
+completed = I Don't Hurt Anymore
+completed = Crazy, Crazy, Crazy
+completed = Three-Card Bounty
+completed = Classic Inspiration
+completed = Unfriendly Persuasion
+completed = Come Fly With Me
+completed = Nothin' But a Hound Dog
+completed = Guess Who I Saw Today
+completed = G.I. Blues
+completed = I Fought the Law
+completed = Booted
+completed = Keep Your Eyes on the Prize
+completed = My Kind Of Town
+completed = Can You Find It in Your Heart?
+completed = One for My Baby
+completed = They Went That-a-Way
+completed = Ghost Town Gunfight
+completed = Back in the Saddle
+completed = Ain't That a Kick in the Head
