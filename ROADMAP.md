@@ -1265,6 +1265,30 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     **Bottom line across three oracles:** early/vanilla = exact (7/7); mid-game = 13/24 (~81% present); late-game =
     28/68 (69% present) at 94% precision. Accuracy degrades with playthrough length purely because more quests have
     completed via world events (the unrecoverable class), while precision stays high.
+    **PROGRESS 2026-06-24 — the oracle ground truth + reconciliation harness are now PERSISTED in the repo, and
+    angle 1 (quest-chain hand-off completion back-propagation) was investigated and found WALLED.** Two things:
+    - **Oracles persisted (`docs/pipboy-oracles/`).** The prior session's ephemeral `/tmp/gt` harness is replaced by
+      `reconcile.sh` (reads an oracle file, runs `pipboy`, reports correct/mislabelled/falsePos/missed + precision)
+      plus `save57.oracle` (7 quests, complete) and `save122.oracle` (24 quests, complete — recovered verbatim from
+      the surviving `/tmp/gt`). Both reproduce their documented baselines exactly: **Save 57 = 7/7, 0 FP; Save 122 =
+      13/24 correct, 4 FP, 5 missed.** Save 420's full 68-quest list did NOT survive (only the summary is in this
+      log), so `save420.partial.md` records the recoverable breakdown + the computed list and flags that the
+      screenshot must be re-supplied to make it a runnable oracle. A `.gitattributes` pins LF on the harness/fixtures
+      (CRLF would break bash + append `\r` to parsed quest names). Accuracy is now measurable every session.
+    - **Angle 1 WALLED: FNV completing stages self-complete; they do NOT hand off to a successor.** The hypothesis
+      was "if a successor S is running, the predecessor P is completed" — build the cross-quest graph from each
+      quest's COMPLETING stage (QSDT-0x01) `StartQuest`/`SetStage` calls and back-propagate "completed". Implemented
+      it conservatively (only completing-stage, non-conditional, successor-running, gated to already-running quests so
+      it can only reclassify active→completed — never add a FP or drop a quest) and measured. **Result: zero useful
+      flips on any oracle.** `qscript` confirms why on the canonical chain: They Went That-a-Way (VMQ01) stage 100
+      (QSDT 0x01) runs `CompleteAllObjectives VMQ01` + `CompleteQuest VMQ01` — it completes *itself*; it never
+      `StartQuest`s Ring-a-Ding-Ding! (VMQ02). The main-quest hand-off is dialogue/world-driven (Benny's INFO starts
+      VMQ02), not a completing-stage script call, so the back-prop graph has essentially no edges — the only edge that
+      fired touched "Happy Trails Expedition", itself an existing false positive. On Save 122 (the measurable oracle)
+      it changed nothing (still 13/24). Reverted; no code shipped. This is the same boundary as Phase C: VMQ01's
+      completion lives in whatever fires `SetStage VMQ01 100`, which is not a said-INFO present in Save 420 (else the
+      existing dialogue seed would already grey it). The remaining concrete angles are #2 (objective-target-ref
+      enable-state) and #4 (CHANGE_QUEST flags on quests that have a change form) — both still under-explored.
 
 ---
 
