@@ -1191,6 +1191,30 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     forward: a quest a said-INFO `StopQuest`s while it had reached a display stage is shown completed/greyed; a quest
     started-then-genuinely-abandoned (rare) could be mislabelled completed. Pinned by `Dialogue_stopped_quest_shows_
     completed_greyed`; full suite green except the pre-existing chargen inventory edge case.
+    **PROGRESS 2026-06-23 — FIRST MID-GAME ORACLE (VNV Extended Save 122, user-screenshotted: 10 active + 14
+    completed = 24 quests) + Phase-B recall fix B1.** The user counted their actual Pip-Boy, giving the first
+    mid/late-game ground truth. Built a reconciliation harness (computed-vs-truth by quest name). **Baseline: 11/24
+    fully correct, 4 false positives, 7 missed, 6 mislabelled** (state wrong) — confirming the honest picture that
+    early-game is exact but mid-game is a rough approximation. Three failure classes, now quantified:
+    (1) **event-completed quests shown active** (6: Ghost Town Gunfight, Come Fly With Me, I Fought the Law, …) — they
+    complete via kills/activators with NO uniform save signal (their own change form carries no completion bit:
+    "Can You Find It in Your Heart?" completed is byte-identical to "ED-E My Love"/"Three-Card Bounty" active; 3 have
+    no change form at all) → this is the **Phase-C boundary** (per-quest event modeling);
+    (2) **false positives** (4: SGE DLC-radio Happy Trails/Sierra Madre/The Reunion suppressed by VNV Extended's
+    DLC-delay mod, + a completed-and-dropped quest) — SGE seeding over-fires on modded saves;
+    (3) **recall misses** (7).
+    **Fix B1 (shipped): apply a said-INFO's `SetObjectiveDisplayed`/`SetObjectiveCompleted` effects** — needed for
+    quests with NO objective-bearing stage (objectives are purely dialogue-driven, e.g. "High Times" / "I Put a Spell
+    on You", whose only stage is a fail stage; the stage reach shows nothing for them). Two precision guards keep it
+    clean: objective effects (a) only apply to quests with no objective-bearing stage (a stage-driven quest gets its
+    objectives from stages, and a stray said line must not resurface it — e.g. "By a Campfire on the Trail"), and
+    (b) only to quests still ACTIVE (running, not completed/failed — a dialogue-completed quest that dropped off the
+    Pip-Boy must not be resurfaced). **Result: Save 122 11→13 correct (+High Times, +I Put a Spell on You), zero new
+    false positives; Save 57 stays 7/7.** Tried B2 (apply *conditional* dialogue `SetStage`) — recovered "Heartache by
+    the Number" but added a false positive ("I Forgot to Remember to Forget"), a precision wash, so **dropped** per the
+    precision-first rule. 2 new tests (`Dialogue_objective_managed_quest_shows…`, `…does_not_resurface_a_completed…`).
+    Next: Phase C (per-quest event-completion detection) for the 6 mislabels. Reconciliation harness + the full
+    Save-122 ground truth are recorded so this stays measurable.
 
 ---
 

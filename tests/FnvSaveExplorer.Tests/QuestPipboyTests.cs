@@ -56,6 +56,45 @@ public class QuestPipboyTests
     }
 
     [Fact]
+    public void Dialogue_objective_managed_quest_shows_via_said_info_objective_effects()
+    {
+        // "High Times" / "I Put a Spell on You" case: a quest with NO objective-bearing stage (only a fail stage) —
+        // its objectives are displayed directly by dialogue. A present said-INFO that starts it AND displays an
+        // objective must surface it active with that objective (the stage reach alone shows nothing).
+        var quest = new TestRecord("QUST", 0x00100020, Edid: "QOBJ2", Full: "Objective Dialogue Quest", Subs:
+        [
+            ("DATA", Data(0x00)),
+            ("INDX", I16(255)), ("QSDT", [0x02]),                     // only a fail stage — no objective-bearing stage
+            ("QOBJ", I16(10)), ("NNAM", Z("Do the dialogue-managed thing")),
+        ]);
+        var pip = ComputeWithDialogue(QuestSave.Build(), [quest],
+            (0x0010A050u, "StartQuest QOBJ2\nSetObjectiveDisplayed QOBJ2 10 1"));
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Objective Dialogue Quest");
+        Assert.Equal(PipboyQuestState.Active, q.State);
+        Assert.Equal(10, Assert.Single(q.Objectives).Index);
+    }
+
+    [Fact]
+    public void Dialogue_objective_effect_does_not_resurface_a_completed_quest()
+    {
+        // The "By a Campfire on the Trail" guard: a quest that a said-INFO completes/stops must NOT be resurfaced by a
+        // later said line's objective effect (it has dropped off the Pip-Boy). Quest has no objective-bearing stage.
+        var quest = new TestRecord("QUST", 0x00100021, Edid: "QGONE", Full: "Resolved Quest", Subs:
+        [
+            ("DATA", Data(0x00)),
+            ("INDX", I16(255)), ("QSDT", [0x02]),
+            ("QOBJ", I16(10)), ("NNAM", Z("Should not resurface")),
+        ]);
+        var pip = ComputeWithDialogue(QuestSave.Build(), [quest],
+            (0x0010A050u, "StartQuest QGONE\nStopQuest QGONE\nSetObjectiveDisplayed QGONE 10 1"));
+
+        // Started + stopped + an objective line said, but it's completed → no displayed objective is applied → it does
+        // not appear as a stray completed entry with an objective.
+        Assert.DoesNotContain(pip.Quests, x => x.Name == "Resolved Quest");
+    }
+
+    [Fact]
     public void Dialogue_stopped_quest_shows_completed_greyed()
     {
         // "Back in the Saddle" case: one said-INFO starts + stages the quest, another said-INFO StopQuests it (the

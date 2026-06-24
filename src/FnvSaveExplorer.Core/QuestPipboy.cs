@@ -159,6 +159,17 @@ public sealed class QuestPipboy
             foreach (var cf in save.EnumerateChangeForms())
                 saidInfoPresent.Add(cf.FormId);
 
+            // Quests whose objectives are displayed by their OWN stage scripts. For these, reaching stages
+            // reconstructs the objective list, so we must NOT also apply a said line's objective effects — a stray
+            // said line that merely references an objective would otherwise surface a stage-driven quest that has long
+            // since resolved (e.g. "By a Campfire on the Trail"). Dialogue objective effects are applied ONLY to the
+            // quests that have no objective-bearing stage at all (their objectives are purely dialogue-driven, e.g.
+            // "High Times" / "I Put a Spell on You", whose only stage is a fail stage).
+            var stageObjManaged = new HashSet<uint>();
+            foreach (var st in states.Values)
+                if (st.Def.Stages.Any(s => QuestScript.Parse(s.ScriptText).Any(e => e.Verb == QuestScriptVerb.SetObjectiveDisplayed)))
+                    stageObjManaged.Add(st.Def.FormId);
+
             // The said-INFOs happened in an unknown order, so accumulate their NET effect per quest rather than
             // applying in dictionary order: a quest is started if any said-INFO starts/stages it; it reached up to
             // the highest non-conditional stage any of them set; and it is done if any non-conditionally completes
@@ -190,6 +201,28 @@ public sealed class QuestPipboy
                             target.Failed = true;
                             break;
                     }
+                }
+            }
+
+            // Second pass — dialogue-driven objectives. Some quests carry NO objective-bearing stage (their objectives
+            // are shown/ticked directly by dialogue, e.g. "High Times" / "I Put a Spell on You", whose only stage is a
+            // fail stage), so the stage reach above displays nothing for them. Apply a said line's objective effects to
+            // surface those — but ONLY for quests that are still ACTIVE (running and not completed/failed): a
+            // dialogue-completed quest that has dropped off the Pip-Boy (e.g. "By a Campfire on the Trail") must not be
+            // resurfaced, and a stage-managed quest already gets its objectives from its stages.
+            foreach (var (infoFormId, effects) in db.DialogueInfoEffects)
+            {
+                if (!saidInfoPresent.Contains(infoFormId))
+                    continue;
+                foreach (var e in effects)
+                {
+                    if (Resolve(e.TargetQuestEdid) is not { Running: true, Completed: false, Failed: false } target
+                        || stageObjManaged.Contains(target.Def.FormId))
+                        continue;
+                    if (e.Verb == QuestScriptVerb.SetObjectiveDisplayed)
+                        target.ObjDisplayed[e.Arg1] = e.Arg2 != 0;
+                    else if (e.Verb == QuestScriptVerb.SetObjectiveCompleted)
+                        target.ObjCompleted[e.Arg1] = e.Arg2 != 0;
                 }
             }
             // Reach every stage up to the highest one a said-INFO set, so the quest's objective-display state is
