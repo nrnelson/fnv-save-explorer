@@ -1215,6 +1215,32 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     precision-first rule. 2 new tests (`Dialogue_objective_managed_quest_shows…`, `…does_not_resurface_a_completed…`).
     Next: Phase C (per-quest event-completion detection) for the 6 mislabels. Reconciliation harness + the full
     Save-122 ground truth are recorded so this stays measurable.
+    **PROGRESS 2026-06-23 — Phase C (event-completion detection) investigated and found WALLED; the SGE-DLC false
+    positives are walled for the same reason. The mid-game error classes are runtime state with no readable save
+    signal.** Pursued the 6 event-completed mislabels (Ghost Town Gunfight, Come Fly With Me, I Fought the Law, …)
+    across every candidate signal:
+    - **Quest's own change form: no completion bit.** "Can You Find It in Your Heart?" (completed) is byte-identical to
+      "ED-E My Love"/"Three-Card Bounty" (active); 3 of the 6 have NO change form at all; the ones that do are tiny
+      misc records (`00 7C`). No flag distinguishes completed from active.
+    - **No completion dialogue** — none of the 6 has a present `CompleteQuest`/`StopQuest` said-INFO.
+    - **Dead-ref signal fails:** Ghost Town Gunfight's 6 kill-target Powder Gangers — 5 of 7 have NO change form on
+      Save 122 (corpses cleaned up long after completion); one still carries an "enabled" marker. Event-completion
+      leaves no trace that survives to a later save.
+    - **SGE DLC false positives (Happy Trails/Sierra Madre/The Reunion) are the SAME class:** their startup guard is
+      `nEnableDLC == 1` where `nEnableDLC` is a **quest-LOCAL** var (not a global), and the quest has no change form,
+      so its value is not persisted — on load it resets to default. Whether the DLC-delay mod set it to 1 (→ shown,
+      like Midnight) vs left it 0 (→ suppressed, like Happy Trails) is runtime state with no readable save signal, and
+      `ScriptStartup`'s satisfiability model can't distinguish them without breaking the vanilla Save-57 case (where
+      these quests are correctly shown).
+    **Conclusion — the accuracy boundary is now precisely characterised.** The interpreter reconstructs the Pip-Boy
+    EXACTLY when quest state is driven by signals the save records: SGE startup at masters defaults (vanilla),
+    formType-7 completion flags, and said-INFO dialogue (start/advance/complete/stop). It CANNOT reconstruct quest
+    state that the engine recomputes from world events at load — event completion (kills/activators), DLC-enable
+    runtime flags, and quests that drop off the Pip-Boy — because those leave no uniform, persistent, readable save
+    signal. **Net: Save 57 (early/vanilla) = 7/7 exact; Save 122 (mid-game/modded) = 13/24 correct + 4 FP + 5 missed,
+    with the remaining gaps being this runtime-state boundary, not a missed field.** Further mid/late-game gains would
+    require either modeling per-quest world-state completion (impractical/fragile, partial coverage) or more
+    ground-truth oracles to safely tune heuristics — i.e. they need new data or accept the boundary, not more decoding.
 
 ---
 
