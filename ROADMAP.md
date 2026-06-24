@@ -1589,6 +1589,24 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     on the miss/mislabel tail (documented): Booted (counter quest, not surfaced/running → can't complete), How Little
     We Know / Crazy Crazy Crazy (not surfaced), Ring-a-Ding-Ding! / That Lucky Old Sun (surfaced active, their
     completing actor isn't in the death registry — cleaned up / different mechanism).
+    **PROGRESS 2026-06-24 (cont.) — chased the two Save-420 kill-tail mislabels; one recovered, one walled.** `qfired`
+    showed neither is actually kill-completed (the ViaKill detection was a red herring — VMS03's "OnDeath" is a
+    conditional fail/complete edge case, VMQTops has none):
+    - **Ring-a-Ding-Ding! (VMQTops) RECOVERED (Save 420 34→35, 0 FP):** a SAID INFO conditionally `SetStage VMQTops
+      80` (its `QuestCompleted` stage) — present in the save, so the line fired, but the dialogue seed only applied
+      NON-conditional SetStage, leaving the SGE quest stuck at its startup stage 5 ("Search the Strip…"). New
+      precision-safe pass: a said-INFO's **conditional `SetStage` to a COMPLETING (QSDT-0x01) stage** of an
+      ALREADY-RUNNING quest reclassifies it active→completed (no add ⇒ no new FP; distinct from the dropped B2 lever
+      which applied conditional SetStage as a START and surfaced wrong quests). A completion line is conditional only
+      on the player's chosen path, which — having said it — they're on. **Results: Save 57 = 7/7, Save 122 = 16
+      (Ring-a-Ding-Ding! correctly stays not-surfaced there — its completion line wasn't said yet), Save 420 = 35
+      (mislabelled 13→12), FP unchanged.** 2 synthetic tests pin it (conditional SetStage→complete completes a
+      running quest; →non-completing stage does not).
+    - **That Lucky Old Sun (VMS03) WALLED:** `qfired` = only `[StartQuest, SetStage 10]` (early); `qcond` = only
+      `GetStage >= 10`. No dialogue or CTDA completion signal exists — HELIOS One completes by **activating the power
+      console** (an activator/world-state event, no kill, no said completion line, no QUST change form: its only
+      change form is a 650-B REFR/alias stub). This is the genuinely-unrecoverable activator-gated class; documented,
+      not pursued (no readable save signal).
 
 ---
 

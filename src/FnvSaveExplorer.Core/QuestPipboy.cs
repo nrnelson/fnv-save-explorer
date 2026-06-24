@@ -246,6 +246,23 @@ public sealed class QuestPipboy
             foreach (var (target, cap) in maxStage)
                 foreach (var sd in target.Def.Stages.Where(s => s.Index <= cap))
                     Reach(target, sd.Index);
+
+            // Conditional dialogue COMPLETION (ROADMAP §6 #16): a said-INFO whose CONDITIONAL `SetStage` targets a
+            // COMPLETING stage (QSDT 0x01) of an ALREADY-RUNNING quest completes it. The line was SAID (its change
+            // form is present), so it fired; a completion line is conditional only on the player's path, which —
+            // having said the line — they're on. Distinct from the dropped B2 lever: this fires ONLY for completing
+            // stages and ONLY on already-running quests, so it strictly reclassifies a shown-active quest to
+            // completed (no add ⇒ no new FP). Recovers e.g. "Ring-a-Ding-Ding!" — the "tell Mr. House/Yes Man the
+            // outcome" line conditionally SetStages VMQTops 80 (its "QuestCompleted" stage).
+            foreach (var (infoFormId, effects) in db.DialogueInfoEffects)
+            {
+                if (!saidInfoPresent.Contains(infoFormId))
+                    continue;
+                foreach (var e in effects)
+                    if (e is { Verb: QuestScriptVerb.SetStage, Conditional: true } && Resolve(e.TargetQuestEdid) is { Running: true, Completed: false } target
+                        && target.Def.Stages.Any(s => s.Index == e.Arg1 && (s.Flags & CompleteQuestStageFlag) != 0))
+                        target.Completed = true;
+            }
         }
 
         // ---- Fixpoint: run reached-stage scripts; non-conditional SetStage/StartQuest expand the running set. ----

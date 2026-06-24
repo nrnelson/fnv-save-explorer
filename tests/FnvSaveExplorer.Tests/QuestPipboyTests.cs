@@ -212,6 +212,45 @@ public class QuestPipboyTests
         Assert.Equal(PipboyQuestState.Active, q.State);
     }
 
+    // A running (SGE) quest whose completing stage 100 is reached only by a CONDITIONAL dialogue SetStage — the
+    // "Ring-a-Ding-Ding!" / VMQTops shape (the "tell Mr. House the outcome" line conditionally SetStages it to its
+    // QuestCompleted stage).
+    private static TestRecord[] ConditionalCompleteRecords() =>
+    [
+        new("QUST", 0x00100032, Edid: "QDLGC", Full: "Conditional Complete Quest", Subs:
+        [
+            ("DATA", Data(0x01)), ("SCRI", U32(0x0010003A)),
+            ("INDX", I16(5)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QDLGC 5 1")),
+            ("INDX", I16(100)), ("QSDT", [0x01]),                                  // completing stage
+            ("QOBJ", I16(5)), ("NNAM", Z("Do the thing")),
+        ]),
+        Scpt(0x0010003A, "SetStage QDLGC 5"),                                     // GameMode startup
+    ];
+
+    [Fact]
+    public void Conditional_dialogue_setstage_to_completing_stage_completes_a_running_quest()
+    {
+        // SAID INFO 0x0010A050 (present in QuestSave.Build) conditionally SetStages the running SGE quest to its
+        // completing stage 100 -> reclassified active -> completed (ROADMAP §6 #16).
+        var pip = ComputeWithDialogueInfos(QuestSave.Build(), ConditionalCompleteRecords(),
+            new TestRecord("INFO", 0x0010A050, null, null, Subs: [("SCTX", Z("if (SomePathVar == 1)\nSetStage QDLGC 100\nendif"))]));
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Conditional Complete Quest");
+        Assert.Equal(PipboyQuestState.Completed, q.State);
+    }
+
+    [Fact]
+    public void Conditional_dialogue_setstage_to_a_non_completing_stage_does_not_complete()
+    {
+        // Guard: a conditional dialogue SetStage to a NON-completing stage (5) must NOT complete the quest — only
+        // completing (QSDT 0x01) stages trigger the reclassify (otherwise this would be the dropped B2 wash).
+        var pip = ComputeWithDialogueInfos(QuestSave.Build(), ConditionalCompleteRecords(),
+            new TestRecord("INFO", 0x0010A050, null, null, Subs: [("SCTX", Z("if (SomePathVar == 1)\nSetStage QDLGC 5\nendif"))]));
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Conditional Complete Quest");
+        Assert.Equal(PipboyQuestState.Active, q.State);
+    }
+
     private static TestRecord DialogueQuest() => new("QUST", 0x00100010, Edid: "QDLG", Full: "Dialogue Quest", Subs:
     [
         ("DATA", Data(0x00)),                                          // not SGE, not a QUST-propagation target
