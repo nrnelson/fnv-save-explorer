@@ -1375,7 +1375,9 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       so the VNV-Extended delay mod's runtime suppression of `nEnableDLC` (a quest-local) leaves no save signal.
     - **Missed ACTIVE quests (Heartache, Wild Card series, House Always Wins II):** their starting/advancing dialogue
       SetStage is SCRIPT-conditional (`if (...) SetStage X N` inside the INFO result script) — applying those is the
-      already-dropped B2 ~1:1 recall/precision wash, so not reinstated. `qfired` confirms e.g. Heartache fires only
+      already-dropped B2 ~1:1 recall/precision wash, RE-MEASURED with the current CTDA code (apply conditional
+      dialogue SetStage as a start): Save 122 +1 correct / +1 FP (precision 83→80%), Save 420 +1 / +1 (94→92%) —
+      a net FP increase, so NOT reinstated. `qfired` confirms e.g. Heartache fires only
       `[SetStage 7/6/5 ?]` (all conditional). Same cause as the vanilla q8 "Ghost Town Gunfight" miss: its pickup
       line (INFO 0x00104C54) does a conditional `SetStage VMS16 5` with no CTDA to anchor it, so q8/q9 miss it
       (q10+ surface it once a NON-conditional `SetStage 50` line is said). A precise fix needs evaluating the
