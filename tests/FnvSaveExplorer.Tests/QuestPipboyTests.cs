@@ -84,6 +84,30 @@ public class QuestPipboyTests
     }
 
     [Fact]
+    public void Said_info_ctda_getstage_advances_a_running_quests_objectives()
+    {
+        // ROADMAP §6 #16 CTDA stage advance: a said-INFO 0x0010A001 with GetStage QADV >= 50 proves QADV reached
+        // stage 50, so its stage-50 objective should display even though only stage 5 was reached by the start line.
+        var quest = new TestRecord("QUST", 0x00100031, Edid: "QADV", Full: "Advancing Quest", Subs:
+        [
+            ("DATA", Data(0x00)),
+            ("INDX", I16(5)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QADV 5 1")),
+            ("INDX", I16(50)), ("QSDT", [0x00]), ("SCTX", Z("SetObjectiveDisplayed QADV 50 1")),
+            ("INDX", I16(100)), ("QSDT", [0x01]),
+            ("QOBJ", I16(5)), ("NNAM", Z("Early step")),
+            ("QOBJ", I16(50)), ("NNAM", Z("Later step")),
+        ]);
+        var pip = ComputeWithDialogueInfos(QuestSave.Build(), [quest],
+            new TestRecord("INFO", 0x0010A050, null, null, Subs: [("SCTX", Z("SetStage QADV 5"))]),
+            new TestRecord("INFO", 0x0010A001, null, null,
+                Subs: [("CTDA", EsmBuilder.Ctda(op: 3, compareValue: 50, function: (uint)QuestFunction.GetStage, param1: 0x00100031))]));
+
+        var q = Assert.Single(pip.Quests, x => x.Name == "Advancing Quest");
+        Assert.Equal(PipboyQuestState.Active, q.State);
+        Assert.Contains(q.Objectives, o => o.Index == 50);   // the later objective the CTDA stage proof revealed
+    }
+
+    [Fact]
     public void Ctda_completion_does_not_surface_a_quest_that_is_not_running()
     {
         // Precision guard: the CTDA completion only RECLASSIFIES already-running quests. With no said-INFO starting

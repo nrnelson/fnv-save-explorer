@@ -291,6 +291,46 @@ public sealed class QuestPipboy
             var saidPresent = new HashSet<uint>();
             foreach (var cf in save.EnumerateChangeForms())
                 saidPresent.Add(cf.FormId);
+
+            // CTDA stage advance (ROADMAP §6 #16): a said-INFO's GetStage X >= N (or == / >) and GetStageDone X N
+            // prove X REACHED stage N when the line fired. For a quest we ALREADY surface as running, reach that
+            // stage so its objective state advances — and if N is at/after a completing stage, the stage reach
+            // completes it (catching mislabels the completion pass alone misses). Gated to already-running quests
+            // (target.Running), so it advances/reclassifies without adding a Pip-Boy entry — the computed count is
+            // unchanged, so it cannot introduce a false positive. (Surfacing not-running quests from these proofs
+            // was measured: +1 more on Save 420 but it adds entries → the completed-and-dropped FP risk; deferred,
+            // same as the Lever-1 note above.) Validated +1 on Save 420, 0 regression on Save 57/122.
+            static int? ProvenStage(InfoCondition c) => c.Function switch
+            {
+                QuestFunction.GetStage when c.Op is 0 or 2 or 3 => (int)c.CompareValue,        // == / > / >= N
+                QuestFunction.GetStageDone when c.Op is 0 or 3 && c.CompareValue >= 1 => c.Param2,
+                _ => null,
+            };
+            foreach (var (infoFormId, conditions) in db.DialogueInfoConditions)
+            {
+                if (!saidPresent.Contains(infoFormId))
+                    continue;
+                foreach (var c in conditions)
+                    if (states.TryGetValue(c.QuestFormId, out var target) && target.Running // running-only: no new quests
+                        && ProvenStage(c) is { } ps)
+                        foreach (var sd in target.Def.Stages.Where(s => s.Index <= ps))
+                            Reach(target, sd.Index);
+            }
+            while (work.Count > 0) // settle any cross-quest effects the newly-reached stages triggered
+            {
+                var (_, stage) = work.Dequeue();
+                foreach (var e in QuestScript.Parse(stage.ScriptText))
+                    if (Resolve(e.TargetQuestEdid) is { } t)
+                        switch (e.Verb)
+                        {
+                            case QuestScriptVerb.StartQuest: t.Running = true; break;
+                            case QuestScriptVerb.SetStage when !e.Conditional: Reach(t, e.Arg1); break;
+                            case QuestScriptVerb.StopQuest: t.Running = false; break;
+                            case QuestScriptVerb.CompleteQuest: t.Completed = true; break;
+                            case QuestScriptVerb.FailQuest: t.Failed = true; break;
+                        }
+            }
+
             foreach (var (infoFormId, conditions) in db.DialogueInfoConditions)
             {
                 if (!saidPresent.Contains(infoFormId))
@@ -300,6 +340,12 @@ public sealed class QuestPipboy
                         && ImpliesCompleted(c, target.Def))
                         target.Completed = true;
             }
+            // NB: a tried-and-reverted "Lever 1" also SURFACED implied-completed quests we don't otherwise compute
+            // (reach their stages so they render greyed). It gained +1 on Save 420 with 0 measured FP across all three
+            // oracles, but it removes the provable "can only reclassify a shown quest" guarantee — a completed-and-
+            // dropped quest (one the engine removes from the Pip-Boy on completion, like The Finger of Suspicion)
+            // would become a false positive on a real playthrough we can't measure. Deferred until the "drops off
+            // the Pip-Boy" quest flag is decoded, which would let it be done safely (ROADMAP §6 #16).
         }
 
         // ---- Apply each quest's reached-stage objective effects in stage order to settle objective state. ----

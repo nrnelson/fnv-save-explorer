@@ -1356,6 +1356,30 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     (`Said_info_ctda_precondition_completes_a_running_quest` + below-completing-stage guard + not-running/no-add
     guard). Tooling: CLI `qcond`. Remaining gaps: bucket-C event-completed quests with no said-INFO completion gate
     (the documented tail) + the 21 missed (mostly completed-and-dropped) on Save 420.
+    **PROGRESS 2026-06-24 (cont., AFK session) — CTDA STAGE ADVANCE shipped (Save 420 32→33); plus several levers
+    measured and walled/deferred with evidence.** Generalised the CTDA signal: a said-INFO's `GetStage X >= N`
+    (`==`/`>`) or `GetStageDone X N` proves X reached stage N when the line fired, so for an ALREADY-RUNNING quest
+    we reach that stage — advancing its objectives and, when N is at/after a completing stage, completing it
+    (catching a mislabel the completion-pass `ImpliesCompleted` alone missed). Gated to `target.Running` so the
+    computed count is unchanged (no added entry → provably no new FP). **Save 420 = 33/68 (mislabelled 15→14),
+    Save 57 = 7/7, Save 122 = 15/24, FP unchanged everywhere.** Pinned by
+    `Said_info_ctda_getstage_advances_a_running_quests_objectives`. Levers measured this session:
+    - **Surface NOT-running quests from CTDA proofs (Lever 1 + ungated Lever 3):** +1 each on Save 420 (0 measured
+      FP on all 3 oracles) but they ADD Pip-Boy entries, reintroducing the completed-and-dropped FP risk on
+      unmeasured real saves (e.g. The Finger of Suspicion drops off the log after completion). DEFERRED until the
+      "drops off the Pip-Boy after completion" quest flag is decoded — checked QUST `DATA` byte 0: Finger of
+      Suspicion is `0x00`, identical to staying-completed quests (G.I. Blues / Volare! / Ghost Town Gunfight), so
+      that flag is NOT the visibility discriminator. Open.
+    - **SGE DLC-radio FPs (Happy Trails / Sierra Madre) WALLED (re-confirmed):** their NVDLC0xMQ00 GameMode is the
+      vanilla `nEnableDLC` 0→1→2 DLC-start chain; the quest has no change form and there is no DLC-enable global,
+      so the VNV-Extended delay mod's runtime suppression of `nEnableDLC` (a quest-local) leaves no save signal.
+    - **Missed ACTIVE quests (Heartache, Wild Card series, House Always Wins II):** their starting/advancing dialogue
+      SetStage is SCRIPT-conditional (`if (...) SetStage X N` inside the INFO result script) — applying those is the
+      already-dropped B2 ~1:1 recall/precision wash, so not reinstated. `qfired` confirms e.g. Heartache fires only
+      `[SetStage 7/6/5 ?]` (all conditional). Same cause as the vanilla q8 "Ghost Town Gunfight" miss: its pickup
+      line (INFO 0x00104C54) does a conditional `SetStage VMS16 5` with no CTDA to anchor it, so q8/q9 miss it
+      (q10+ surface it once a NON-conditional `SetStage 50` line is said). A precise fix needs evaluating the
+      result-script internal `if` guards (a future enhancement, not a free win).
 
 ---
 
