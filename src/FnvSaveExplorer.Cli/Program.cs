@@ -103,6 +103,10 @@ try
         case "hex":
             Hex(FalloutSave.Load(path), ParseOffset(args[2]), args.Length > 3 ? int.Parse(args[3]) : 128);
             break;
+        case "gddump":
+            GlobalDataDump(FalloutSave.Load(path), path, (int)ParseOffset(args[2]),
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path && a != args[2]));
+            break;
         case "globals":
             Globals(FalloutSave.Load(path));
             break;
@@ -291,6 +295,31 @@ static int Check(string path)
         ? $"OK: round-trip is byte-identical ({original.Length:N0} bytes)."
         : "FAIL: round-trip differs from original!");
     return identical ? 0 : 3;
+}
+
+static void GlobalDataDump(FalloutSave s, string savePath, int type, string? dataDir)
+{
+    // ROADMAP §6 #16 bucket-C decode: dump a GlobalData table as 0x7C-delimited tokens, resolving any 3-byte
+    // token as a refID -> FormID (+ masters name). Used to crack GlobalData type-2 ("TES"), which holds the
+    // kill/death registry the engine re-derives kill-completed quests from.
+    var g = s.GlobalDataTable1.FirstOrDefault(x => x.Type == (uint)type);
+    if (g is null) { Console.WriteLine($"No GlobalData type {type}."); return; }
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    var fields = ReferenceChangeForm.Tokenize(g.Data, g.DataOffset);
+    Console.WriteLine($"GlobalData type {type}: {g.Data.Length} bytes @ 0x{g.DataOffset:X}, {fields.Count} tokens");
+    for (var i = 0; i < fields.Count; i++)
+    {
+        var f = fields[i];
+        var hex = string.Join(" ", f.Bytes.Select(b => b.ToString("X2")));
+        var ann = "";
+        if (f.AsRefId is { } raw && raw != 0)
+        {
+            var formId = s.ResolveRefId(raw);
+            if (formId != 0) ann = $"   -> 0x{formId:X8} {db.Resolve(formId) ?? db.RecordType(formId) ?? ""}";
+        }
+        else if (f.AsUInt32 is { } v && v != 0) ann = $"   = {v}";
+        Console.WriteLine($"  [{i,3}] ({f.Length}B) {hex,-14}{ann}");
+    }
 }
 
 static void Globals(FalloutSave s)

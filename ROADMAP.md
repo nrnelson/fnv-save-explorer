@@ -1417,6 +1417,23 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     (the §6 #10 angle-2, now with a concrete signal). VMS16 itself won't benefit (its QSTA targets are markers, not
     the killed actors — its binding is compiled `OnDeath` only), so this is a partial, per-quest-shaped win, not a
     general solution. Pursue only with a validation plan (it can't be measured on the three oracles cleanly).
+    **PROGRESS 2026-06-24 (cont.) — GlobalData type-2 ("TES") DECODED (structure cracked + `gddump` tool shipped),
+    but it does NOT yield a generic kill-completion signal — the binding wall holds.** Decoded the type-2 payload:
+    `[vsval count][7C]` then `count × ([refID:3][7C][u16 status][7C])` then a fixed tail (`05 00 00 00` + zeros).
+    Verified: `gtg-active` count=0 (empty), `gtg-complete` count=6 — the 6 entries resolve to the Goodsprings
+    Powder Ganger refs (`0x00104C67`/`6F`/`76`/`6A`/`71` + a created ref), each status `1`, added exactly on death.
+    So type-2 is a **registry of state-changed references** (not deaths-only): on Save 420 it has **451** mixed
+    entries (the first is "East Central Sewer Key"), with status codes spread 1–7 (semantics per-code not pinned —
+    "label, don't guess"). **Why it doesn't help quest completion:** (a) membership ≠ death (mixed registry, status
+    semantics unpinned); (b) the binding gap persists — intersecting Save 420's registry with the **mislabeled**
+    quests' objective-target refs, **5 of 6 have ZERO overlap** (their `QSTA` targets are markers, exactly like
+    VMS16), and the one that overlaps ("Can You Find It in Your Heart?") is already completed by the CTDA pass. So
+    even fully decoded, the registry can't drive completion for the marker-target event-quests that dominate bucket
+    C. **Net: a real format decode (type-2 structure + `gddump` diagnostic, which dumps any GlobalData table as
+    0x7C tokens with refID→FormID resolution), but no accuracy gain — bucket-C completion remains gated on the
+    compiled-script quest↔kill-target binding, which is not in readable save+masters data.** A validatable
+    assassination/bounty quest (objective `QSTA` = the actual killed NPC) would be the only way to test a partial
+    death-state angle; none of the current oracles or captures provide one.
 
 ---
 
