@@ -1382,6 +1382,30 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       line (INFO 0x00104C54) does a conditional `SetStage VMS16 5` with no CTDA to anchor it, so q8/q9 miss it
       (q10+ surface it once a NON-conditional `SetStage 50` line is said). A precise fix needs evaluating the
       result-script internal `if` guards (a future enhancement, not a free win).
+    **PROGRESS 2026-06-24 (cont.) — BUCKET-C CONTROLLED DIFF (kill-completion): the prior "event-completion leaves
+    no readable save signal" is TOO STRONG — the kill IS persisted, but the quest↔kill binding is compiled-script
+    only, so it stays not-generically-recoverable.** The user captured a clean vanilla before/after pair across the
+    natural combat completion of "Ghost Town Gunfight" (VMS16 `0x00104EAE`): `gtg-active.fos` (quest active, fight
+    breaking out) → `gtg-complete.fos` (last Powder Ganger killed → quest greyed in the Pip-Boy). Findings from
+    `idiff`/`globals`/`cf`/`quests`:
+    - **VMS16 has NO QUST change form in EITHER save** (the `quests`/QuestLog reader finds the same 2 quests in
+      both; `cf 0x00104EAE` = none). So a kill-completed quest does NOT persist its stage/objective state in a
+      per-quest record — re-confirmed, and now for the completion transition specifically.
+    - **The completion IS persisted, as WORLD STATE.** `gtg-complete` has +15 change forms. The cleanest signal is
+      in **GlobalData type 2 ("TES")**, which grew 107→149 B by inserting a structured **6-entry `(ref, status=1)`
+      list** — `00 21 BC` / `00 21 BD` / … / `00 21 C1`, six consecutive ref IDs — appearing exactly with the 6
+      kills, alongside 6 new `type 0x32` runtime records (len-10 `[u32][7C][u32][7C]` counters) and a `type 0x32`
+      increment (`0x0011EB96` 02→03) + ACHR death/havok deltas. So a kill event leaves a **readable, structured,
+      persistent** save signal (a death/kill registry in GlobalData type-2). This is a concrete decode target.
+    - **The blocker is the quest↔kill-target binding.** VMS16 objective 70 "Defeat the Powder Gangers" `QSTA`
+      targets are 6 MARKER refs (`0x00104C70/75/73/68/72/77`) — NOT the killed actors (the dead ACHRs / the type-2
+      list refs). The "6 gangers dead ⟹ SetStage VMS16 100" logic lives in the actors' compiled `OnDeath` scripts
+      (SCDA bytecode + a quest-local `nGangerDeathCount`), which we do NOT read (we read quest/INFO SCTX source, not
+      compiled actor scripts). So even with the death registry decoded, mapping it to a quest completion can't be
+      done generically from save + readable masters — it needs per-quest, compiled-script modeling (the deferred
+      fragile path). Nothing speculative shipped (no-guess rule). **Net: bucket C is re-characterised — kill events
+      ARE in the save (GlobalData type-2 death registry + ACHR death state); the wall is the kill-target↔quest
+      binding, not absence of signal. Dataset kept: `gtg-active.fos` / `gtg-complete.fos` (vanilla Saves folder).**
 
 ---
 
