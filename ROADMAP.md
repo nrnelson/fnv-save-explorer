@@ -867,8 +867,16 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     are deliberately left as `0`/unknown rather than resolved on an unverified Skyrim-spec guess — per the repo's
     "don't guess" rule, surfacing an unseen type as unknown is honest and would flag the surprise. Unit + real-save
     tests pin the split and the created-form resolution. 768 green.
-16. **Gamebryo quest-script interpreter — the full Pip-Boy quest list** (NEW — IN SCOPE, not started; the
-    successor to §6 #10). **Why:** §6 #10 decoded the quest progress the *save* records (stage lists + the
+16. **Gamebryo quest-script interpreter — the full Pip-Boy quest list** (the successor to §6 #10).
+    **STATUS (2026-06-24): BUILT, SHIPPED (CLI `pipboy` + GUI Quests tab), and validated on 3 ground-truth oracles —
+    vanilla Save 57 = 7/7 EXACT (0 FP); VNV Extended Save 122 (mid) = 13/24; Save 420 (late) = 28/68 at 94% precision.
+    `QuestPipboy.Compute` combines masters quest scripts + SGE startup (`ScriptStartup` guard eval) + the formType-7
+    completion anchor + the said-INFO dialogue seed (Phase B). The remaining gap is a precisely-characterised
+    BOUNDARY, not unfinished decode: event-completed quests (kills/activators) show active-not-completed and some
+    dialogue/event starts are missed, because the engine recomputes that state from world events at load and it leaves
+    no readable, persistent save signal. Precision stays ~94% at all playthrough lengths; recall/state degrade with
+    length. See the dated progression log below for the full derivation; the original framing follows.**
+    **Why:** §6 #10 decoded the quest progress the *save* records (stage lists + the
     `CHANGE_QUEST_OBJECTIVES` display/complete status), but the in-game Pip-Boy list is **computed by the engine
     from save + masters + compiled scripts**. Proven this session: **Start-Game-Enabled** quests sitting at their
     masters default leave **no save delta at all** — e.g. "They Went That-a-Way" (`0x000842DD`) is type QUST,

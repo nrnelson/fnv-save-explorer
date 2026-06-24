@@ -27,7 +27,8 @@ a CLI — and validated against real saves.
 | **Caps** (the `0x0000000F` "Bottle Cap" stack) | ✅ decoded **and safely editable** |
 | **Karma + XP** (float actor-values in the player reference) | ✅ decoded **and safely editable** — cracked via a float-aware diff (slot 100 = karma, 101 = XP), confirmed on a 2nd character |
 | **Pip-Boy notes** (Data → Notes, read **and** unread) | ✅ fully decoded — read markers (corpus-proven over 45,783) + the acquired-notes ref-list in the player inventory record; CLI + GUI show the full list with read/unread status + media type (Text/Voice/Sound/Image). Read-only |
-| **Change forms** (perks, other per-actor state) | 🔬 walker + inventory + skills + per-stack extra data + notes decoded; remaining per-record internals (perks, quest/script state) **next** |
+| **Pip-Boy quest list** (the computed in-game Quests tab) | 🟢 computed by `QuestPipboy` from masters quest scripts + save signals (SGE startup, formType-7 completion, said-INFO dialogue), not just read from the save (ROADMAP §6 #16); CLI `pipboy` + GUI. Validated on 3 Pip-Boy screenshots: vanilla early = **7/7 exact**; modded mid = 13/24; modded late = 28/68 at **94% precision**. **Boundary:** quests completed via world events (kills/activators) show active-not-completed — the engine recomputes that at load with no readable save signal. Read-only |
+| **Change forms** (perks, other per-actor state) | 🔬 walker + inventory + skills + per-stack extra data + notes + quest state decoded; remaining per-record internals (perks) **next** |
 
 ## The `.fos` format (validated against real New Vegas saves)
 
