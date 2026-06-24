@@ -1574,6 +1574,21 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       1 dead → stays active). Cost: the worldspace ACHR scan adds ~1–2 s to `pipboy` (acceptable). **Net: GTG —
       the canonical bucket-C kill-count quest — is now recovered end-to-end by replicating the masters rule against
       the persisted dead actors, exactly what the engine does internally at load.**
+    **CORPUS SPOT-CHECK 2026-06-24 (cont.) — the GTG counter completion is validated across the FULL VNV-Extended
+    Courier playthrough (485 saves), not just the controlled pair.** Tracing Ghost Town Gunfight through the early
+    Courier saves: Save 20–21 (Goodsprings/Saloon) not-yet-started; Save 22–23 (Gas Station, pre-fight) **active**,
+    `derived=0`; **Save 24 (post-fight) → completed, `derived=7 (6 placed + 1 spawned)`**; Saves 25/26/28/122/420
+    all completed (Save 28 `derived=9 (6 placed + 3 spawned)`). So GTG flips active→completed at exactly the save
+    the fight ends and stays completed for the rest of the run — with **no false completion** on the pre-fight saves
+    (`derived=0` → stays active). This also exercised two things the gtg pair never did: the **VNV mod bumps the
+    threshold to 7** (the masters `>= N` is read per-load-order, so it's correct automatically) and **multiple
+    spawned gangers** (1→3 created references), all bound via the created-reference→template→base chain. Oracle
+    cross-check of the kill-reachable quests vs ground truth: **I Fought the Law completed correctly on Save 122 AND
+    420; Return to Sender completed on 420; GTG completed on 122/420** (it also completes via the CTDA pass once a
+    later GTG-referencing line is said — the counter pass uniquely covers the post-fight window before that). Still
+    on the miss/mislabel tail (documented): Booted (counter quest, not surfaced/running → can't complete), How Little
+    We Know / Crazy Crazy Crazy (not surfaced), Ring-a-Ding-Ding! / That Lucky Old Sun (surfaced active, their
+    completing actor isn't in the death registry — cleaned up / different mechanism).
 
 ---
 
