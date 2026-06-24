@@ -1,0 +1,31 @@
+# Save 122 — VNV Extended "Courier", New Vegas Strip (mid-game)
+# Ground truth: user Pip-Boy screenshot (2026-06-23). 24 quests = 10 active + 14 completed.
+# Recovered verbatim from the prior session's reconciliation harness (/tmp/gt) 2026-06-24.
+# Documented baseline: 13/24 correct, 6 mislabelled, 4 false positives, 5 missed (computed 23).
+save = C:\Modding\Viva New Vegas\profiles\Viva New Vegas Extended\saves\Save 122   Courier  New Vegas Strip  12 42 09.fos
+
+active = ED-E My Love
+active = Heartache by the Number
+active = High Times
+active = I Put a Spell on You
+active = Midnight Science-Fiction Feature!
+active = Ring-a-Ding-Ding!
+active = The House Always Wins, I
+active = They Went That-a-Way
+active = Three-Card Bounty
+active = You Can Depend on Me
+
+completed = Ain't That a Kick in the Head
+completed = Back in the Saddle
+completed = Booted
+completed = Can You Find It in Your Heart?
+completed = Come Fly With Me
+completed = G.I. Blues
+completed = Ghost Town Gunfight
+completed = Guess Who I Saw Today
+completed = I Fought the Law
+completed = Keep Your Eyes on the Prize
+completed = My Kind Of Town
+completed = Nothin' But a Hound Dog
+completed = One for My Baby
+completed = Unfriendly Persuasion

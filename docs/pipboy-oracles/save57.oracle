@@ -1,0 +1,13 @@
+# Save 57 — vanilla "Nathan", Prospector Saloon
+# Ground truth: user Pip-Boy screenshot (2026-06-23). 7 quests = 5 active + 2 completed.
+# This is the EARLY-GAME / VANILLA oracle. Computed Pip-Boy must stay 7/7 EXACT, 0 FP.
+save = C:\Users\Nathan\Documents\My Games\FalloutNV\Saves\Save 57   Nathan  Prospector Saloon  00 38 10.fos
+
+active = Happy Trails Expedition
+active = Midnight Science-Fiction Feature!
+active = Sierra Madre Grand Opening!
+active = The Reunion
+active = They Went That-a-Way
+
+completed = Ain't That a Kick in the Head
+completed = Back in the Saddle
