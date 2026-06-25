@@ -1620,6 +1620,48 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       the parser + the enabled-ref detector (full chain validated on the Save-420 ground truth). **Net: the
       activator-gated class is NOT unrecoverable — the completion's world-state side effects are the readable signal.**
 
+    ### §6 #16 SYNTHESIS — the generalizable completion-evaluator pattern (READ THIS before declaring any quest "walled")
+
+    Every recovery in this section turned out to be the SAME shape, and several were wrongly called "impossible"
+    first. **The governing fact: the engine reconstructs the Pip-Boy from the save + masters ALONE at load — so a
+    readable signal ALWAYS exists. The default belief must be "find it," not "it can't be done." Exhaust the search
+    (and do a controlled diff: a save just-before vs just-after the event) before ever calling something walled.**
+
+    **The principle:** a quest's state = the fixpoint of every script effect (`CompleteQuest` / `SetStage`-to-
+    complete / `SetObjectiveCompleted` / `StartQuest`) whose **trigger fired** (visible as a persisted save trace)
+    AND whose **guard holds** (against persisted state). The engine runs this live; we REPLICATE it from readable
+    SCTX source + persisted traces — NO script interpretation needed. The only thing that varies per quest is the
+    **trigger type**, and each leaves a specific kind of save trace:
+
+    | Trigger (read from the script's `Begin <block>`) | Save signal we read | Shipped handler |
+    |---|---|---|
+    | `OnDeath` / kill | GlobalData type-2 death registry + created-ref corpse + ACHR lifestate | single-kill + counter passes (`DeadReferences`, `CreatedReferenceForms`, `ActorScripts`/`PlacedActorBases`) |
+    | `OnActivate` / GameMode `.Enable` | enabled-ref state (FORM_FLAGS clears 0x800 / enable marker) | `EnabledReferences` + `CompletionEnableRefs` |
+    | dialogue (INFO result script) | the INFO present as a change form (it was SAID) | dialogue seed + CTDA-on-said-INFO + conditional-SetStage-to-complete |
+    | GameMode counter guard (`counter >= N`) | count of the persisted trigger events | `CounterGates` + the counter pass |
+    | stage / objective set, SGE startup | QUST change form / formType-7 / masters SGE defaults | `QuestLog`, formType-7 seed, `ScriptStartup` |
+
+    **What we have:** the META-pattern (reliable) + the ~6 handlers above. Each pass is precision-gated to
+    ALREADY-RUNNING quests (reclassify-only ⇒ no added entry ⇒ no new FP), validated at every step against the 3
+    oracles + the gtg/HELIOS controlled diffs.
+    **What is NOT yet built (the path to making this automatic):**
+    1. **A unified `CompletionRule` catalog** — today each pass independently scrapes its own effects (`CounterGates`,
+       `CompletionEnableRefs`, dialogue effects, `ExternalQuestEffects`). They should be ONE per-quest list of
+       `{Verb, TargetQuest, Stage/Obj, TriggerKind, Binding(actor/ref/info FormIds), Guard}`, harvested once.
+    2. **More trigger types** (`OnHit`/`OnTrigger`/timers/package-done) — each NEW one needs a controlled diff first
+       to LEARN its save trace, then a handler; once added it applies to ALL quests with that trigger.
+    3. **A general guard/condition evaluator over the decoded save** (`GetDead`/`GetStage`/`GetObjectiveCompleted`/
+       `GetItemCount`/globals/quest-vars) — the hard, FP-prone, inherently-partial piece. We currently SIDESTEP guards
+       (the "line was said ⇒ on that path" proxy in the conditional-dialogue pass) or handle them ad hoc (counter
+       thresholds, CTDA functions). A real evaluator would unlock many conditional effects at once.
+    **Target architecture:** `CompletionRule` catalog → `SaveSignalEvaluator.TriggerFired(rule, save, db)` (dispatch
+    on TriggerKind — we already have most of these checks, just scattered) → `GuardEvaluator.Holds(guard, save, db)`
+    (the new build) → a fixpoint applying fired-and-held rules, gated to running.
+    **Hard constraint:** validation is capped at 3 ground-truth oracles (Saves 57/122/420) + controlled pairs; a
+    general framework needs MORE in-game Pip-Boy screenshots to validate broadly without sneaking in false positives.
+    **Net score this phase:** Save 57 = 7/7, Save 122 = 16/24, Save 420 = 36/68, ~94% precision — and the "walled"
+    classes (spawned-kill, conditional-dialogue, activator/world-state) are all now recoverable.
+
 ---
 
 ## 7. The controlled-diff methodology (how to crack §6.4 and the like)
