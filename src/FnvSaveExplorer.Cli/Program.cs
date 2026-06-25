@@ -50,6 +50,9 @@ if (args.Length < 2)
                                               hides header/screenshot churn, 'cf' restricts to change forms
                                               and names the containing record for each differing run
           fnvsave walk <save.fos>             Walk all change-form records (validates the header format; R&D)
+          fnvsave survey <save.fos|dir> [0xNN]   Decode-coverage survey (§6 #1a): per change-form FORM TYPE,
+                                              the payload length/changeFlags distribution across the corpus;
+                                              with a type byte, a per-offset constancy map per (flags,len) group
           fnvsave refdump <save.fos> [iref]  Decode a reference change form (default: the player inventory
                                               record): changeFlags bits + the typed-entry ExtraDataList walk
                                               (bounded by the located first item) + 0x7C-field walk (R&D §4i)
@@ -74,6 +77,15 @@ if (command is "edlscan" or "invsig" or "notescan" or "q7corpus")
     if (!Directory.Exists(path))
     {
         Console.Error.WriteLine($"Directory not found: {path}");
+        return 1;
+    }
+}
+// `survey` accepts EITHER a single save or a folder (it aggregates the corpus when given a folder).
+else if (command == "survey")
+{
+    if (!Directory.Exists(path) && !File.Exists(path))
+    {
+        Console.Error.WriteLine($"Not found: {path}");
         return 1;
     }
 }
@@ -157,6 +169,14 @@ try
         case "walk":
             Walk(FalloutSave.Load(path));
             break;
+        case "survey":
+        {
+            // ROADMAP §6 #1a: characterize each change-form type's payload across the corpus.
+            // Optional 2nd arg = a form-type byte (0x.. or decimal) to deep-dive that one type.
+            int? only = args.Length > 2 ? (int)ParseOffset(args[2]) : null;
+            Survey(path, only);
+            break;
+        }
         case "refdump":
             RefDump(FalloutSave.Load(path), path, args.Length > 2 ? (int)ParseOffset(args[2]) : (int?)null);
             break;
@@ -1503,6 +1523,127 @@ static void Walk(FalloutSave s)
     foreach (var cf in s.EnumerateChangeForms().OrderByDescending(c => c.DataLength).Take(12))
         Console.WriteLine($"   @0x{cf.Offset:X}  iref {cf.Iref,6} -> 0x{cf.FormId:X8}  type 0x{cf.TypeByte:X2}  flags 0x{cf.ChangeFlags:X8}  len {cf.DataLength,7:N0}");
 }
+
+// ROADMAP §6 #1a — decode-COVERAGE SURVEY. Aggregates, per change-form FORM TYPE (the low 6 bits of
+// the type byte, §4f), the payload shape across the whole corpus: how many records, the length
+// distribution (a single dominant length => a fixed-width struct, easy to decode; a spread => variable),
+// the distinct changeFlags values (the flags GATE which sub-blocks are present, §8a's ordered model), and
+// — when one type is deep-dived — a per-offset CONSTANCY MAP: across every record sharing a (changeFlags,
+// length) group, which byte positions are CONSTANT (delimiters / type tags / structure) vs VARIABLE (data
+// fields). Constant positions reveal field boundaries directly. Pure corpus alignment — no masters, no
+// in-game saves, read-only. This is the autonomous structural microscope the full-decode work runs on.
+static void Survey(string pathOrDir, int? onlyType)
+{
+    var files = Directory.Exists(pathOrDir)
+        ? Directory.EnumerateFiles(pathOrDir, "*.fos").OrderBy(f => f).ToList()
+        : [pathOrDir];
+    Console.WriteLine($"Surveying {files.Count} save(s){(onlyType is { } t ? $" — deep-dive form type 0x{t:X2}" : "")}\n");
+
+    // Per form type: counts + a length histogram + a changeFlags histogram. For a deep-dive we also keep,
+    // per (changeFlags,length) group, a per-offset byte tally so we can report which positions are constant.
+    var recCount = new SortedDictionary<int, long>();
+    var lenHist = new SortedDictionary<int, SortedDictionary<int, int>>();   // type -> (len -> count)
+    var flagHist = new SortedDictionary<int, Dictionary<uint, int>>();        // type -> (flags -> count)
+    // Deep-dive constancy: (flags,len) -> per-offset [value -> count] for the leading bytes.
+    const int ConstancyBytes = 96;   // cap how many leading payload bytes we profile per group
+    var constancy = new Dictionary<(uint Flags, int Len), Dictionary<int, int>[]>();
+    var groupCount = new Dictionary<(uint Flags, int Len), int>();
+    var groupExample = new Dictionary<(uint Flags, int Len), string>();
+
+    static void Bump<TK>(IDictionary<TK, int> d, TK k) => d[k] = d.TryGetValue(k, out var v) ? v + 1 : 1;
+
+    int parsed = 0, failed = 0;
+    foreach (var f in files)
+    {
+        FalloutSave s;
+        try { s = FalloutSave.Load(f); } catch { failed++; continue; }
+        parsed++;
+        foreach (var cf in s.EnumerateChangeForms())
+        {
+            var ft = cf.FormType;
+            recCount[ft] = recCount.GetValueOrDefault(ft) + 1;
+            if (!lenHist.TryGetValue(ft, out var lh)) lenHist[ft] = lh = new SortedDictionary<int, int>();
+            Bump(lh, cf.DataLength);
+            if (!flagHist.TryGetValue(ft, out var fh)) flagHist[ft] = fh = new Dictionary<uint, int>();
+            Bump(fh, cf.ChangeFlags);
+
+            if (onlyType == ft)
+            {
+                var key = (cf.ChangeFlags, cf.DataLength);
+                Bump(groupCount, key);
+                if (!constancy.TryGetValue(key, out var perOff))
+                {
+                    perOff = new Dictionary<int, int>[Math.Min(cf.DataLength, ConstancyBytes)];
+                    for (var i = 0; i < perOff.Length; i++) perOff[i] = new Dictionary<int, int>();
+                    constancy[key] = perOff;
+                    groupExample[key] = Path.GetFileNameWithoutExtension(f);
+                }
+                var n = Math.Min(cf.DataLength, perOff.Length);
+                var bytes = s.ReadAt(cf.DataOffset, n);
+                for (var i = 0; i < n; i++)
+                    Bump(perOff[i], bytes[i]);
+            }
+        }
+    }
+    Console.WriteLine($"parsed {parsed} save(s){(failed > 0 ? $", {failed} failed to load" : "")}\n");
+
+    if (onlyType is null)
+    {
+        // Summary table: one row per form type. "lens" = distinct payload lengths; a single dominant length
+        // (shown as the modal length + its share) flags a fixed-width struct worth decoding first.
+        Console.WriteLine("type  name      records   %empty  distinct-len  modal-len(share)   distinct-flags  top-flags(share)");
+        foreach (var (ft, n) in recCount)
+        {
+            var lh = lenHist[ft];
+            var fh = flagHist[ft];
+            var empty = lh.GetValueOrDefault(0);
+            var (modalLen, modalLenN) = lh.OrderByDescending(kv => kv.Value).First();
+            var (topFlag, topFlagN) = fh.OrderByDescending(kv => kv.Value).First();
+            Console.WriteLine(
+                $"0x{ft:X2}  {FormTypeName(ft),-8}  {n,8:N0}  {(double)empty / n,6:P0}  {lh.Count,12:N0}  " +
+                $"{modalLen,8} ({(double)modalLenN / n,4:P0})   {fh.Count,12:N0}  0x{topFlag:X8} ({(double)topFlagN / n,4:P0})");
+        }
+        Console.WriteLine("\n(deep-dive one type:  survey <path> 0xNN  — adds a per-offset constancy map per (flags,len) group)");
+        return;
+    }
+
+    // Deep-dive: per (flags,len) group, the per-offset constancy map. '··' = constant byte (its value shown),
+    // 'XX' = a position that varies across records in the group (a data field). Groups sorted by frequency.
+    Console.WriteLine($"form type 0x{onlyType:X2} ({FormTypeName(onlyType.Value)}): {recCount.GetValueOrDefault(onlyType.Value):N0} records, " +
+                      $"{groupCount.Count} (flags,len) groups\n");
+    var shown = 0;
+    foreach (var (key, gn) in groupCount.OrderByDescending(kv => kv.Value))
+    {
+        if (shown++ >= 16) { Console.WriteLine($"… {groupCount.Count - 16} more groups"); break; }
+        Console.WriteLine($"flags 0x{key.Flags:X8}  len {key.Len}  × {gn:N0} records  (e.g. {groupExample[key]})");
+        var perOff = constancy[key];
+        var consts = 0;
+        for (var i = 0; i < perOff.Length; i++) if (perOff[i].Count == 1) consts++;
+        Console.WriteLine($"   leading {perOff.Length} bytes: {consts} constant, {perOff.Length - consts} variable");
+        var sb = new System.Text.StringBuilder("   ");
+        for (var i = 0; i < perOff.Length; i++)
+        {
+            if (i > 0 && i % 24 == 0) sb.Append("\n   ");
+            sb.Append(perOff[i].Count == 1 ? perOff[i].Keys.First().ToString("X2") : "··");
+            sb.Append(' ');
+        }
+        Console.WriteLine(sb.ToString());
+        Console.WriteLine();
+    }
+}
+
+// FNV change-form FORM-TYPE labels — only the four corpus-PROVEN anchors are named; the rest stay "?"
+// per the "label, don't guess" rule (no-speculative-spec-code). Proven: 0x01 REFR (inventory record +
+// note refs §4g/§4k), 0x02 ACHR (PlayerRef §4f), 0x09 NPC_ (player base TESNPC_ §4d), 0x1F NOTE (read
+// markers all resolve to NOTE records §4k.1 #2, 45,783/45,783). Others get a name only when corpus-proven.
+static string FormTypeName(int formType) => formType switch
+{
+    0x01 => "REFR",
+    0x02 => "ACHR",
+    0x09 => "NPC_",
+    0x1F => "NOTE",
+    _ => "?",
+};
 
 static void QuestFired(FalloutSave s, string savePath, string? dataDir)
 {

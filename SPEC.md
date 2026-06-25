@@ -512,6 +512,58 @@ load-order `PluginDatabase` (#2), and the inventory-reference cross-check (#3); 
 one-shot lookup (record type + name + source plugin, and where the FormID appears — FormID array iref / inventory
 / read-note marker). Both sit behind the existing `PluginDatabase`/`EnumerateChangeForms`. These closed #1–#3.
 
+### 4l. Change-form payload decode-coverage map (per form type) — the full-decode frontier
+The skeleton (§4f) walks every record and reads every header exactly. The open frontier is the per-**type**
+*payload*. This map tracks, for each form-type byte (low 6 bits of the type byte), what is structurally resolved
+vs left `unknown`. It is **regenerated/extended by the `survey` CLI** (ROADMAP §6 #1a): `survey <dir>` tabulates
+per type the record count, payload-length distribution, and `changeFlags` distribution across the corpus; `survey
+<dir> 0xNN` deep-dives one type with a **per-offset constancy map** — across every record of a `(changeFlags,
+length)` group, which byte positions are **constant** (delimiters / type tags / structure) vs **variable** (data
+fields). A single dominant length ⇒ a fixed-width struct (easy to decode); a length spread ⇒ variable/script-like.
+Pure corpus alignment (no masters, no in-game saves). Counts below are illustrative (vanilla 77-save + base-VNV
+98-save runs); regenerate with `survey`.
+
+**Form-type → record-type anchors (corpus-PROVEN; others left `?` per "label, don't guess"):** `0x01`=**REFR**
+(the inventory/reference records §4g, and note refs §4k), `0x02`=**ACHR** (PlayerRef §4f/§4e), `0x09`=**NPC_**
+(player base TESNPC_ §4d), `0x1F`=**NOTE** (read markers — all 45,783 resolve to NOTE, §4k.1 #2). The rest are
+named only when a controlled diff or resolved-FormID tally proves them.
+
+**Fixed-length / single-flag types — payload SIZED by corpus alignment (semantics unlabelled per "size, don't
+guess"):**
+- `0x08` — **len 0, flags `0x80000000`** (100%, every save). A **zero-payload marker** change form (like the
+  `0x1F` note-read marker but a different type). Very common (vanilla 7k, base VNV 273k). Located; the marker's
+  meaning isn't pinned (a "form active/known" high-bit marker — needs a controlled diff to name).
+- `0x1F` — **len 0, flags `0x80000000`**. NOTE read marker — **fully DECODED** (§4k).
+- `0x20` — **len 17, flags `0x80000000`**. Four packed `u32 LE` then a trailing `7C` (no internal delimiters):
+  `[u32][u32][u32=0][u32][7C]`. SIZED.
+- `0x21` — **len 20, flags `0x00000002`**. `[u32][7C][u32][7C][u32][7C][0xFFFFFFFF][7C]` (last field a `−1`
+  sentinel). SIZED.
+- `0x2B` / `0x32` — **len 10, flags `0x00000002`**. `[u32][7C][u32][7C]` (two delimited `u32`). SIZED.
+- `0x28` — **len 62, flags `0x80000000`**. `[10][7C]` then **4×** `[u8=00][u8=19][u8][7C][u16=1][7C][u16][7C]
+  [f32=1.0][7C]`. SIZED (a 4-entry fixed list).
+- `0x0B` — **len 25, flags `0x00000002`** on vanilla: a **fully constant** 24-byte block + `7C` (byte-identical on
+  every vanilla save — a config/settings snapshot). NOT universal: modded corpora show other length variants, so
+  it is fixed *per variant*, not globally.
+
+**Variable / structured types — LOCATED, not yet field-decoded:**
+- `0x00` — **DOMINANT** (vanilla 34k, base VNV 1.4M; the single most common change form). `0x7C`-delimited typed
+  sub-records carrying embedded `[u16 len][7C][ascii][7C]` **strings** — animation/control names ("Idle",
+  "SpecialIdle", "Forward", "Backward", "Close") — behind a leading tag byte; `changeFlags` selects the layout
+  (≫100 distinct flag values, hundreds of lengths). Reads as **script/animation/control state**. Not field-decoded.
+- `0x0A` — `0x7C`-delimited, **float-heavy**, embeds NPC names (the player name; "Beagle" on a Primm save). The
+  `0x020C`/len-58 variant dominates (vanilla 8k, base VNV 51k); larger variants (len 706) hold the player name + a
+  long float run (position/rotation/scale-shaped). Reads as actor/placement state. Not field-decoded.
+- `0x01` REFR / `0x02` ACHR — the reference path: MOVE block, havok/AV array, ExtraDataList, inventory, and the
+  karma/XP slots are decoded (§4g–§4j); the rest of the actor-value array and most base state remain `unknown`.
+- `0x09` NPC_ — player base: SPECIAL + name (§4d) decoded; most records are tiny (modal len 6) FaceGen/flag stubs.
+- `0x04` / `0x05` / `0x07` / `0x0D` / `0x0F` / `0x16` / `0x1A` / `0x22` / `0x25` — located by the walker; payloads
+  not yet decoded. (`0x07` modal len 9 / flags `0x60000000`; `0x25` modal len ~5–9 / flags `0x80000000`; `0x22`
+  variable.) Several appear only in modded corpora (`0x05`/`0x0F`/`0x16`/`0x1A`).
+
+Tooling: **`survey <save|dir> [0xNN]`** (the above). Next: deliverable §6 #1b — a "full walk" that renders any one
+change form as a labeled field tree with explicit `unknown[n]` gaps, folding in the sized types above and the
+ordered REFR/ACHR field model (§8a).
+
 ---
 
 ## 8. Reference sources

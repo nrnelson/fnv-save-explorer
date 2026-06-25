@@ -47,7 +47,7 @@ quicksave). The test theory auto-discovers them (and a local `samples/`) and ski
 CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setstat`, `formids`,
 `findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `inventory`, `setcount`,
 `setcondition`, `names`, `notes`, `setlevel`, `caps`, `setcaps`, `karma`, `xp`, `setkarma`, `setxp`, `diff`, plus
-R&D helpers `walk`, `refdump`, `edlscan`, `invsig`, `notescan`, `resolve`, `idiff`, `fdiff`, `find`, `irefscan`.
+R&D helpers `walk`, `survey`, `refdump`, `edlscan`, `invsig`, `notescan`, `resolve`, `idiff`, `fdiff`, `find`, `irefscan`.
 Run with no args to list them. (`edlscan <dir>` aggregates the modded ExtraDataList grammar + a deterministic-path
 tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory signature for byte-identical-decode checks — §4i;
 `notescan <dir>` aggregates the read-note markers — flag-value + `0x1F`→NOTE + inventory-reference tallies — §4k.1.)
@@ -131,6 +131,11 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    across the corpus; (b) a **"full walk"** that renders any change form as a labeled field tree with
    explicit gaps; (c) the coverage map maintained in SPEC. This folds in the former #14 (the ordered
    REFR/ACHR field model per SPEC §8a) and, optionally, the byte-decode of the havok blob (former #12).
+   **Status:** (a) shipped — the `survey` CLI (per-type length/`changeFlags` distribution + a per-offset
+   constancy map) and the **coverage map in SPEC §4l**: the fixed-length types (`0x20`/`0x21`/`0x28`/
+   `0x2B`/`0x32`/`0x0B`, plus the `0x08` zero-payload marker) are sized; the dominant `0x00` (script/
+   animation/control state) and `0x0A` (actor/placement, float-heavy) are located, not field-decoded.
+   **Next: (b) the labeled full-walk field tree** with explicit `unknown[n]` gaps.
 2. **GlobalData full type coverage.** Several numbered types are still only partially decoded; finish
    them, and pin the type-2 registry status codes (only `1` = death is confirmed; 2–7 unknown).
 3. **Quest / Pip-Boy interpreter** (former #16) — now a *consumer* of the decode, not bespoke probes.
