@@ -1672,7 +1672,7 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
        `GetStageDone`/`GetQuestRunning`/`GetQuestCompleted` (computed model) + literals; everything else (quest-local
        vars, globals, world queries) → unknown, and a caller fires only on definite-true (so an unknown guard never
        fires). Pinned by 9 unit tests; inspectable on real saves via CLI `qguard`. **The GameMode world-poll pass that
-       would consume it is written but HELD BACK** because it produces **zero movement on the 3 oracles + gtg**: their
+       would consume it is written but HELD BACK** because it produces **zero movement on the 4 oracles + gtg**: their
        mislabelled quests completed via **dialogue / non-lethal** paths whose state lives in **undecoded quest-local
        vars** (e.g. Wang Dang Atomic Tango — the boss refs VFSFistoREF/VFSOldBenREF/VFSAngeloREF/VFSBeatrixREF all
        resolve but are **alive**: completed non-lethally), and most other mislabels have **no GameMode script at all**;
@@ -1683,8 +1683,9 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     **Target architecture:** `CompletionRule` catalog → `SaveSignalEvaluator.TriggerFired(rule, save, db)` (dispatch
     on TriggerKind — we already have most of these checks, just scattered) → `GuardEvaluator.Holds(guard, save, db)`
     (the new build) → a fixpoint applying fired-and-held rules, gated to running.
-    **Hard constraint:** validation is capped at 3 ground-truth oracles (Saves 57/122/420) + controlled pairs; a
-    general framework needs MORE in-game Pip-Boy screenshots to validate broadly without sneaking in false positives.
+    **Hard constraint:** validation is capped at 4 ground-truth oracles (vanilla Save 57 + vanilla fih-submitted;
+    VNV Extended Saves 122/420) + controlled pairs (gtg, HELIOS, the fih kill/turn-in series); a general framework
+    needs MORE in-game Pip-Boy screenshots to validate broadly without sneaking in false positives.
     **Net score this phase:** Save 57 = 7/7, Save 122 = 16/24, Save 420 = 36/68, ~94% precision — and the "walled"
     classes (spawned-kill, conditional-dialogue, activator/world-state) are all now recoverable.
 
