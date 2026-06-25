@@ -56,15 +56,16 @@ on; here's why,"** not "impossible."
   unrelated record types and one record type appears under many type bytes (e.g. `0x32` → PACK/CHAL/REPU/REFR/INFO;
   `0x09` → NPC_/QUST/ACHR). So the type byte is a change-CATEGORY (decode by payload shape, SPEC §4l), not a
   record-type tag — don't infer record type from it (use `recid`). Only `0x1F`'s −1-hopped base is uniformly NOTE.
-- **Location discovery: the COUNT is a Misc Stat; the per-marker "discovered" FLAG is still un-isolated**
-  (`primm-prediscover` → `primm-postdiscover`, 2026-06-25). Discovering Primm cleanly incremented the
-  **"Locations Discovered" Misc Stat 1→2** (GlobalData type 0 @ data+0x12 — already decoded/editable; a nice
-  validation of the MiscStats decode). The change forms were confounded by a coupled NPC encounter (an NPC runs up
-  + dialogue), so they don't give the per-marker flag: a `0x32` counter `1→2` on a container REFR (the approach
-  trigger, not the marker), two `0x08` markers on a said INFO + a NAVM (the NPC dialogue), and the NPC ACHR. Which
-  *specific* markers are discovered (a per-marker bitfield/flag, likely in the map-marker REFR's extra data or a
-  GlobalData table) was not isolated — a no-NPC discovery would pin it. The pair DID pin `0x32` (per-form counter)
-  and `0x08` (said-INFO/marker) — see SPEC §4l.
+- **Location discovery records a COUNT (two places); there is NO per-marker change form** — confirmed by two
+  diffs incl. a clean no-NPC one (`primm-*discover` + `canyonwreckage-*discover`, 2026-06-25). Each discovery
+  increments **(a)** the **"Locations Discovered" Misc Stat** (GlobalData type 0 @ data+0x12 — decoded/editable)
+  and **(b)** a `0x32` per-event counter on a specific **CONT** ref (`0x001075F4`), in lock-step (`1→2` Primm,
+  `2→3` canyon). It does **NOT** write a map-marker change form: in the no-NPC canyon diff, **0 of the 90 changed
+  REFR/ACHR records have base MapMarker `0x10`** (checked via `recid`), and there were no inserts — so the
+  per-marker "which marker is discovered" flag is not a per-form change form. It is recomputed or packed elsewhere
+  (a GlobalData region — the type-8/10 areas churn with player-relative floats and weren't isolable here); a
+  *near-stationary* discovery (to kill the cell-load REFR churn) would be needed to pin it, if it's persisted at
+  all. The Primm pair's `0x08` markers (said INFO + NAVM) were the coupled NPC encounter, not discovery. SPEC §4l.
 
 - **Havok physics blob (bit2/bit10 `CHANGE_REFR_HAVOK_MOVE` records):** deliberately *located, not
   byte-decoded* (SPEC §10). Variable-length with a truncated final entry and a trailing slot array

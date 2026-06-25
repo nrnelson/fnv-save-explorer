@@ -557,6 +557,9 @@ guess"):**
   (`primm-prediscover` → `primm-postdiscover`) changed exactly one — value `1 → 2` on a `REFR`(base `CONT`,
   `0x001075F4`) — and the type's forms are countable across the board (`recid`: CHAL challenge-progress, REPU
   reputation, PACK, REFR, INFO), so `u32[0]` is that form's count/progress; its exact meaning is per target form.
+  **Two discovery diffs confirm a per-EVENT counter:** that same `0x001075F4` CONT ref's `0x32` value tracks
+  location discoveries in lock-step with the "Locations Discovered" Misc Stat — `1→2` on the Primm discovery and
+  `2→3` on a second (canyon-wreckage, no-NPC) discovery — so it increments once per discovery event.
 - `0x28` — **len 62, flags `0x80000000`**. `[10][7C]` then **4×** `[u8=00][u8=19][u8][7C][u16=1][7C][u16][7C]
   [f32=1.0][7C]`. SIZED (a 4-entry fixed list).
 - `0x0B` — **len 25, flags `0x00000002`** on vanilla: a **fully constant** 24-byte block + `7C` (byte-identical on
