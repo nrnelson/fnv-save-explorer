@@ -393,11 +393,11 @@ all six pairs + the second character; edits round-trip same-length. Tooling: CLI
 > increments per book read.
 >
 > **Slot map now PINNED to absolute indices** (from the four sequential books `science → repair → guns →
-> lockpick`). In the player **reference** record (iref = PlayerRef + 1) the MOVE block is **25 bytes**, so its AV
-> array starts at **data + 26** (vs the ACHR's 27-byte MOVE / data+28 — that's why the §4j locator's `data+28` is
-> tuned to the ACHR). Anchoring on karma (200.0 @ slot 100) and XP (547.0 @ slot 101), each skill-modifier slot is
-> **`slot = AV-index + 77`**, verified byte-exact (guns save: slots 116/117/118 = Repair/Science/Guns = `3.0`, slot
-> 113 Lockpick still `0` since it was read after):
+> lockpick`). The skill modifiers are in the **same record + array as karma/XP** — the player reference record
+> (iref = PlayerRef + 1), the standard post-MOVE array at **data + 28** that the §4j locator already uses
+> (`PlayerStatSlotOffset`). Anchoring on karma (200.0 @ slot 100) and XP (547.0 @ slot 101), each skill-modifier
+> slot is **`slot = AV-index + 77`**, verified byte-exact (guns save: slots 116/117/118 = Repair/Science/Guns =
+> `3.0`, slot 113 Lockpick still `0` since it was read after):
 >
 > | Skill | AV idx | slot | Skill | AV idx | slot |
 > |---|---|---|---|---|---|
@@ -411,9 +411,16 @@ all six pairs + the second character; edits round-trip same-length. Tooling: CLI
 >
 > (`0x21` Big Guns = slot 110, unused in FNV → stays 0.) So the dense AV array's per-slot meaning is now decoded
 > for karma (100), XP (101), and the full skill-modifier block (109–122) — each holding the **permanent modifier**
-> (book/console bonus), `0` until modified. The remaining caveat is only that a skill *total* = base (SPECIAL + tag
-> + level) + this modifier + perks; the array stores the modifier portion, so a "skills total" reader still needs
-> the base composition. A reader for the modifier block is straightforward (locate the array → read slots 109–122).
+> (book/console bonus), `0` until modified. A skill *total* = base (SPECIAL + tag + level) + this modifier + perks;
+> the array stores the modifier portion, so a "skills total" reader still needs the base composition.
+>
+> **This dense array is a *different* structure from the §4e sparse skills list.** In `skillbook-pre` the dense
+> skill slots (114 Medicine, 115 Melee, 116 Repair, …) are **all `0.0`**, while the §4e `[count*4][7C]` +
+> `[avIndex][7C][float][7C]` list reports Medicine 4 / Melee 6 / Repair 3 — so the two hold different values. The
+> dense array is the **book/permanent-modifier** store (what skill-book reads write); what the §4e sparse list's
+> values represent (a separate AV-deviation/cache, or temporary effects) is still unpinned and would need its own
+> controlled diff (e.g. a `player.modav`/chem/implant change) to separate from this array. So the §4e `skills`
+> command and this dense block are **not** two views of the same data; don't conflate them.
 
 ### 4k. Player read notes — the Pip-Boy "Data → Notes" viewed markers
 The notes the player has **read/viewed** (Pip-Boy *Data → Notes*, shown in normal font; unread ones are bold)
