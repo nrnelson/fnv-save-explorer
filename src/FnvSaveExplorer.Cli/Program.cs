@@ -27,6 +27,7 @@ if (args.Length < 2)
                                               the game masters; dataDir overrides Data-folder auto-detect)
           fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
           fnvsave notes <save.fos> [dataDir]  List the player's Pip-Boy Data -> Notes — READ and UNREAD (§4k/§4k.1)
+          fnvsave perks <save.fos> [dataDir]  List the player's perks + traits (§4n; resolves PERK forms via masters)
           fnvsave pipboy <save.fos> [dataDir]   The COMPUTED in-game Pip-Boy quest list (§6 #16): interprets the
                                               masters' quest scripts (SGE startup + reached-stage effects + guard eval).
                                               active/completed + displayed objectives. (Only "Back in the Saddle" omitted.)
@@ -282,6 +283,9 @@ try
             break;
         case "notes":
             Notes(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
+            break;
+        case "perks":
+            Perks(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
             break;
         case "quests":
             Quests(FalloutSave.Load(path), path,
@@ -834,6 +838,29 @@ static void Notes(FalloutSave s, string savePath, string? dataDir)
         var tag = n.Read ? "read  " : "UNREAD";
         var media = db.NoteMediaType(n.FormId) ?? "?";
         Console.WriteLine($"  [{tag}]  {db.Resolve(n.FormId) ?? "?",-40}  {media,-6}  0x{n.FormId:X8} (mod {n.ModIndex:X2})  {src}");
+    }
+}
+
+static void Perks(FalloutSave s, string savePath, string? dataDir)
+{
+    // The player's perks + traits (ROADMAP §4n) — a count-prefixed list in the player reference change form,
+    // each entry a perkRef (FormID-array index + 1) resolving to a PERK record. Identifying which references are
+    // PERKs needs the masters, so we pass that test into PlayerPerks; without masters we can't name or filter them.
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    if (db.Count == 0)
+    {
+        Console.WriteLine("Perks need the game Data folder to identify/name PERK forms — pass it as the 2nd argument.");
+        return;
+    }
+
+    var perks = s.PlayerPerks(fid => db.RecordType(fid) == "PERK");
+    Console.WriteLine($"Player perks & traits ({perks.Count}):");
+    foreach (var p in perks.OrderBy(p => db.Resolve(p.FormId) ?? "￿", StringComparer.OrdinalIgnoreCase))
+    {
+        var modIndex = (int)(p.FormId >> 24);
+        var src = s.FriendlySourceForModIndex(modIndex) ?? "?";
+        var rank = p.Rank > 1 ? $"  (rank {p.Rank})" : "";
+        Console.WriteLine($"  {db.Resolve(p.FormId) ?? "?",-40}{rank}  0x{p.FormId:X8} (mod {modIndex:X2})  {src}");
     }
 }
 

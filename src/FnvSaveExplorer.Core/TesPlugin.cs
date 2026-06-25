@@ -34,13 +34,13 @@ public sealed class TesPlugin
     ];
 
     /// <summary>
-    /// Record types we decode for FormID → name resolution: <see cref="ItemTypes"/> plus <c>QUST</c>. A quest
-    /// is not an inventory item, so it never reaches the inventory-only Pip-Boy tab mapping
-    /// (<see cref="PluginDatabase.PipBoyTab"/>); naming quest forms is what lets quest change forms be
-    /// identified by record type (ROADMAP §6 #10), so <c>QUST</c> is indexed here yet deliberately kept out
-    /// of <see cref="ItemTypes"/>.
+    /// Record types we decode for FormID → name resolution: <see cref="ItemTypes"/> plus <c>QUST</c> and
+    /// <c>PERK</c>. Neither is an inventory item, so they never reach the inventory-only Pip-Boy tab mapping
+    /// (<see cref="PluginDatabase.PipBoyTab"/>); naming quest forms identifies quest change forms (ROADMAP §6 #10),
+    /// and naming <c>PERK</c> forms (FNV stores traits as PERKs too) lets the player perk list be resolved
+    /// (ROADMAP §4n) — so both are indexed here yet deliberately kept out of <see cref="ItemTypes"/>.
     /// </summary>
-    private static readonly HashSet<string> NamedTypes = [.. ItemTypes, "QUST"];
+    private static readonly HashSet<string> NamedTypes = [.. ItemTypes, "QUST", "PERK"];
 
     /// <summary>The quest verbs that can complete/advance/end a quest — harvested from every <c>SCPT</c> to size the
     /// event-completion graph (ROADMAP §6 #16 Stage 1). Pure display verbs (<c>SetObjectiveDisplayed</c>,

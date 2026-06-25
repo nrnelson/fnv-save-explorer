@@ -666,9 +666,14 @@ and `find` located its refID inside the player reference record. The decoded blo
 then **Confirmed Bachelor** (rank 1) + **Hoarder** (the player's trait, also a PERK, rank 1) — exactly the
 character's perk + trait. **Taking a perk** therefore (a) **appends the perk's FormID to the FormID array** and
 (b) adds a `[perkRef][7C][rank][7C]` entry (count*4 += 4) — a length-changing edit, so this is **read-decodable but
-not same-length-editable** (like notes §4k). A `perks` reader (locating the list within the player ref record, then
-resolving each ref to a PERK name) is the natural consumer — **still to ship**. Tooling: **`findname <save>
-"<text>" [SIG]`** (find a base form by name → save-space FormID; how the perk was located) + `recid`/`find`.
+not same-length-editable** (like notes §4k). **Reader shipped:** `FalloutSave.PlayerPerks(isPerkForm)` scans the
+player reference record for `7C [ref:3] 7C` entries whose `FormIdArray[ref−1]` is a `PERK` (the masters test is
+injected by the caller, as for notes) and reads each `rank`; **CLI `perks`** names them via the masters (`PERK` is
+now indexed by `TesPlugin`). **Verified** across saves/characters: gtg-complete = Hoarder + Companion Suite (no
+Confirmed Bachelor); level2-gunsbachelor = Confirmed Bachelor + Hoarder + Companion Suite; a vanilla mid-game save =
+Built to Destroy + Fast Shot + Swift Learner + Companion Suite (the always-granted engine perk) — no false
+positives; controlled + read-only-invariant tests pin it. Tooling: **`findname <save> "<text>" [SIG]`** (find a base
+form by name → save-space FormID; how the perk was located) + `recid`/`find`.
 
 ---
 

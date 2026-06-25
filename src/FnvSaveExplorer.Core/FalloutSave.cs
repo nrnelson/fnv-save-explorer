@@ -1204,6 +1204,46 @@ public sealed class FalloutSave
         return result;
     }
 
+    /// <summary>One of the player's perks (or traits — FNV stores traits as PERK forms too): the base
+    /// <c>PERK</c> FormID it resolves to, its rank, and the raw 3-byte refID that names it.</summary>
+    public readonly record struct PlayerPerk(int RefId, uint FormId, int Rank);
+
+    /// <summary>
+    /// The player's <b>perks and traits</b> (ROADMAP §4n). They live as a count-prefixed list inside the player
+    /// reference change form (iref = PlayerRef + 1 — the same record as inventory §4g and karma/XP §4j):
+    /// <c>[count*4 : u8][7C]</c> then <c>count × ( [perkRef : 3 BE][7C][rank : u8][7C] )</c>, where each
+    /// <c>perkRef</c> is the FormID-array index + 1 (the §4g "+1" convention) and resolves to a <c>PERK</c> record.
+    /// Like <see cref="PipBoyNotes"/>, deciding "is this FormID a PERK?" needs the game masters (outside <c>Core</c>),
+    /// so the caller injects that test via <paramref name="isPerkForm"/> (e.g. <c>fid =&gt; db.RecordType(fid) ==
+    /// "PERK"</c>). The list start isn't separately located — we scan the record for <c>7C [ref:3] 7C</c> entries
+    /// whose <c>FormIdArray[ref − 1]</c> is a PERK (the all-PERK filter makes a false positive vanishingly unlikely)
+    /// and read the following <c>rank</c> byte. Deduplicated by FormID; empty if the record or masters are missing.
+    /// Read-only — adding a perk appends to the FormID array and grows the list (length-changing, unsupported).
+    /// </summary>
+    public IReadOnlyList<PlayerPerk> PlayerPerks(Func<uint, bool> isPerkForm)
+    {
+        if (PlayerInventoryChangeForm is not { } cf)
+            return [];
+        var seen = new HashSet<uint>();
+        var result = new List<PlayerPerk>();
+        var end = cf.DataOffset + cf.DataLength;
+        for (var i = cf.DataOffset; i + 6 < end; i++)
+        {
+            // A perk entry is [ref:3 BE][7C][rank:u8][7C]; the ref is bracketed 7C [ref:3] 7C (i..i+4).
+            if (_raw[i] != 0x7C || _raw[i + 4] != 0x7C)
+                continue;
+            var refId = (_raw[i + 1] << 16) | (_raw[i + 2] << 8) | _raw[i + 3];
+            if (refId <= 0)
+                continue;
+            var formId = ResolveIref(refId - 1);
+            if (formId == 0 || !isPerkForm(formId) || !seen.Add(formId))
+                continue;
+            var rank = _raw[i + 6] == 0x7C ? _raw[i + 5] : 0; // [7C][rank][7C] follows the ref
+            result.Add(new PlayerPerk(refId, formId, rank));
+        }
+        return result;
+    }
+
     // ---- Editing (same-length splices only) --------------------------------
     public void SetPlayerLevel(uint level) => StageUInt32(_playerLevelOffset, level);
 
