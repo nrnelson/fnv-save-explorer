@@ -560,9 +560,12 @@ guess"):**
   not yet decoded. (`0x07` modal len 9 / flags `0x60000000`; `0x25` modal len ~5–9 / flags `0x80000000`; `0x22`
   variable.) Several appear only in modded corpora (`0x05`/`0x0F`/`0x16`/`0x1A`).
 
-Tooling: **`survey <save|dir> [0xNN]`** (the above). Next: deliverable §6 #1b — a "full walk" that renders any one
-change form as a labeled field tree with explicit `unknown[n]` gaps, folding in the sized types above and the
-ordered REFR/ACHR field model (§8a).
+Tooling: **`survey <save|dir> [0xNN]`** (the coverage survey above) and **`cfwalk <save> <iref>|--type 0xNN [N]`**
+(the labeled **full walk**, §6 #1b): renders a change form's payload as a field tree — labeled fields for the sized
+types above, `0x7C`-tokenized output for the delimited `0x00`/`0x0A` state, and a single explicit `unknown[n]` gap
+(hex-capped) for everything still undecoded, so coverage is always visible and never silently skipped. As a type
+graduates from "located" to "field-decoded", its emitter in `WalkPayload` replaces the gap. Still to fold in: the
+REFR/ACHR field tree (the `refdump` decode of §4g–§4j) and the ordered REFR/ACHR model (§8a).
 
 ---
 

@@ -53,6 +53,9 @@ if (args.Length < 2)
           fnvsave survey <save.fos|dir> [0xNN]   Decode-coverage survey (§6 #1a): per change-form FORM TYPE,
                                               the payload length/changeFlags distribution across the corpus;
                                               with a type byte, a per-offset constancy map per (flags,len) group
+          fnvsave cfwalk <save.fos> <iref>|--type 0xNN [N]   Full walk (§6 #1b): render change form(s) as a
+                                              labeled field tree with explicit unknown[n] gaps (sized types
+                                              from §4l decoded; the rest shown as one honest gap)
           fnvsave refdump <save.fos> [iref]  Decode a reference change form (default: the player inventory
                                               record): changeFlags bits + the typed-entry ExtraDataList walk
                                               (bounded by the located first item) + 0x7C-field walk (R&D §4i)
@@ -175,6 +178,22 @@ try
             // Optional 2nd arg = a form-type byte (0x.. or decimal) to deep-dive that one type.
             int? only = args.Length > 2 ? (int)ParseOffset(args[2]) : null;
             Survey(path, only);
+            break;
+        }
+        case "cfwalk":
+        {
+            // ROADMAP §6 #1b: render change form(s) as a labeled field tree with explicit unknown[n] gaps.
+            //   cfwalk <save> <iref>          one record (iref; 0x.. ok)
+            //   cfwalk <save> --type 0xNN [N] first N records of a form type (default 3)
+            var ti = Array.IndexOf(args, "--type");
+            if (ti >= 0 && ti + 1 < args.Length)
+            {
+                var ft = (int)ParseOffset(args[ti + 1]);
+                var n = args.Length > ti + 2 && int.TryParse(args[ti + 2], out var nn) ? nn : 3;
+                CfWalk(FalloutSave.Load(path), path, type: ft, max: n);
+            }
+            else
+                CfWalk(FalloutSave.Load(path), path, iref: (int)ParseOffset(args[2]));
             break;
         }
         case "refdump":
@@ -1644,6 +1663,146 @@ static string FormTypeName(int formType) => formType switch
     0x1F => "NOTE",
     _ => "?",
 };
+
+// ROADMAP §6 #1b — the labeled "FULL WALK". Renders a change form's payload as a field tree, emitting
+// labeled fields for the types whose structure SPEC §4l has pinned and an explicit `unknown[n]` gap for
+// everything still undecoded — so coverage is always visible (never silently skipped). This is the
+// consumer-facing surface of the decode: as a type graduates from "located" to "field-decoded", its
+// emitter here replaces the `unknown[n]`. Semantics stay unlabelled per "size, don't guess".
+static void CfWalk(FalloutSave s, string savePath, int? iref = null, int? type = null, int max = 3)
+{
+    var db = PluginDatabase.ForSave(s, null, GameDataLocator.FindMo2Mods(savePath));
+    var shown = 0;
+    foreach (var cf in s.EnumerateChangeForms())
+    {
+        if (iref is { } wi && cf.Iref != wi) continue;
+        if (type is { } wt && cf.FormType != wt) continue;
+        if (type is not null && shown >= max) break;
+        shown++;
+
+        var name = db.Count > 0 ? db.Resolve(cf.FormId) : null;
+        Console.WriteLine($"change form @0x{cf.Offset:X}  iref {cf.Iref} -> 0x{cf.FormId:X8}{(name is null ? "" : $" {name}")}");
+        Console.WriteLine($"  type 0x{cf.TypeByte:X2} (formType 0x{cf.FormType:X2} {FormTypeName(cf.FormType)})  " +
+                          $"version 0x{cf.Version:X2}  changeFlags 0x{cf.ChangeFlags:X8}  len {cf.DataLength}");
+        var data = s.ReadAt(cf.DataOffset, cf.DataLength);
+        foreach (var line in WalkPayload(cf.FormType, cf.ChangeFlags, data))
+            Console.WriteLine("    " + line);
+        Console.WriteLine();
+        if (iref is not null) break;
+    }
+    if (shown == 0) Console.WriteLine("No matching change form.");
+}
+
+// Emits the field-tree lines for one change-form payload. Returns "+0xOFF  label = value" for decoded
+// fields and "+0xOFF  unknown[n]  <hex>" for gaps. The per-type emitters mirror the sized structures in
+// SPEC §4l; anything not yet pinned is one honest `unknown[n]` over the whole payload.
+static IEnumerable<string> WalkPayload(int formType, uint flags, byte[] d)
+{
+    if (d.Length == 0)
+    {
+        // 0x08 / 0x1F (and any other) zero-payload marker — the record's presence IS the state (§4l/§4k).
+        yield return formType == 0x1F ? "(no payload — NOTE read marker, §4k)" : "(no payload — marker form, §4l)";
+        yield break;
+    }
+
+    static string Hex(byte[] b, int off, int len) =>
+        string.Join(' ', b.Skip(off).Take(len).Select(x => x.ToString("X2")));
+    static uint U32(byte[] b, int o) => (uint)(b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24));
+    static string Field(int off, string label, string val) => $"+0x{off:X3}  {label} = {val}";
+    static string Gap(int off, byte[] b, int len)
+    {
+        const int preview = 48;   // keep the gap honest about its size without flooding on a big REFR payload
+        var head = Hex(b, off, Math.Min(len, preview));
+        return len <= preview ? $"+0x{off:X3}  unknown[{len}]  {head}"
+                              : $"+0x{off:X3}  unknown[{len}]  {head} … (+{len - preview} more)";
+    }
+
+    switch (formType)
+    {
+        // Fixed-width sized types (SPEC §4l). Each field labelled u32/i32; the 0x7C delimiters shown inline.
+        case 0x2B or 0x32 when d.Length == 10 && d[4] == 0x7C && d[9] == 0x7C:
+            yield return Field(0, "u32[0]", U32(d, 0).ToString());
+            yield return Field(5, "u32[1]", U32(d, 5).ToString());
+            break;
+        case 0x21 when d.Length == 20 && d[4] == 0x7C && d[9] == 0x7C && d[14] == 0x7C && d[19] == 0x7C:
+            yield return Field(0, "u32[0]", U32(d, 0).ToString());
+            yield return Field(5, "u32[1]", U32(d, 5).ToString());
+            yield return Field(10, "u32[2]", U32(d, 10).ToString());
+            yield return Field(15, "i32[3]", ((int)U32(d, 15)).ToString());   // observed always -1 (sentinel)
+            break;
+        case 0x20 when d.Length == 17 && d[16] == 0x7C:
+            // Four packed u32 LE then a trailing delimiter (no internal 7C, §4l).
+            yield return Field(0, "u32[0]", U32(d, 0).ToString());
+            yield return Field(4, "u32[1]", U32(d, 4).ToString());
+            yield return Field(8, "u32[2]", U32(d, 8).ToString());
+            yield return Field(12, "u32[3]", U32(d, 12).ToString());
+            break;
+        case 0x28 when d.Length == 62 && d[0] == 0x10 && d[1] == 0x7C:
+            // [10][7C] then 4× [u8 u8 u8][7C][u16][7C][u16][7C][f32][7C] (§4l).
+            yield return Field(0, "tag", "0x10");
+            for (var e = 0; e < 4; e++)
+            {
+                var o = 2 + e * 15;
+                if (o + 15 > d.Length) { yield return Gap(o, d, d.Length - o); break; }
+                // entry = [3 B][7C][u16][7C][u16][7C][f32][7C] (§4l): f32 (always 1.0) at o+10.
+                var f = BitConverter.ToSingle(d, o + 10);
+                yield return Field(o, $"entry[{e}]",
+                    $"b={Hex(d, o, 3)} u16={(ushort)(d[o + 4] | (d[o + 5] << 8))} " +
+                    $"u16={(ushort)(d[o + 7] | (d[o + 8] << 8))} f32={f}");
+            }
+            break;
+        case 0x0B when d.Length == 25 && d[24] == 0x7C:
+            // Constant 24-byte config block on vanilla (byte-identical); other variants on modded (§4l).
+            yield return Field(0, "config[24]", Hex(d, 0, 24));
+            break;
+
+        // Delimited script/animation/actor state — STRUCTURE known (0x7C-tokenized with embedded
+        // [u16 len][7C][ascii][7C] strings), FIELDS not yet labelled (§4l: 0x00, 0x0A). Show the tokens so
+        // the structure is visible while the whole payload remains honestly "not field-decoded".
+        case 0x00 or 0x0A:
+            yield return $"(0x7C-delimited {FormTypeName(formType)} state, §4l — tokens; fields not yet labelled)";
+            foreach (var line in DelimitedTokens(d)) yield return line;
+            break;
+
+        default:
+            // REFR/ACHR have their own deep decode via `refdump` (§4g–§4j); not folded in here yet.
+            if (formType is 0x01 or 0x02)
+                yield return "(REFR/ACHR — inventory/AV decode via `refdump`; field tree not yet folded in here)";
+            yield return Gap(0, d, d.Length);
+            break;
+    }
+}
+
+// Splits a 0x7C-delimited payload into tokens, rendering each as the most plausible reading: an embedded
+// length-prefixed ASCII string ([u16 len][7C][bytes]) prints as text; an all-printable run as text; a
+// 4-byte run as u32/float; otherwise raw hex. Display-only (does not claim a field layout).
+static IEnumerable<string> DelimitedTokens(byte[] d)
+{
+    var start = 0;
+    var idx = 0;
+    for (var i = 0; i <= d.Length; i++)
+    {
+        if (i != d.Length && d[i] != 0x7C) continue;
+        var len = i - start;
+        if (len > 0)
+        {
+            var seg = d.Skip(start).Take(len).ToArray();
+            string render;
+            if (seg.All(b => b >= 0x20 && b < 0x7F))
+                render = $"\"{System.Text.Encoding.ASCII.GetString(seg)}\"";
+            else if (len == 4)
+            {
+                var u = (uint)(seg[0] | (seg[1] << 8) | (seg[2] << 16) | (seg[3] << 24));
+                render = $"u32={u} f32={BitConverter.ToSingle(seg, 0)}";
+            }
+            else
+                render = string.Join(' ', seg.Select(x => x.ToString("X2")));
+            yield return $"+0x{start:X3}  tok[{idx}] ({len}b) {render}";
+        }
+        idx++;
+        start = i + 1;
+    }
+}
 
 static void QuestFired(FalloutSave s, string savePath, string? dataDir)
 {
