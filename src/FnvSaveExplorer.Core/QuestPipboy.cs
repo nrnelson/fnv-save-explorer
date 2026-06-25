@@ -233,7 +233,10 @@ public sealed class QuestPipboy
                     Reach(target, sd.Index);
 
             // NB: conditional-dialogue completion (a said-INFO's CONDITIONAL SetStage to a completing stage) is now a
-            // CompletionTrigger.DialogueSetStage rule applied via the unified completion walk below.
+            // CompletionTrigger.DialogueSetStage rule applied via the unified completion walk below. A guard-gated
+            // conditional-dialogue START (recover a not-running quest when GuardEvaluator proves its start guard) was
+            // measured and fires on NOTHING — the missed quests' start guards are quest-local vars / globals we return
+            // unknown for, so it can't act (ROADMAP §6 #16 Stage B). Not shipped.
         }
 
         // ---- Fixpoint: run reached-stage scripts; non-conditional SetStage/StartQuest expand the running set. ----
