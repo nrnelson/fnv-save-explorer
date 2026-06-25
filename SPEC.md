@@ -390,8 +390,16 @@ all six pairs + the second character; edits round-trip same-length. Tooling: CLI
 > why `fdiff` missed it — `fdiff` only compares **same-length** records, and this is a length-changed one. The
 > sparse `0x7C`-tagged AV-mod list of **§4e is a *different* structure and did NOT change** (the read skill stayed
 > `0` there), so book bonuses live in this dense slot array, not the §4e list. Also: the **"Books Read" Misc Stat**
-> increments per book read. (Mapping each slot index → skill, and whether the §4e list and this array are two views
-> of the same AVs, needs a few more single-skill diffs — the *modifier-vs-absolute* question itself is settled.)
+> increments per book read.
+>
+> **Confirmed cumulative + contiguous across four sequential books** (`science → repair → guns → lockpick`, read
+> back-to-back): each book adds **exactly one new `3.0` slot**, and the skill-modifier slots are a **contiguous run**
+> in the array ordered by actor-value index — Repair's slot sits just before Science's, Guns' just after, matching
+> the AV indices **Lockpick `0x24` … Repair `0x27`, Science `0x28`, Guns `0x29`** (§4e). So the dense array holds
+> the per-skill modifiers as a contiguous AV-indexed block (alongside karma slot 100 / XP slot 101). A full skills
+> reader (locate the array → read the contiguous skill block → totals = base + these modifiers) is the natural next
+> consumer; the exact slot indices weren't pinned to absolute numbers here because the records shifted offset
+> between the later saves (the *structure* — contiguous, AV-ordered, +3 per book — is confirmed).
 
 ### 4k. Player read notes — the Pip-Boy "Data → Notes" viewed markers
 The notes the player has **read/viewed** (Pip-Boy *Data → Notes*, shown in normal font; unread ones are bold)
