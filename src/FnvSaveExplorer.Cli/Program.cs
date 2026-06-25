@@ -178,6 +178,10 @@ try
             QuestConditions(FalloutSave.Load(path), path,
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
             break;
+        case "qguard":
+            QuestGuard(FalloutSave.Load(path), path, args[2],
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path && a != args[2]));
+            break;
         case "qgate":
             QuestCounterGates(FalloutSave.Load(path), path,
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path),
@@ -355,6 +359,57 @@ static void GlobalDataDump(FalloutSave s, string savePath, int type, string? dat
         }
         else if (f.AsUInt32 is { } v && v != 0) ann = $"   = {v}";
         Console.WriteLine($"  [{i,3}] ({f.Length}B) {hex,-14}{ann}");
+    }
+}
+
+static void QuestGuard(FalloutSave s, string savePath, string questHex, string? dataDir)
+{
+    // ROADMAP §6 #16 Stage B: inspect GuardEvaluator's three-valued verdict on a quest's GameMode world-poll guards,
+    // and the underlying GetDead resolution (does the ref editor id resolve, is it in the death registry?).
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath), withDialogue: true, withActors: true);
+    if (db.Count == 0) { Console.WriteLine("Needs the game Data folder."); return; }
+    var formId = (uint)ParseOffset(questHex);
+    var def = db.Quest(formId);
+    if (def is null || string.IsNullOrEmpty(def.GameModeScript)) { Console.WriteLine($"no quest / no GameMode for {questHex}"); return; }
+
+    var pip = QuestPipboy.Compute(s, db);
+    var pq = pip.Quests.ToDictionary(q => q.FormId);
+    var byEdid = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+    foreach (var q in db.Quests.Values) if (!string.IsNullOrEmpty(q.Edid)) byEdid[q.Edid!] = q.FormId;
+    var dead = s.DeadReferences();
+
+    var guard = new GuardEvaluator(
+        dead, db.PlacedReferenceEdids,
+        e => byEdid.TryGetValue(e, out var f) ? f : null,
+        f => pq.TryGetValue(f, out var q) ? q.State != PipboyQuestState.Completed : null,
+        f => pq.TryGetValue(f, out var q) ? q.State == PipboyQuestState.Completed : false,
+        _ => null,
+        (f, n) => pq.TryGetValue(f, out var q) ? q.Objectives.Any(o => o.Index == n && o.Completed) : false,
+        (f, n) => pq.TryGetValue(f, out var q) ? q.Objectives.Any(o => o.Index == n) : false);
+
+    var computed = pq.TryGetValue(formId, out var cq) ? cq.State.ToString() : "(not shown)";
+    Console.WriteLine($"{questHex}  {def.Name} [{def.Edid}]  computed={computed}  dead-refs={dead.Count}  placedRefEdids={db.PlacedReferenceEdids.Count}\n");
+
+    // Resolve every distinct <ref>.GetDead ref the GameMode references.
+    var refRx = new System.Text.RegularExpressions.Regex(@"([A-Za-z_][A-Za-z0-9_]*)\.GetDead", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    var refs = refRx.Matches(def.GameModeScript!).Select(m => m.Groups[1].Value).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    Console.WriteLine("--- GetDead refs ---");
+    foreach (var r in refs)
+    {
+        var resolved = db.PlacedReferenceEdids.TryGetValue(r, out var rf);
+        Console.WriteLine($"  {r,-28} {(resolved ? $"0x{rf:X8}" : "UNRESOLVED")}  {(resolved && dead.Contains(rf) ? "DEAD" : resolved ? "alive" : "")}");
+    }
+
+    Console.WriteLine("\n--- GameMode effects gated on GetDead ---");
+    foreach (var e in QuestScript.Parse(def.GameModeScript))
+    {
+        if (!e.Guards.Any(g => g.Contains("getdead", StringComparison.OrdinalIgnoreCase)))
+            continue;
+        var verdict = e.Guards.All(g => guard.Holds(g) == true) ? "FIRE"
+            : e.Guards.Any(g => guard.Holds(g) == false) ? "blocked" : "unknown";
+        Console.WriteLine($"  [{verdict}] {e.Verb} {e.TargetQuestEdid} {e.Arg1}={e.Arg2}");
+        foreach (var g in e.Guards)
+            Console.WriteLine($"        {guard.Holds(g),-6} | {g.Trim()}");
     }
 }
 

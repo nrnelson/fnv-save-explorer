@@ -49,10 +49,11 @@ public sealed class PluginDatabase
     private readonly IReadOnlyDictionary<uint, uint> _actorScripts; // base actor FormID -> SCRI script (§6 #16 Stage 2)
     private readonly IReadOnlyDictionary<uint, uint> _placedActorBases; // placed ACHR FormID -> base actor (§6 #16 Stage 2)
     private readonly IReadOnlyDictionary<uint, IReadOnlySet<uint>> _completionEnableRefs; // quest -> refs its completion enables (§6 #16 Stage 2)
+    private readonly IReadOnlyDictionary<string, uint> _placedRefEdids; // placed-ref EDID -> save-space FormID (§6 #16 Stage B)
     private IReadOnlyList<CounterGate>? _counterGates; // lazily-built counter-gated completion graph
     private IReadOnlyList<ExternalCompletion>? _externalCompletions; // lazily-built external event-completion graph
 
-    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null, Dictionary<uint, IReadOnlyList<InfoCondition>>? dialogueInfoConditions = null, IReadOnlyList<CounterIncrement>? counterIncrements = null, IReadOnlyList<ExternalQuestEffect>? externalQuestEffects = null, IReadOnlyDictionary<uint, uint>? actorScripts = null, IReadOnlyDictionary<uint, uint>? placedActorBases = null, IReadOnlyDictionary<uint, IReadOnlySet<uint>>? completionEnableRefs = null)
+    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null, Dictionary<uint, IReadOnlyList<InfoCondition>>? dialogueInfoConditions = null, IReadOnlyList<CounterIncrement>? counterIncrements = null, IReadOnlyList<ExternalQuestEffect>? externalQuestEffects = null, IReadOnlyDictionary<uint, uint>? actorScripts = null, IReadOnlyDictionary<uint, uint>? placedActorBases = null, IReadOnlyDictionary<uint, IReadOnlySet<uint>>? completionEnableRefs = null, IReadOnlyDictionary<string, uint>? placedRefEdids = null)
     {
         _names = names;
         _types = types;
@@ -69,6 +70,7 @@ public sealed class PluginDatabase
         _actorScripts = actorScripts ?? new Dictionary<uint, uint>();
         _placedActorBases = placedActorBases ?? new Dictionary<uint, uint>();
         _completionEnableRefs = completionEnableRefs ?? new Dictionary<uint, IReadOnlySet<uint>>();
+        _placedRefEdids = placedRefEdids ?? new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>Quest FormIDs (save-space) that a dialogue <c>INFO</c> result script <c>StartQuest</c>/<c>SetStage</c>
@@ -120,6 +122,11 @@ public sealed class PluginDatabase
     /// §6 #16 Stage 2). A running quest with one of these refs enabled in the save is completed (the
     /// activator/world-state-completion signal). Empty unless built with <c>withActors: true</c>.</summary>
     public IReadOnlyDictionary<uint, IReadOnlySet<uint>> CompletionEnableRefs => _completionEnableRefs;
+
+    /// <summary>Named placed-reference editor id (e.g. <c>VFSFistoREF</c>) → its save-space FormID (ROADMAP §6 #16
+    /// Stage B). Lets the guard evaluator resolve a <c>&lt;Ref&gt;.GetDead</c> world-poll guard to a FormID it can
+    /// test against the save's death registry. Empty unless built with <c>withActors: true</c>.</summary>
+    public IReadOnlyDictionary<string, uint> PlacedReferenceEdids => _placedRefEdids;
 
     /// <summary>An empty database; every <see cref="Resolve"/> returns <c>null</c>.</summary>
     public static readonly PluginDatabase Empty = new([], [], [], [], null, null, []);
@@ -281,7 +288,7 @@ public sealed class PluginDatabase
             if (questByEdid.TryGetValue(questEdid, out var qFormId) && placedRefEdids.TryGetValue(refEdid, out var rFormId))
                 ((HashSet<uint>)(completionEnableRefs.TryGetValue(qFormId, out var set) ? set : completionEnableRefs[qFormId] = new HashSet<uint>())).Add(rFormId);
 
-        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects, infoConditions, counterIncrements, externalQuestEffects, actorScripts, placedActorBases, completionEnableRefs);
+        return new PluginDatabase(names, types, noteTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects, infoConditions, counterIncrements, externalQuestEffects, actorScripts, placedActorBases, completionEnableRefs, placedRefEdids);
     }
 
     /// <summary>Re-keys a plugin-local FormID into save space using the plugin's high-byte → save-index

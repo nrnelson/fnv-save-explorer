@@ -1665,6 +1665,21 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
        `GetItemCount`/globals/quest-vars) — the hard, FP-prone, inherently-partial piece. We currently SIDESTEP guards
        (the "line was said ⇒ on that path" proxy in the conditional-dialogue pass) or handle them ad hoc (counter
        thresholds, CTDA functions). A real evaluator would unlock many conditional effects at once.
+       **STAGE B STARTED 2026-06-25 — `GuardEvaluator` (three-valued Kleene) BUILT + validated, NOT yet wired to
+       production.** `Core/GuardEvaluator.cs` evaluates an `if`-guard against decoded save state returning
+       true/false/**unknown**; the FIRST function set is `<Ref>.GetDead` (death registry, via the newly-exposed
+       `PluginDatabase.PlacedReferenceEdids`) + `GetObjectiveCompleted`/`GetObjectiveDisplayed`/`GetStage`/
+       `GetStageDone`/`GetQuestRunning`/`GetQuestCompleted` (computed model) + literals; everything else (quest-local
+       vars, globals, world queries) → unknown, and a caller fires only on definite-true (so an unknown guard never
+       fires). Pinned by 9 unit tests; inspectable on real saves via CLI `qguard`. **The GameMode world-poll pass that
+       would consume it is written but HELD BACK** because it produces **zero movement on the 3 oracles + gtg**: their
+       mislabelled quests completed via **dialogue / non-lethal** paths whose state lives in **undecoded quest-local
+       vars** (e.g. Wang Dang Atomic Tango — the boss refs VFSFistoREF/VFSOldBenREF/VFSAngeloREF/VFSBeatrixREF all
+       resolve but are **alive**: completed non-lethally), and most other mislabels have **no GameMode script at all**;
+       the FPs are the mod's unpersisted `nEnableDLC` + a completed-and-dropped formType-7 quest — none guard-fixable.
+       So per the project's controlled-diff bar, the poll awaits a **kill-completion ground-truth save pair** (save
+       just-before/after killing a GameMode-poll quest's targets) to prove it fires correctly. **The bottleneck is
+       ground-truth breadth + the quest-local-var decode (the QUST changeform var block), not the evaluator.**
     **Target architecture:** `CompletionRule` catalog → `SaveSignalEvaluator.TriggerFired(rule, save, db)` (dispatch
     on TriggerKind — we already have most of these checks, just scattered) → `GuardEvaluator.Holds(guard, save, db)`
     (the new build) → a fixpoint applying fired-and-held rules, gated to running.

@@ -374,6 +374,14 @@ public sealed class QuestPipboy
             }
         }
 
+        // ---- GameMode world-poll completion (ROADMAP §6 #16 Stage B) is BUILT but not yet wired here. The engine
+        // runs each running quest's GameMode block every frame, completing objectives/quests when world-state guards
+        // hold; GuardEvaluator + db.PlacedReferenceEdids let us replicate that against decoded save state, firing only
+        // on a save-derived `GetDead` discriminant (a persisted kill). It is held back from production until a
+        // controlled kill-completion save pair validates it firing correctly — the 3 oracles don't exercise it (their
+        // mislabelled quests completed via dialogue / non-lethal paths whose state lives in undecoded quest-local
+        // vars). See the `qguard` probe + the GuardEvaluator unit tests. ----
+
         // ---- Assemble: a player-facing quest shows when it's running/completed with a displayed objective. ----
         var quests = new List<PipboyQuest>();
         foreach (var st in states.Values)
