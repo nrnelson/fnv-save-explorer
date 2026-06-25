@@ -173,4 +173,20 @@ public class QuestScriptTests
         // A guard testing a non-counter (a do-once flag not in the set) is not matched.
         Assert.Null(QuestScript.FindCounterComparison("DoOnce == 0", counters));
     }
+
+    [Fact]
+    public void Parses_enable_ref_calls()
+    {
+        // The HELIOS One completion shape: a script enables FX refs by editor id (with/without an arg). A comment
+        // and a non-Enable method call are ignored.
+        const string sctx =
+            "FXHeliosCollector1REF.Enable 1\n" +
+            "FXHeliosGodRay01REF1.Enable\n" +
+            "SomeMarkerREF.Disable 0   ; not an Enable\n" +
+            "GSJoeCobbRef.AddScriptPackage GSPGTravelPackage";
+
+        var refs = QuestScript.ParseEnableRefs(sctx);
+
+        Assert.Equal(["FXHeliosCollector1REF", "FXHeliosGodRay01REF1"], refs);
+    }
 }

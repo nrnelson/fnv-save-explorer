@@ -114,6 +114,17 @@ public sealed class TesPlugin
     /// Plugin-local; re-keyed by <see cref="PluginDatabase"/>. Empty unless read with <c>readActors: true</c>.</summary>
     public IReadOnlyList<(uint RefFormId, uint BaseFormId)> PlacedActorBases { get; }
 
+    /// <summary>Named placed reference <c>EDID</c> → its FormID (ROADMAP §6 #16 Stage 2) — lets a completion
+    /// script's <c>&lt;Ref&gt;.Enable</c> editor id resolve to the reference a quest enables on completion.
+    /// Plugin-local; re-keyed by <see cref="PluginDatabase"/>. Empty unless read with <c>readActors: true</c>.</summary>
+    public IReadOnlyList<(string Edid, uint FormId)> PlacedRefEdids { get; }
+
+    /// <summary>Each <c>(QuestEdid, RefEdid)</c> where a script block that calls <c>CompleteQuest &lt;Quest&gt;</c>
+    /// also <c>Enable</c>s reference <c>RefEdid</c> (ROADMAP §6 #16 Stage 2). Finding such a ref enabled in the save
+    /// proves the completion ran — the signal for activator/world-state-completed quests (e.g. That Lucky Old Sun,
+    /// whose reflector-console completion enables the HELIOS One power FX). Empty unless read with the SCPT group.</summary>
+    public IReadOnlyList<(string QuestEdid, string RefEdid)> CompletionEnables { get; }
+
     private TesPlugin(
         string fileName,
         IReadOnlyList<string> masters,
@@ -123,7 +134,9 @@ public sealed class TesPlugin
         IReadOnlyList<CounterIncrement> counterIncrements,
         IReadOnlyList<ExternalQuestEffect> externalQuestEffects,
         IReadOnlyList<(uint, uint)> actorScripts,
-        IReadOnlyList<(uint, uint)> placedActorBases)
+        IReadOnlyList<(uint, uint)> placedActorBases,
+        IReadOnlyList<(string, uint)> placedRefEdids,
+        IReadOnlyList<(string, string)> completionEnables)
     {
         FileName = fileName;
         Masters = masters;
@@ -134,6 +147,8 @@ public sealed class TesPlugin
         ExternalQuestEffects = externalQuestEffects;
         ActorScripts = actorScripts;
         PlacedActorBases = placedActorBases;
+        PlacedRefEdids = placedRefEdids;
+        CompletionEnables = completionEnables;
     }
 
     public static TesPlugin Load(string path, bool readDialogue = false, bool readActors = false)
@@ -174,6 +189,8 @@ public sealed class TesPlugin
         var externalQuestEffects = new List<ExternalQuestEffect>(); // completing effects from any SCPT (Stage 1)
         var actorScripts = new Dictionary<uint, uint>(); // base NPC_/CREA FormID -> SCRI script (Stage 2)
         var placedBases = new Dictionary<uint, uint>(); // placed ACHR/ACRE FormID -> NAME base actor (Stage 2)
+        var placedEdids = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase); // placed ref EDID -> FormID (Stage 2)
+        var completionEnables = new List<(string QuestEdid, string RefEdid)>(); // quest -> refs its completion enables (Stage 2)
         while (true)
         {
             var gsig = ReadSignature(fs);
@@ -192,13 +209,13 @@ public sealed class TesPlugin
 
             var labelType = Encoding.ASCII.GetString(label);
             if (groupType == 0 && (NamedTypes.Contains(labelType) || labelType == "SCPT"))
-                ReadRecords(fs, contentSize, localized, forms, quests, scripts, counterIncrements, externalQuestEffects);
+                ReadRecords(fs, contentSize, localized, forms, quests, scripts, counterIncrements, externalQuestEffects, completionEnables);
             else if (groupType == 0 && labelType == "DIAL" && readDialogue)
                 ReadInfoEffects(fs, contentSize, dialogueInfos); // descend DIAL -> Topic Children -> INFO (Phase B)
             else if (groupType == 0 && labelType is "NPC_" or "CREA" && readActors)
                 ReadActorScripts(fs, contentSize, actorScripts); // base actor -> SCRI (Stage 2 kill-completion)
             else if (groupType == 0 && labelType is "CELL" or "WRLD" && readActors)
-                ReadPlacedActors(fs, contentSize, placedBases); // placed ACHR -> base (Stage 2 spawned-kill binding)
+                ReadPlacedActors(fs, contentSize, placedBases, placedEdids); // placed ACHR->base + ref EDID->FormID (Stage 2)
             else
                 fs.Seek(contentSize, SeekOrigin.Current); // skip the whole group without reading its bytes
         }
@@ -212,7 +229,9 @@ public sealed class TesPlugin
 
         return new TesPlugin(fileName, masters, forms, quests, dialogueInfos, counterIncrements, externalQuestEffects,
             actorScripts.Select(kv => (kv.Key, kv.Value)).ToList(),
-            placedBases.Select(kv => (kv.Key, kv.Value)).ToList());
+            placedBases.Select(kv => (kv.Key, kv.Value)).ToList(),
+            placedEdids.Select(kv => (kv.Key, kv.Value)).ToList(),
+            completionEnables);
     }
 
     /// <summary>Descends a dialogue (<c>DIAL</c>) group — which nests <c>INFO</c> records inside per-topic
@@ -286,7 +305,8 @@ public sealed class TesPlugin
         List<(uint, string, string, int)> forms, List<QuestDefinition> quests,
         Dictionary<uint, (string GameMode, List<string> Locals)> scripts,
         List<CounterIncrement> counterIncrements,
-        List<ExternalQuestEffect> externalQuestEffects)
+        List<ExternalQuestEffect> externalQuestEffects,
+        List<(string QuestEdid, string RefEdid)> completionEnables)
     {
         var end = fs.Position + contentSize;
         while (fs.Position < end)
@@ -330,6 +350,18 @@ public sealed class TesPlugin
                             foreach (var e in QuestScript.Parse(body))
                                 if (CompletingVerbs.Contains(e.Verb) && !string.IsNullOrEmpty(e.TargetQuestEdid))
                                     externalQuestEffects.Add(new ExternalQuestEffect(formId, e.TargetQuestEdid, e.Verb, e.Arg1, e.Conditional, block));
+                        // Completion-enable (ROADMAP §6 #16 Stage 2): a SCRIPT that calls CompleteQuest Q also Enables
+                        // specific refs — finding one enabled in the save proves the completion ran (the activator/
+                        // world-state signal, e.g. HELIOS One's reflector console completes VMS03 in OnActivate and
+                        // powers on the FX in a GameMode sequence). Whole-script scope ties enables across blocks (the
+                        // OnActivate completion and the GameMode FX sequence it triggers belong to the same completion).
+                        var completes = QuestScript.Parse(src)
+                            .Where(e => e.Verb == QuestScriptVerb.CompleteQuest && !string.IsNullOrEmpty(e.TargetQuestEdid))
+                            .Select(e => e.TargetQuestEdid).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        if (completes.Count > 0)
+                            foreach (var refEdid in QuestScript.ParseEnableRefs(src))
+                                foreach (var q in completes)
+                                    completionEnables.Add((q, refEdid));
                     }
                 continue;
             }
@@ -509,9 +541,12 @@ public sealed class TesPlugin
     }
 
     /// <summary>Recursively descends a <c>CELL</c>/<c>WRLD</c> group, recording each placed <c>ACHR</c>/<c>ACRE</c>
-    /// reference's <c>NAME</c> (its base actor FormID) — the placed-ref → base map a runtime-spawned actor is bound
-    /// through (ROADMAP §6 #16 Stage 2). Non-actor records are skipped cheaply (only their header is read).</summary>
-    private static void ReadPlacedActors(Stream fs, long contentSize, Dictionary<uint, uint> placedBases)
+    /// reference's <c>NAME</c> (its base actor FormID — the runtime-spawned-actor binding) and every NAMED placed
+    /// reference's <c>EDID</c> → FormID (so a completion-script <c>&lt;Ref&gt;.Enable</c> editor id resolves to the
+    /// ref a quest enables on completion). A <c>REFR</c>'s <c>EDID</c>, when present, is its first subrecord, so it
+    /// is read cheaply (header + the EDID) without parsing the rest; anonymous refs (the bulk) are skipped by seek.
+    /// ROADMAP §6 #16 Stage 2.</summary>
+    private static void ReadPlacedActors(Stream fs, long contentSize, Dictionary<uint, uint> placedBases, Dictionary<string, uint> placedEdids)
     {
         var end = fs.Position + contentSize;
         while (fs.Position < end)
@@ -522,21 +557,38 @@ public sealed class TesPlugin
             if (sig == "GRUP")
             {
                 ReadExactly(fs, 16);
-                ReadPlacedActors(fs, (long)size - HeaderSize, placedBases); // recurse into block/subblock/children
+                ReadPlacedActors(fs, (long)size - HeaderSize, placedBases, placedEdids); // recurse into block/subblock/children
                 continue;
             }
             var flags = ReadU32(fs);
             var formId = ReadU32(fs);
             ReadExactly(fs, 8);
-            if (sig is not ("ACHR" or "ACRE")) { fs.Seek(size, SeekOrigin.Current); continue; } // placed actors only
-            var data = ReadExactly(fs, (int)size);
-            if ((flags & CompressedFlag) != 0) data = Decompress(data);
-            foreach (var (type, sub) in ParseSubrecords(data))
-                if (type == "NAME" && sub.Length >= 4)
+
+            if (sig is "ACHR" or "ACRE") // placed actor: read NAME (base) + EDID, both from the full data
+            {
+                var data = ReadExactly(fs, (int)size);
+                if ((flags & CompressedFlag) != 0) data = Decompress(data);
+                foreach (var (type, sub) in ParseSubrecords(data))
                 {
-                    placedBases[formId] = BinaryPrimitives.ReadUInt32LittleEndian(sub); // base actor FormID
-                    break;
+                    if (type == "NAME" && sub.Length >= 4) placedBases[formId] = BinaryPrimitives.ReadUInt32LittleEndian(sub);
+                    else if (type == "EDID" && ZString(sub) is { Length: > 0 } e) placedEdids[e] = formId;
                 }
+            }
+            else if (sig == "REFR" && (flags & CompressedFlag) == 0 && size >= 6) // named placed ref: EDID is the first subrecord
+            {
+                var headerBytes = ReadExactly(fs, 6); // [type:4][size:u16]
+                if (Encoding.ASCII.GetString(headerBytes, 0, 4) == "EDID")
+                {
+                    var esize = BinaryPrimitives.ReadUInt16LittleEndian(headerBytes.AsSpan(4, 2));
+                    var estr = ReadExactly(fs, esize);
+                    if (ZString(estr) is { Length: > 0 } e) placedEdids[e] = formId;
+                    fs.Seek((long)size - 6 - esize, SeekOrigin.Current);
+                }
+                else
+                    fs.Seek((long)size - 6, SeekOrigin.Current); // no leading EDID — anonymous ref, skip the rest
+            }
+            else
+                fs.Seek(size, SeekOrigin.Current);
         }
     }
 

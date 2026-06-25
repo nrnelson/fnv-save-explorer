@@ -253,6 +253,27 @@ public static class QuestScript
     }
 
     private static string Flip(string op) => op switch { ">" => "<", "<" => ">", ">=" => "<=", "<=" => ">=", _ => op };
+
+    // A `<RefEditorId>.Enable` reference-method call (FNV scripts enable a placed ref by editor id).
+    private static readonly Regex EnableCall =
+        new(@"(?:^|[\s;])([A-Za-z_][A-Za-z0-9_]*)\.Enable\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>Extracts the editor ids of references a script block <c>Enable</c>s (ROADMAP §6 #16 Stage 2) — e.g.
+    /// <c>FXHeliosCollector1REF.Enable 1</c>. A quest's completion block enables specific refs (HELIOS One's power
+    /// FX), so finding such a ref enabled in the save proves the completion ran (the activator-completion signal).</summary>
+    public static IReadOnlyList<string> ParseEnableRefs(string? blockText)
+    {
+        if (string.IsNullOrWhiteSpace(blockText))
+            return [];
+        var refs = new List<string>();
+        foreach (var rawLine in blockText.Split('\n'))
+        {
+            Tokens(rawLine, out var trimmed); // strips the comment tail
+            foreach (Match m in EnableCall.Matches(trimmed))
+                refs.Add(m.Groups[1].Value);
+        }
+        return refs;
+    }
 }
 
 /// <summary>

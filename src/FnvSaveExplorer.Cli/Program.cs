@@ -114,6 +114,29 @@ try
             Deaths(FalloutSave.Load(path), path,
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
             break;
+        case "refenabled":
+        {
+            var en = FalloutSave.Load(path).EnabledReferences();
+            var probe = ParseOffset(args[2]);
+            Console.WriteLine($"enabled refs: {en.Count};  0x{probe:X8} enabled = {en.Contains(probe)}");
+            break;
+        }
+        case "qenable":
+        {
+            var s2 = FalloutSave.Load(path);
+            var db2 = PluginDatabase.ForSave(s2, null, GameDataLocator.FindMo2Mods(path), withActors: true);
+            var enabled = s2.EnabledReferences();
+            Console.WriteLine($"CompletionEnableRefs: {db2.CompletionEnableRefs.Count} quests; PlacedRefEdids resolved; enabled refs in save: {enabled.Count}");
+            var qf = args.Length > 2 ? ParseOffset(args[2]) : 0u;
+            if (qf != 0 && db2.CompletionEnableRefs.TryGetValue(qf, out var refs))
+            {
+                Console.WriteLine($"  quest 0x{qf:X8} \"{db2.Quest(qf)?.Name}\" enables {refs.Count} ref(s) on completion:");
+                foreach (var r in refs) Console.WriteLine($"     0x{r:X8}  enabled={enabled.Contains(r)}");
+            }
+            else if (qf != 0)
+                Console.WriteLine($"  quest 0x{qf:X8} has NO completion-enable refs harvested.");
+            break;
+        }
         case "stats":
             Stats(FalloutSave.Load(path));
             break;

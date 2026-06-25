@@ -79,6 +79,18 @@ public class GlobalDataTests
     }
 
     [Fact]
+    public void EnabledReferences_detects_a_form_flags_change_clearing_the_disabled_bit()
+    {
+        // QuestSave's target ref (iref 2 -> 0x0010A050) carries a CHANGE_FORM_FLAGS change form whose new flags
+        // (0x0080000B) clear the 0x800 "Initially Disabled" bit -> the ref reads as ENABLED (ROADMAP §6 #16 Stage 2,
+        // the activator/world-state completion signal). The quest change form (0x0010A001, no FORM_FLAGS bit) is not.
+        var enabled = FalloutSave.Parse(QuestSave.Build()).EnabledReferences();
+
+        Assert.Contains(0x0010A050u, enabled);
+        Assert.DoesNotContain(0x0010A001u, enabled);
+    }
+
+    [Fact]
     public void MiscStatNames_maps_known_indices_and_is_null_out_of_range()
     {
         Assert.Equal(43, MiscStatNames.Count); // FO3/FNV misc-stat array size

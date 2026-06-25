@@ -1602,11 +1602,23 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
       (Ring-a-Ding-Ding! correctly stays not-surfaced there — its completion line wasn't said yet), Save 420 = 35
       (mislabelled 13→12), FP unchanged.** 2 synthetic tests pin it (conditional SetStage→complete completes a
       running quest; →non-completing stage does not).
-    - **That Lucky Old Sun (VMS03) WALLED:** `qfired` = only `[StartQuest, SetStage 10]` (early); `qcond` = only
-      `GetStage >= 10`. No dialogue or CTDA completion signal exists — HELIOS One completes by **activating the power
-      console** (an activator/world-state event, no kill, no said completion line, no QUST change form: its only
-      change form is a 650-B REFR/alias stub). This is the genuinely-unrecoverable activator-gated class; documented,
-      not pursued (no readable save signal).
+    - **That Lucky Old Sun (VMS03) — initially called WALLED, then RECOVERED (the "walled" call was wrong; the user
+      refused it).** HELIOS One completes by **activating the reflector console** — no kill, no said completion line,
+      no QUST change form (its only change form is a REFR/alias stub). BUT the activation has permanent world
+      effects: the completion script (`VHeliosArchimedesSCRIPT`, OnActivate `→ CompleteQuest VMS03`) **`Enable`s the
+      HELIOS power FX refs** in a GameMode sequence, and an enabled ref PERSISTS in the save. Controlled-diff
+      confirmed it (Save 122 HELIOS-not-done vs Save 420 done): `FXHeliosCollector1REF` (0x000A5AAB) and the god-ray
+      refs gain a `CHANGE_FORM_FLAGS` change form whose new flags clear the `0x800` Initially-Disabled bit = enabled.
+      **SHIPPED the activator/world-state-completion mechanism:** `FalloutSave.EnabledReferences()` (refs with a
+      `0x800`-clearing FORM_FLAGS change / enable marker); `QuestScript.ParseEnableRefs` + `TesPlugin` harvests, per
+      script that calls `CompleteQuest Q`, the `<Ref>.Enable` editor ids → Q's completion-enable refs, and a
+      worldspace REFR-`EDID`→FormID scan resolves them; `PluginDatabase.CompletionEnableRefs` (quest → ref FormIDs);
+      `QuestPipboy` completes a RUNNING quest when one of its completion-enable refs is enabled in the save (gated to
+      running ⇒ reclassify-only, no add ⇒ no new FP). **Results: Save 420 35→36 (mislabelled 12→11), Save 57 = 7/7,
+      Save 122 = 16, FP unchanged; gtg pair correct; pre-HELIOS saves keep VMS03 active (no false completion).** Cost:
+      the REFR-EDID worldspace scan adds ~1 s to `pipboy`. Diagnostics: CLI `refenabled`, `qenable`. 2 unit tests pin
+      the parser + the enabled-ref detector (full chain validated on the Save-420 ground truth). **Net: the
+      activator-gated class is NOT unrecoverable — the completion's world-state side effects are the readable signal.**
 
 ---
 

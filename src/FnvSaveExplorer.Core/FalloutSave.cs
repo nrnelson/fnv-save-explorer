@@ -265,6 +265,31 @@ public sealed class FalloutSave
     public IReadOnlySet<uint> DeadReferences() =>
         StateChangedRefs().Where(r => r.Status == 1 && r.FormId != 0).Select(r => r.FormId).ToHashSet();
 
+    /// <summary>References the save records as <b>enabled</b> (ROADMAP §6 #16 Stage 2): a reference that was
+    /// <i>Initially Disabled</i> in the masters and then <c>Enable</c>d carries a <c>CHANGE_FORM_FLAGS</c> (bit0)
+    /// change form whose new flags clear the <c>0x800</c> "Initially Disabled" bit, or a bare enable marker
+    /// (FormType 0x08, flags 0x80000000, len 0). A quest's completion script enables specific refs (e.g. HELIOS
+    /// One's power FX), so a completion-enabled ref appearing here is proof that completion ran — the signal for
+    /// activator/world-state-completed quests (That Lucky Old Sun). The caller intersects this with the specific
+    /// refs a quest's completion enables (so the broad <c>0x800</c>-clear set can't over-fire).</summary>
+    public IReadOnlySet<uint> EnabledReferences()
+    {
+        var result = new HashSet<uint>();
+        foreach (var cf in EnumerateChangeForms())
+        {
+            if (cf.FormId == 0)
+                continue;
+            if ((cf.ChangeFlags & 0x1) != 0 && cf.DataLength >= 4)      // CHANGE_FORM_FLAGS: new flags clear 0x800
+            {
+                if ((ReadUInt32At(cf.DataOffset) & 0x800) == 0)
+                    result.Add(cf.FormId);
+            }
+            else if (cf.FormType == 0x08 && cf.ChangeFlags == 0x80000000 && cf.DataLength == 0) // bare enable marker
+                result.Add(cf.FormId);
+        }
+        return result;
+    }
+
     /// <summary>Each runtime-<b>created</b> reference change form (FormID high byte <c>0xFF</c>) paired with the
     /// save-space FormIDs its data references (ROADMAP §6 #16 Stage 2). A spawned actor is created from a placed
     /// <b>template</b> reference, whose FormID it embeds; resolving that template → base actor → script binds the

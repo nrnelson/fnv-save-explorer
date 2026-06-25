@@ -431,6 +431,21 @@ public sealed class QuestPipboy
             }
         }
 
+        // ---- Activator / world-state completion (ROADMAP §6 #16 Stage 2): an objective-driven quest whose
+        // completion has no stage and no kill — it runs `CompleteQuest` from an OnActivate script that also
+        // Enable's specific references (e.g. That Lucky Old Sun's reflector console powers on the HELIOS One FX).
+        // Those refs persist as ENABLED in the save, so a RUNNING quest with one of its completion-enabled refs
+        // enabled is completed. Intersecting the quest's specific enable-refs with the save's enabled set keeps it
+        // precise; gated to running ⇒ reclassify active→completed only (no add ⇒ no new FP). ----
+        if (db.CompletionEnableRefs.Count > 0)
+        {
+            var enabled = save.EnabledReferences();
+            if (enabled.Count > 0)
+                foreach (var (questFormId, refs) in db.CompletionEnableRefs)
+                    if (states.TryGetValue(questFormId, out var t) && t is { Running: true, Completed: false } && refs.Any(enabled.Contains))
+                        t.Completed = true;
+        }
+
         // ---- Apply each quest's reached-stage objective effects in stage order to settle objective state. ----
         foreach (var st in states.Values)
         {
