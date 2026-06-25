@@ -135,9 +135,11 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    constancy map) and the **coverage map in SPEC §4l**: the fixed-length types (`0x20`/`0x21`/`0x28`/
    `0x2B`/`0x32`/`0x0B`, plus the `0x08` zero-payload marker) are sized; the dominant `0x00` (script/
    animation/control state) and `0x0A` (actor/placement, float-heavy) are located, not field-decoded. The
-   `cfwalk` CLI renders any change form as a labeled field tree with explicit `unknown[n]` gaps (the sized
-   types decoded; the rest one honest gap). **Next:** fold the REFR/ACHR `refdump` decode (§4g–§4j) into the
-   full walk; then graduate `0x00`/`0x0A` and the remaining located types via controlled diffs.
+   `cfwalk` CLI renders any change form as a labeled field tree with explicit `unknown[n]` gaps. Sized so far:
+   the fixed types above + the count-prefixed list types `0x22`/`0x25`; REFR/ACHR are broken into their located
+   spans (MOVE / havok-AV array / ExtraDataList+inventory). **Remaining is mostly SEMANTICS (needs controlled
+   diffs):** name the sized types (`0x20`–`0x32`), decode the `0x00`/`0x0A` delimited script/actor fields, and
+   fold the QUST stage/objective decode (§6 #3) into the walk. See the controlled-diff shopping list below.
 2. **GlobalData full type coverage.** Several numbered types are still only partially decoded; finish
    them, and pin the type-2 registry status codes (only `1` = death is confirmed; 2–7 unknown).
 3. **Quest / Pip-Boy interpreter** (former #16) — now a *consumer* of the decode, not bespoke probes.

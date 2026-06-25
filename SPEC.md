@@ -565,6 +565,9 @@ unlabelled):** both verified across vanilla + base VNV, the length matching the 
   long float run (position/rotation/scale-shaped). Reads as actor/placement state. Not field-decoded.
 - `0x01` REFR / `0x02` ACHR — the reference path: MOVE block, havok/AV array, ExtraDataList, inventory, and the
   karma/XP slots are decoded (§4g–§4j); the rest of the actor-value array and most base state remain `unknown`.
+  `cfwalk` breaks a MOVE-anchored record into its located spans — `MOVE block[27]`, `havok/actor-value
+  array[n]`, `ExtraDataList + inventory[n]` — rather than one opaque gap; the byte-level field walk + item list
+  stay in `refdump`/`inventory`. Records without the MOVE bit fall to a single gap (anchor via `refdump`).
 - `0x09` NPC_ — player base: SPECIAL + name (§4d) decoded; most records are tiny (modal len 6) FaceGen/flag stubs.
 - `0x07` — **HETEROGENEOUS** (not one record type): some are **QUST** change forms ("Ain't That a Kick in the
   Head" resolves; the packed formType-7 stage encoding the quest work decodes — §6 #3), but others are **cell /

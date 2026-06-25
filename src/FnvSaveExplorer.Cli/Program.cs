@@ -1785,10 +1785,31 @@ static IEnumerable<string> WalkPayload(int formType, uint flags, byte[] d)
             foreach (var line in DelimitedTokens(d)) yield return line;
             break;
 
+        // REFR/ACHR — break the payload into the deterministically-LOCATED structural spans (§4i/§4j): the
+        // MOVE block, the havok/actor-value array, then the ExtraDataList + inventory. Each stays a labeled
+        // span (located, not byte-decoded here); `refdump`/`inventory` give the byte-level walk + item list.
+        case 0x01 or 0x02:
+        {
+            var hasMove = (flags & ReferenceChangeForm.ChangeRefrMove) != 0
+                          && ReferenceChangeForm.MoveBlockLength < d.Length
+                          && d[ReferenceChangeForm.MoveBlockLength] == ReferenceChangeForm.Delimiter;
+            if (!hasMove)
+            {
+                yield return "(REFR/ACHR — no MOVE block to anchor; byte-level walk via `refdump`)";
+                yield return Gap(0, d, d.Length);
+                break;
+            }
+            yield return Field(0, "MOVE block[27]", Hex(d, 0, 27) + "  (cell ref + pos + rot, §4i)");
+            var afterMove = ReferenceChangeForm.MoveBlockLength + 1;   // past the 0x7C delimiter
+            var listStart = ReferenceChangeForm.InventorySearchStart(d, 0, flags);
+            if (listStart > afterMove)
+                yield return $"+0x{afterMove:X3}  unknown[{listStart - afterMove}]  havok/actor-value array (§4i/§4j; karma/XP at slots 100/101)";
+            if (listStart < d.Length)
+                yield return $"+0x{listStart:X3}  unknown[{d.Length - listStart}]  ExtraDataList + inventory (§4g–§4i; decode via `refdump`/`inventory`)";
+            break;
+        }
+
         default:
-            // REFR/ACHR have their own deep decode via `refdump` (§4g–§4j); not folded in here yet.
-            if (formType is 0x01 or 0x02)
-                yield return "(REFR/ACHR — inventory/AV decode via `refdump`; field tree not yet folded in here)";
             yield return Gap(0, d, d.Length);
             break;
     }
