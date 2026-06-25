@@ -1691,6 +1691,18 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
        load (no save signal). So var-decode is real, generalizable infrastructure but moves ZERO on the 4 oracles.
        Remaining for full var use: map the SLSD index→source name (the masters reader keeps only local-var *names*
        from source text, not SLSD indices) before wiring vars into the guard evaluator.
+       **CREATURE-DEATH SIGNAL FINDING 2026-06-25 (the fih controlled diff, "Can You Find it in Your Heart?" kills
+       7 critters):** the type-2 death registry is NOT keyed by the editor placed-ref the script's `<Ref>.GetDead`
+       checks. Across the fight the registry gained exactly **+7 status-1 (dead) entries (24→31)** — so all 7 deaths
+       ARE persisted (governing rule holds) — but only **2 of 7** resolve to the masters editor-ref FormIDs
+       (`CrBloatIvanpah01/02REF`). The other 5 are recorded elsewhere: a critter with its own ACHR/REFR change form
+       (e.g. `CrRadScorpIvanpahREF` 0x0014447F — death/corpse state in its 522-byte type-0x42 form, NOT the registry)
+       or under a runtime-instance id distinct from the editor ref. So `DeadReferences()` (registry-only) + a direct
+       editor-ref lookup under-reports creature deaths (2/7 here), which is why the GetDead guard reads false for the
+       other 5 and the kill-poll can't see creature-kill completions. **Implication: the kill-poll is limited to
+       NPC-kill quests** (gangers ARE registry-keyed by base FormID, the GTG case); generic-creature quests need the
+       editor-ref→dead-instance binding (decode the ACHR change-form lifestate + the registry's unresolved entries),
+       a separate deep ACHR decode. The signal exists; the binding is the missing decode.
     **Target architecture:** `CompletionRule` catalog → `SaveSignalEvaluator.TriggerFired(rule, save, db)` (dispatch
     on TriggerKind — we already have most of these checks, just scattered) → `GuardEvaluator.Holds(guard, save, db)`
     (the new build) → a fixpoint applying fired-and-held rules, gated to running.
