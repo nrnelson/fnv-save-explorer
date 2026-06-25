@@ -57,15 +57,27 @@ on; here's why,"** not "impossible."
   `0x09` → NPC_/QUST/ACHR). So the type byte is a change-CATEGORY (decode by payload shape, SPEC §4l), not a
   record-type tag — don't infer record type from it (use `recid`). Only `0x1F`'s −1-hopped base is uniformly NOTE.
 - **Location discovery = the map-marker REFR's visibility flags (SOLVED, SPEC §4m), plus two running tallies.**
-  Confirmed by a clean no-NPC diff (`canyonwreckage-*discover`, 2026-06-25): the discovered location's **map-marker
-  REFR** (base `0x10`, `FULL` "Abandoned BoS Bunker") carries a **type-`0x00` len-6 change form**
-  `[04][7C][2C][7C][flags][7C]` whose flags byte went **`0x01`→`0x03`** (Visible → Visible+Can-Travel-To). A
+  Confirmed by THREE diffs (`canyonwreckage`/`nhps`/`primm`, 2026-06-25): the discovered location's **map-marker
+  REFR** (base `0x10`) carries a **type-`0x00` len-6 change form** `[04][7C][2C][7C][flags][7C]` whose flags byte
+  is **`0x01` (Visible) → `0x03` (Visible+Can-Travel-To)** on discovery; a brand-new marker (`nhps` → "Nevada
+  Highway Patrol Station") gets the change form **created** at `0x03` with its FormID **appended** to the array. A
   location is discovered iff its marker REFR's change form has bit1 (`0x02`) set. *(Initial mis-call: I first said
-  "no per-marker change form" because I filtered `type 0x4` only — the marker change form is **type `0x00`** (a REFR
-  carrying just a flags change), a concrete "type byte ≠ record type" case. The `recid` XMRK/base check found it.)*
-  The "Locations Discovered" Misc Stat (GlobalData type 0) and a `0x32` per-event counter on a CONT ref (`0x001075F4`,
-  `1→2` Primm, `2→3` canyon) are just tallies, not the per-marker truth. The Primm pair's `0x08` markers (said INFO
-  + NAVM) were the coupled NPC encounter, not discovery.
+  "no per-marker change form" because I filtered `type 0x4` only — it is **type `0x00`**, a "type byte ≠ record
+  type" case found via `recid`.)* The "Locations Discovered" Misc Stat (GlobalData type 0) and a `0x32` per-event
+  counter on a CONT ref (`1→2`→`2→3`→`3→4` across the three) are just tallies. The "you can now fast-travel"
+  tutorial popup's seen-flag was **not isolable** (only position + game-time floats beyond the marker/count).
+- **refID-convention discrepancy — UNRESOLVED.** Map-marker (and §4g/§4k inventory/note) change-form refIDs resolve
+  via **`array[iref−1]`** (refID = array index + 1, "index 0 reserved"): proven on `nhps` (array grew 11580→11581,
+  the new marker is `array[11580]`, change-form refID = 11581 = index+1) and `canyonwreckage` (`array[iref−1]` =
+  "Canyon Wreckage" matches the save name; `array[iref]` = "Abandoned BoS Bunker" is the wrong neighbour). **But**
+  pre-existing forms resolve `array[iref]` 0-based — the player base (`0x07`) and the "Ain't That a Kick" QUST
+  (change-form iref 2 → `array[2]` = the quest, validated by the quest decoder) — and `cf.FormId`/the walker use
+  that 0-based form. Both refIDs are 2-bit-type 0, so the type bit doesn't explain it. Net: `cf.FormId` is correct
+  for pre-existing forms but **off-by-one for created/marker refs**; the governing rule (created-vs-existing? a
+  count/base field?) isn't pinned. **Do NOT "fix" `cf.FormId` globally** — it would break the validated
+  quest/player/notescan paths. Identify created/marker refs with `iref−1`; investigate the rule before relying on
+  the `recid` census for created refs (the "type byte ≠ record type" §4l census used low-iref pre-existing forms,
+  so it stands).
 
 - **Havok physics blob (bit2/bit10 `CHANGE_REFR_HAVOK_MOVE` records):** deliberately *located, not
   byte-decoded* (SPEC §10). Variable-length with a truncated final entry and a trailing slot array

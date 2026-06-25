@@ -615,22 +615,34 @@ the "type byte ≠ record type" census above was run.
 
 ### 4m. Discovered map-locations — the map-marker visibility flags (controlled diff)
 **How the save records which locations are discovered.** Each world-map location is a placed **map-marker REFR**
-(base form **`0x00000010`** = "MapMarker") carrying a `FULL` display name ("Abandoned BoS Bunker", …). When the
-player encounters one, the save holds a tiny **type-`0x00`, len-6 change form** on that REFR:
+(base form **`0x00000010`** = "MapMarker") carrying a `FULL` display name. When the player encounters one, the save
+holds a tiny **type-`0x00`, len-6 change form** on that REFR:
 ```
 [04][7C] [2C][7C] [flags:u8][7C]      flags = map-marker visibility (GECK layout: bit0 0x01 = Visible, bit1 0x02 = Can Travel To)
 ```
-**Cracked by a clean controlled diff** (`canyonwreckage-prediscover` → `canyonwreckage-postdiscover`, **no NPC** to
-confound it): discovering the location flipped exactly this byte on the marker REFR (`0x001558AA` "Abandoned BoS
-Bunker") **`0x01` → `0x03`** — i.e. Visible → Visible + **Can-Travel-To**. So a location is **"discovered"
-(fast-travelable) iff its map-marker REFR's change form has bit1 (`0x02`) set**; the discovered *set* is exactly
-those markers. (The same `[04][7C][2C][7C][flags][7C]` shape also appears on non-marker forms — e.g. an `INFO` went
-`0x01→0x03` in the Primm pair — so `0x2C` is a generic per-form flags field, here read for the marker REFR.)
-Alongside this, two running **tallies** also move per discovery (not the per-marker truth, just counts): the
-**"Locations Discovered" Misc Stat** (GlobalData type 0 — decoded/editable) and a `0x32` per-event counter on a
-CONT ref (§4l). The marker change form was initially missed by a `type 0x4`-only filter — it is **type `0x00`** (a
-REFR carrying only a flags change), a concrete instance of "type byte ≠ record type" (§4l). Found via `recid`
-(now reports `[MAP MARKER]` + the `FULL` name for any save FormID).
+A location is **"discovered" (fast-travelable) iff its map-marker REFR's change form has bit1 (`0x02`) set**; the
+discovered *set* is exactly those markers. **Confirmed by three controlled diffs:**
+- `canyonwreckage-*discover` (no NPC): an **existing** marker change form (iref 8163) flipped `flags 0x01 → 0x03`
+  (Visible → Visible + Can-Travel-To). The marker is **"Canyon Wreckage"** (`array[iref−1] = array[8162] =
+  0x00157F7E`) — matching the save name.
+- `nhps-*discover`: a brand-new marker → the save **created** the change form (`flags 0x03` directly) **and
+  appended the marker's FormID to the FormID array** (count 11580 → 11581). The marker is **"Nevada Highway Patrol
+  Station"** (`array[iref−1] = array[11580] = 0x00153403`).
+- `primm-*discover`: the same `[04][7C][2C][7C][flags][7C]` shape with `0x01→0x03` also appears on an `INFO`, so
+  `0x2C` is a **generic per-form flags field** (Seen/Enabled-style), here read for the marker REFR.
+
+**Marker change-form refID resolves via `array[iref−1]`** (the §4g/§4k "+1" convention: refID = array index + 1),
+NOT `array[iref]` — so `cf.FormId` (which the walker computes as `array[iref]`) gives the **off-by-one neighbour**
+for these records (e.g. it named the canyon marker `0x001558AA` "Abandoned BoS Bunker" = `array[8163]`, the wrong
+one). This contradicts pre-existing forms (player base `0x07`, the "Ain't That a Kick" QUST at iref 2) whose target
+*is* `array[iref]` — an **unresolved refID-convention discrepancy**, see [docs/DECISIONS.md]. The marker change
+form is **type `0x00`** (a REFR carrying only a flags change) — a concrete "type byte ≠ record type" case (§4l),
+initially missed by a `type 0x4`-only filter. Found via `recid` (now reports `[MAP MARKER]` + `FULL` name + base).
+
+> **The "you can now fast-travel" tutorial popup** (first fast-travelable discovery): a "seen" flag for it was
+> **not isolable** from the `nhps` pair — beyond the marker flip + the discovery count, the only other GlobalData
+> changes are player-position and game-time/global-variable **floats** (no clean `0→1` boolean). Whether the popup
+> is a persisted seen-flag or a one-shot scripted event needs a *no-movement* controlled pair around the popup.
 
 ---
 
