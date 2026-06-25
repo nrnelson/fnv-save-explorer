@@ -545,6 +545,16 @@ guess"):**
   every vanilla save — a config/settings snapshot). NOT universal: modded corpora show other length variants, so
   it is fixed *per variant*, not globally.
 
+**Count-prefixed list types — fully SIZED by corpus alignment (variable count, fixed entry stride; semantics
+unlabelled):** both verified across vanilla + base VNV, the length matching the formula exactly on every record.
+- `0x25` — **flags `0x80000000`**: `[u32 count][7C]` then `count` × `[ref:3 BE][7C]` (4-byte entries). `len = 5 +
+  4·count` (count 0/1/3/5/7/9 → len 5/9/17/25/33/41). Entries are 3-byte BE refIDs (the §4f convention; often a
+  consecutive iref run). A refID list — meaning unpinned.
+- `0x22` — **flags `0x00000004`**: `[n:u8][7C]` then `n/4` × `[ref:3 BE][7C][u32][7C][u32][7C]` (14-byte entries,
+  the `vsval`/ExtraDataList `b/4` count convention). `len = 2 + 14·(n/4)` (n = 4/8/0x0C/0x10/0xC4 → 1/2/3/4/49
+  entries → len 16/30/44/58/688). A rarer `flags 0x80000006` variant has a different trailing shape (not this
+  formula) — `cfwalk` correctly declines it to an `unknown[n]` gap rather than mis-parse.
+
 **Variable / structured types — LOCATED, not yet field-decoded:**
 - `0x00` — **DOMINANT** (vanilla 34k, base VNV 1.4M; the single most common change form). `0x7C`-delimited typed
   sub-records carrying embedded `[u16 len][7C][ascii][7C]` **strings** — animation/control names ("Idle",
@@ -556,9 +566,14 @@ guess"):**
 - `0x01` REFR / `0x02` ACHR — the reference path: MOVE block, havok/AV array, ExtraDataList, inventory, and the
   karma/XP slots are decoded (§4g–§4j); the rest of the actor-value array and most base state remain `unknown`.
 - `0x09` NPC_ — player base: SPECIAL + name (§4d) decoded; most records are tiny (modal len 6) FaceGen/flag stubs.
-- `0x04` / `0x05` / `0x07` / `0x0D` / `0x0F` / `0x16` / `0x1A` / `0x22` / `0x25` — located by the walker; payloads
-  not yet decoded. (`0x07` modal len 9 / flags `0x60000000`; `0x25` modal len ~5–9 / flags `0x80000000`; `0x22`
-  variable.) Several appear only in modded corpora (`0x05`/`0x0F`/`0x16`/`0x1A`).
+- `0x07` — **HETEROGENEOUS** (not one record type): some are **QUST** change forms ("Ain't That a Kick in the
+  Head" resolves; the packed formType-7 stage encoding the quest work decodes — §6 #3), but others are **cell /
+  map-fog data** (e.g. `0x0010D9F4`, per the quest RE) and more. Disambiguate by the masters' record type, not the
+  form-type byte. Multiple flag-gated payload shapes (`0x60000000` len 9, `0xE0000000` len 42, `0xC0000000` large);
+  not field-decoded here (quest stages/objectives are surfaced by `quests`, §6 #3).
+- `0x04` / `0x05` / `0x0D` / `0x0F` / `0x16` / `0x1A` — located by the walker; payloads not yet decoded. (`0x04`
+  large `0x7C`-delimited records, flags `0x20000000`, embedding `74`/`04`-typed ExtraDataList-like sub-blocks;
+  `0x0D` tiny.) Several appear only in modded corpora (`0x05`/`0x0F`/`0x16`/`0x1A`).
 
 Tooling: **`survey <save|dir> [0xNN]`** (the coverage survey above) and **`cfwalk <save> <iref>|--type 0xNN [N]`**
 (the labeled **full walk**, §6 #1b): renders a change form's payload as a field tree — labeled fields for the sized

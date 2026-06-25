@@ -1755,6 +1755,27 @@ static IEnumerable<string> WalkPayload(int formType, uint flags, byte[] d)
             // Constant 24-byte config block on vanilla (byte-identical); other variants on modded (§4l).
             yield return Field(0, "config[24]", Hex(d, 0, 24));
             break;
+        // 0x25 — count-prefixed refID list: [u32 count][7C] then count × [ref:3 BE][7C] (§4l, len = 5+4·count).
+        case 0x25 when d.Length >= 5 && d[4] == 0x7C && U32(d, 0) is var c25 &&
+                       c25 <= 0x100000 && d.Length == 5 + 4 * (int)c25:
+            yield return Field(0, "count", c25.ToString());
+            for (var e = 0; e < (int)c25; e++)
+            {
+                var o = 5 + e * 4;
+                yield return Field(o, $"ref[{e}]", Hex(d, o, 3));   // 3-byte BE refID; resolve via §4f if needed
+            }
+            break;
+        // 0x22 — count-prefixed list: [n:u8][7C] then n/4 × [ref:3 BE][7C][u32][7C][u32][7C] (§4l, len = 2+14·n/4).
+        case 0x22 when d.Length >= 2 && d[1] == 0x7C && (d[0] & 3) == 0 && d[0] / 4 is var c22 &&
+                       d.Length == 2 + 14 * c22:
+            yield return Field(0, "count*4", $"{d[0]} ({c22} entries)");
+            for (var e = 0; e < c22; e++)
+            {
+                var o = 2 + e * 14;
+                yield return Field(o, $"entry[{e}]",
+                    $"ref={Hex(d, o, 3)} u32={U32(d, o + 4)} u32={U32(d, o + 9)}");
+            }
+            break;
 
         // Delimited script/animation/actor state — STRUCTURE known (0x7C-tokenized with embedded
         // [u16 len][7C][ascii][7C] strings), FIELDS not yet labelled (§4l: 0x00, 0x0A). Show the tokens so
