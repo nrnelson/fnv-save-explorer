@@ -78,6 +78,14 @@ on; here's why,"** not "impossible."
   quest/player/notescan paths. Identify created/marker refs with `iref−1`; investigate the rule before relying on
   the `recid` census for created refs (the "type byte ≠ record type" §4l census used low-iref pre-existing forms,
   so it stands).
+  - **Update — NOT a transient creation artifact (`nhps-resave` experiment, reload + immediate re-save, no
+    movement).** The `+1` persists across a reload: the NHPS marker stays at `array[11580]` and its flags change
+    form keeps **iref 11581** (= index+1). (The reload *appended* 6 refs, 11581→11587, re-persisting nearby refs,
+    but the marker's index and its refID were unchanged.) So the split is **structural and stable**, not a
+    save-session quirk — it correlates with **persisted-reference** change forms (map markers, note-read markers,
+    inventory entries → `iref−1`, "index 0 reserved") vs **ESM-base-form** change forms (quest, player base/ref →
+    0-based `iref`). The exact governing field still isn't pinned, but the rule of thumb holds: resolve
+    persisted-reference change forms with `iref−1`, base-form change forms with `iref`.
 
 - **Havok physics blob (bit2/bit10 `CHANGE_REFR_HAVOK_MOVE` records):** deliberately *located, not
   byte-decoded* (SPEC §10). Variable-length with a truncated final entry and a trailing slot array
