@@ -650,6 +650,26 @@ initially missed by a `type 0x4`-only filter. Found via `recid` (now reports `[M
 > changes are player-position and game-time/global-variable **floats** (no clean `0→1` boolean). Whether the popup
 > is a persisted seen-flag or a one-shot scripted event needs a *no-movement* controlled pair around the popup.
 
+### 4n. Player perks (and traits) — the perk list in the player reference change form
+The player's **perks and traits** are a **count-prefixed list embedded in the player reference change form** (iref =
+PlayerRef + 1 — the same record that holds inventory §4g, karma/XP §4j), inside its ExtraDataList region:
+```
+[count*4 : u8][7C]   then count × ( [perkRef : 3 BE][7C][rank : u8][7C] )      # 6 bytes per perk; count*4 = the b/4 vsval convention (§4i)
+```
+Each `perkRef` is a 3-byte big-endian refID = **FormID-array index + 1** (the §4g "+1" convention), resolving to a
+**`PERK`** record (named via the masters; FNV stores **traits as PERK forms too**). `rank` is the perk rank (1 for
+single-rank perks). **Cracked by a controlled diff** (`gtg-complete` → `level2-gunsbachelor`: level 1→2, 13 skill
+points into Guns 15→28, **Confirmed Bachelor** perk taken): the saves are far apart (noisy change-form churn), so
+the perk was isolated **structurally**, not by change-form diff — `findname` located the perk
+(`Confirmed Bachelor = 0x001361B4`), which is **absent from the FormID array before and present after** (iref 8669),
+and `find` located its refID inside the player reference record. The decoded block reads `08 7C` (count*4 = **2**)
+then **Confirmed Bachelor** (rank 1) + **Hoarder** (the player's trait, also a PERK, rank 1) — exactly the
+character's perk + trait. **Taking a perk** therefore (a) **appends the perk's FormID to the FormID array** and
+(b) adds a `[perkRef][7C][rank][7C]` entry (count*4 += 4) — a length-changing edit, so this is **read-decodable but
+not same-length-editable** (like notes §4k). A `perks` reader (locating the list within the player ref record, then
+resolving each ref to a PERK name) is the natural consumer — **still to ship**. Tooling: **`findname <save>
+"<text>" [SIG]`** (find a base form by name → save-space FormID; how the perk was located) + `recid`/`find`.
+
 ---
 
 ## 8. Reference sources

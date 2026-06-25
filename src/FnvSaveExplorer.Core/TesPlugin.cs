@@ -305,6 +305,61 @@ public sealed class TesPlugin
         return found;
     }
 
+    /// <summary>R&D (full-decode): finds records whose <c>FULL</c> (or <c>EDID</c>) name contains
+    /// <paramref name="substring"/> (case-insensitive), optionally restricted to one record signature
+    /// (<paramref name="onlySig"/>, e.g. "PERK") for speed — non-matching records are seeked past without
+    /// reading their data. Returns (localFormId, signature, name). Header-only traversal except for matched-sig
+    /// records. Used to locate a named base form (e.g. a perk) when reverse-engineering where the save stores it.</summary>
+    public static List<(uint FormId, string Sig, string Name)> FindByName(Stream fs, string substring, string? onlySig = null)
+    {
+        var hits = new List<(uint, string, string)>();
+        fs.Seek(0, SeekOrigin.Begin);
+        var sig0 = ReadSignature(fs) ?? throw new SaveFormatException("empty file", 0);
+        if (sig0 != "TES4") throw new SaveFormatException($"not a TES4 plugin (found '{sig0}')", 0);
+        var hdr = ReadU32(fs);
+        ReadExactly(fs, 16);
+        fs.Seek(hdr, SeekOrigin.Current);
+
+        void Walk(long end)
+        {
+            while (fs.Position < end)
+            {
+                var s = ReadSignature(fs);
+                if (s is null) break;
+                var size = ReadU32(fs);
+                if (s == "GRUP")
+                {
+                    ReadExactly(fs, 16);
+                    Walk(fs.Position + ((long)size - HeaderSize));
+                }
+                else
+                {
+                    var flags = ReadU32(fs);
+                    var formId = ReadU32(fs) & 0xFFFFFF;
+                    ReadExactly(fs, 8);
+                    if (onlySig is not null && s != onlySig)
+                    {
+                        fs.Seek(size, SeekOrigin.Current);
+                        continue;
+                    }
+                    var data = ReadExactly(fs, (int)size);
+                    if ((flags & CompressedFlag) != 0) data = Decompress(data);
+                    string? full = null, edid = null;
+                    foreach (var (t, sub) in ParseSubrecords(data))
+                    {
+                        if (t == "FULL") full = ZString(sub);
+                        else if (t == "EDID") edid = ZString(sub);
+                    }
+                    var name = full ?? edid;
+                    if (name is not null && name.Contains(substring, StringComparison.OrdinalIgnoreCase))
+                        hits.Add((formId, s, name));
+                }
+            }
+        }
+        Walk(fs.Length);
+        return hits;
+    }
+
     /// <summary>Descends a dialogue (<c>DIAL</c>) group — which nests <c>INFO</c> records inside per-topic
     /// "Topic Children" sub-groups — collecting the quest-affecting calls in each <c>INFO</c>'s result-script
     /// source text (<c>SCTX</c>). Recurses through nested <c>GRUP</c>s and skips non-<c>INFO</c> records (the

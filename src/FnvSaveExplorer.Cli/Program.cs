@@ -40,6 +40,8 @@ if (args.Length < 2)
                                               and where it appears (FormID array iref / inventory / read note)
           fnvsave recid <save.fos> <formId> [formId...]   Identify the masters record SIGNATURE (REFR/DOOR/CHAL/…)
                                               + a placed ref's base form, for FormIDs the name index can't resolve (§6 #1)
+          fnvsave findname <save.fos> "<substring>" [SIG]   Find a base form by NAME across the masters -> save-space
+                                              FormID (SIG e.g. PERK restricts+speeds). R&D for locating where state lives (§6 #1)
           fnvsave setcount <in.fos> <out.fos> <formId> <count>  Edit a stack count (writes a new file)
           fnvsave setcondition <in.fos> <out.fos> <formId> <value>  Edit a stack's condition/health (new file)
           fnvsave caps <save.fos>             Show the player's caps (the 0x0000000F inventory stack)
@@ -317,6 +319,11 @@ try
             // R&D (§6 #1): identify the masters record SIGNATURE for one or more save FormIDs (REFR/DOOR/…),
             // for change forms the name index can't resolve. recid <save> <formId> [formId...]
             RecId(FalloutSave.Load(path), path, args[2..].Select(ParseOffset).Select(x => (uint)x).ToArray());
+            break;
+        case "findname":
+            // R&D (§6 #1): find a base form by NAME across the save's masters → save-space FormID.
+            // findname <save> "<substring>" [SIG]   (SIG e.g. PERK restricts + speeds the scan)
+            FindName(FalloutSave.Load(path), path, args[2], args.Length > 3 ? args[3] : null);
             break;
         case "setcount":
             return SetCount(path, args[2], ParseOffset(args[3]), uint.Parse(args[4]));
@@ -1688,6 +1695,31 @@ static void RecId(FalloutSave s, string savePath, uint[] formIds)
             Console.WriteLine($"0x{f:X8}  {rec.Signature}{baseNote}{marker}{name}  [{plugin}]");
         }
     }
+}
+
+// R&D (§6 #1): locate a base form by NAME across the save's masters, reporting the SAVE-SPACE FormID
+// (mod index from the save's load order). Used to find e.g. a perk's FormID, then trace where the save stores it.
+static void FindName(FalloutSave s, string savePath, string substring, string? onlySig)
+{
+    var dataFolder = GameDataLocator.FindDataFolder();
+    var mo2 = GameDataLocator.FindMo2Mods(savePath);
+    var hitCount = 0;
+    for (var modIndex = 0; modIndex < s.Plugins.Count; modIndex++)
+    {
+        var plugin = s.Plugins[modIndex];
+        var file = FindPluginFile(plugin, dataFolder, mo2);
+        if (file is null) continue;
+        using var stream = File.OpenRead(file);
+        List<(uint FormId, string Sig, string Name)> hits;
+        try { hits = TesPlugin.FindByName(stream, substring, onlySig); } catch { continue; }
+        foreach (var (local, sig, name) in hits)
+        {
+            var saveFormId = ((uint)modIndex << 24) | (local & 0xFFFFFF);
+            Console.WriteLine($"0x{saveFormId:X8}  {sig}  \"{name}\"  [{plugin}]");
+            hitCount++;
+        }
+    }
+    if (hitCount == 0) Console.WriteLine($"No record name contains \"{substring}\"{(onlySig is null ? "" : $" (sig {onlySig})")}.");
 }
 
 static string? FindPluginFile(string plugin, string? dataFolder, string? mo2Mods)
