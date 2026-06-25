@@ -621,7 +621,13 @@ holds a tiny **type-`0x00`, len-6 change form** on that REFR:
 [04][7C] [2C][7C] [flags:u8][7C]      flags = map-marker visibility (GECK layout: bit0 0x01 = Visible, bit1 0x02 = Can Travel To)
 ```
 A location is **"discovered" (fast-travelable) iff its map-marker REFR's change form has bit1 (`0x02`) set**; the
-discovered *set* is exactly those markers. **Confirmed by three controlled diffs:**
+discovered *set* is exactly those markers. **Three marker states** (confirmed across the diffs): **unknown** = not
+in the FormID array, no change form; **visible / "told-about"** (an NPC/note placed a greyed marker) = in the array
+with a `0x01` (Visible) change form; **discovered** = flags `0x03` (Visible + Can-Travel-To). Discovery therefore
+takes one of two forms in the save: a **DATA CHANGE** flipping an existing `0x01`→`0x03` (a told-about marker, e.g.
+"Canyon Wreckage" — its FormID `0x00157F7E` was already in the PRE array), or an **INSERT** that **appends** the
+marker's FormID to the array and creates the change form at `0x03` outright (a never-seen marker, e.g. NHPS
+`0x00153403`, array 11580→11581). **Confirmed by three controlled diffs:**
 - `canyonwreckage-*discover` (no NPC): an **existing** marker change form (iref 8163) flipped `flags 0x01 → 0x03`
   (Visible → Visible + Can-Travel-To). The marker is **"Canyon Wreckage"** (`array[iref−1] = array[8162] =
   0x00157F7E`) — matching the save name.
