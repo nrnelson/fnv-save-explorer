@@ -1,0 +1,21 @@
+# fih-submitted — vanilla, just after turning in "Can You Find It in Your Heart?" to Ranger Jackson.
+# Ground truth: user Pip-Boy screenshot (2026-06-25). 10 quests = 6 active + 4 completed.
+# This is a VANILLA mid-early oracle and the KILL/TURN-IN controlled-diff endpoint: the quest is a
+# "kill the critters" task, but it completes on the Ranger Jackson TURN-IN dialogue, not the kill — the
+# companion saves fih-accepted/close/onedead/complete all show it ACTIVE (ants dead at fih-complete, the
+# objective ticked, but the quest greys only here). Names use the masters FULL strings the CLI prints.
+# Known miss: Back in the Saddle (VCG02) — the empty-template quest with no decodable completion field
+# (ROADMAP §6 #16). Computed must stay 9 correct / 0 FP / 1 missed (Back in the Saddle).
+save = C:\Users\Nathan\Documents\My Games\FalloutNV\Saves\fih-submitted.fos
+
+active = Happy Trails Expedition
+active = Midnight Science-Fiction Feature!
+active = My Kind Of Town
+active = Sierra Madre Grand Opening!
+active = The Reunion
+active = They Went That-a-Way
+
+completed = Ain't That a Kick in the Head
+completed = Back in the Saddle
+completed = Can You Find it in Your Heart?
+completed = Ghost Town Gunfight

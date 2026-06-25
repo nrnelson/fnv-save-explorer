@@ -9,11 +9,15 @@ the GUI Quests tab). These let every session re-measure recall/precision without
 | Oracle | Save | Quests | Documented result |
 |--------|------|--------|--------------------|
 | `save57.oracle`  | vanilla "Nathan", Prospector Saloon (early) | 7 (5 active + 2 completed) | **7/7 EXACT, 0 FP** |
-| `save122.oracle` | VNV Extended, New Vegas Strip (mid) | 24 (10 active + 14 completed) | 13/24 correct, 4 FP, 5 missed |
-| `save420.oracle` | VNV Extended, Mojave Wasteland (late) | 68 (13 active + 55 completed) | 28/68 correct, 19 mislabelled, 3 FP, 21 missed (94% precision) |
+| `fih-submitted.oracle` | vanilla, just after turning in "Can You Find It in Your Heart?" | 10 (6 active + 4 completed) | **9/10, 0 FP, 1 missed** (Back in the Saddle) |
+| `save122.oracle` | VNV Extended, New Vegas Strip (mid) | 24 (10 active + 14 completed) | 16/24 correct, 4 FP, 5 missed |
+| `save420.oracle` | VNV Extended, Mojave Wasteland (late) | 68 (13 active + 55 completed) | 36/68 correct, 11 mislabelled, 3 FP, 21 missed (94% precision) |
 
-`save57` is the regression floor: any change MUST keep it 7/7. `save122` (mid) and `save420`
-(late) are the modded-save measures — all three reproduce the results above exactly.
+`save57` is the regression floor: any change MUST keep it 7/7, 0 FP. `fih-submitted` is the second
+vanilla floor and a kill/turn-in **controlled-diff endpoint** (its companion saves
+`fih-accepted`/`close`/`onedead`/`complete` show the quest ACTIVE — it greys only on the Ranger
+Jackson turn-in, not the kill, proving the completion is dialogue-driven). `save122` (mid) and
+`save420` (late) are the modded-save measures — all four reproduce the results above exactly.
 
 ## Running
 
@@ -21,6 +25,7 @@ From the repo root (so `dotnet run` resolves the CLI project):
 
 ```bash
 bash docs/pipboy-oracles/reconcile.sh docs/pipboy-oracles/save57.oracle
+bash docs/pipboy-oracles/reconcile.sh docs/pipboy-oracles/fih-submitted.oracle
 bash docs/pipboy-oracles/reconcile.sh docs/pipboy-oracles/save122.oracle
 bash docs/pipboy-oracles/reconcile.sh docs/pipboy-oracles/save420.oracle
 # Override the save path (e.g. a moved save folder) with a 2nd arg:
