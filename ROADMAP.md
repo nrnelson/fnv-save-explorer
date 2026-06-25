@@ -1644,10 +1644,21 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
     **What we have:** the META-pattern (reliable) + the ~6 handlers above. Each pass is precision-gated to
     ALREADY-RUNNING quests (reclassify-only ⇒ no added entry ⇒ no new FP), validated at every step against the 3
     oracles + the gtg/HELIOS controlled diffs.
+    **STAGE A SHIPPED 2026-06-24 — the unified `CompletionRule` catalog + dispatcher (item 1 below is now built).**
+    The five reclassify-to-completed passes (single-kill, counter-gated, activator/world-state, conditional-dialogue
+    SetStage, CTDA-proof) that each scraped their own source and recomputed their own save-derived sets are now ONE
+    flat catalog harvested once (`CompletionRule.Harvest(db)` over `ExternalCompletions`/`CounterGates`/
+    `CompletionEnableRefs`/`DialogueInfoEffects`/`DialogueInfoConditions`) dispatched through `SaveSignalEvaluator`
+    (which precomputes the said-INFO set, death registry + actor→script map, created-ref corpses, and enabled refs
+    once). `QuestPipboy.Compute`'s former five inline passes collapse to a single gated walk:
+    `for each rule: if quest Running && !Completed && evaluator.TriggerFired(rule) → completed`. Pure refactor,
+    **byte-identical scores** (57=7/7, 122=16, 420=36, FP unchanged; gtg pair still flips). The SEED passes
+    (SGE startup / formType-7 anchor / dialogue start+SetStage+objectives / fixpoint / CTDA stage-advance — the ones
+    that ADD to the running set) are deliberately left out of the catalog: folding them in changes add-semantics and
+    is a separate step. New files: `Core/CompletionRule.cs`, `Core/SaveSignalEvaluator.cs`.
     **What is NOT yet built (the path to making this automatic):**
-    1. **A unified `CompletionRule` catalog** — today each pass independently scrapes its own effects (`CounterGates`,
-       `CompletionEnableRefs`, dialogue effects, `ExternalQuestEffects`). They should be ONE per-quest list of
-       `{Verb, TargetQuest, Stage/Obj, TriggerKind, Binding(actor/ref/info FormIds), Guard}`, harvested once.
+    1. ~~**A unified `CompletionRule` catalog**~~ — DONE (Stage A, see above). Remaining: fold the SEED passes in too,
+       and add the explicit per-rule `Guard` field (currently guards are baked into trigger semantics).
     2. **More trigger types** (`OnHit`/`OnTrigger`/timers/package-done) — each NEW one needs a controlled diff first
        to LEARN its save trace, then a handler; once added it applies to ALL quests with that trigger.
     3. **A general guard/condition evaluator over the decoded save** (`GetDead`/`GetStage`/`GetObjectiveCompleted`/

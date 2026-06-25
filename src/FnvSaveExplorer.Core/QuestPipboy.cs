@@ -51,21 +51,6 @@ public sealed class QuestPipboy
 
     private QuestPipboy(IReadOnlyList<PipboyQuest> quests) => Quests = quests;
 
-    /// <summary>True when a said-INFO's quest-state <see cref="InfoCondition"/> proves its target quest reached a
-    /// completing (QSDT-0x01) stage — so the quest is completed. Uses the quest's <i>minimum</i> completing stage,
-    /// since reaching any complete-flagged stage finishes the quest. Matches the <c>qcond</c> probe rule.</summary>
-    private static bool ImpliesCompleted(InfoCondition c, QuestDefinition def)
-    {
-        var minComplete = def.Stages.Where(s => (s.Flags & CompleteQuestStageFlag) != 0).Select(s => (int?)s.Index).Min();
-        return c.Function switch
-        {
-            QuestFunction.GetQuestCompleted => c.Op is 0 or 3 && c.CompareValue >= 1,                          // == / >= 1
-            QuestFunction.GetStage when minComplete is { } cs => c.Op is 0 or 2 or 3 && c.CompareValue >= cs,  // == / > / >= a completing stage
-            QuestFunction.GetStageDone when minComplete is { } cs => c.Param2 >= cs && c.Op is 0 or 3 && c.CompareValue >= 1,
-            _ => false,
-        };
-    }
-
     /// <summary>Per-quest runtime state accumulated while interpreting reached-stage scripts.</summary>
     private sealed class QState
     {
@@ -247,22 +232,8 @@ public sealed class QuestPipboy
                 foreach (var sd in target.Def.Stages.Where(s => s.Index <= cap))
                     Reach(target, sd.Index);
 
-            // Conditional dialogue COMPLETION (ROADMAP §6 #16): a said-INFO whose CONDITIONAL `SetStage` targets a
-            // COMPLETING stage (QSDT 0x01) of an ALREADY-RUNNING quest completes it. The line was SAID (its change
-            // form is present), so it fired; a completion line is conditional only on the player's path, which —
-            // having said the line — they're on. Distinct from the dropped B2 lever: this fires ONLY for completing
-            // stages and ONLY on already-running quests, so it strictly reclassifies a shown-active quest to
-            // completed (no add ⇒ no new FP). Recovers e.g. "Ring-a-Ding-Ding!" — the "tell Mr. House/Yes Man the
-            // outcome" line conditionally SetStages VMQTops 80 (its "QuestCompleted" stage).
-            foreach (var (infoFormId, effects) in db.DialogueInfoEffects)
-            {
-                if (!saidInfoPresent.Contains(infoFormId))
-                    continue;
-                foreach (var e in effects)
-                    if (e is { Verb: QuestScriptVerb.SetStage, Conditional: true } && Resolve(e.TargetQuestEdid) is { Running: true, Completed: false } target
-                        && target.Def.Stages.Any(s => s.Index == e.Arg1 && (s.Flags & CompleteQuestStageFlag) != 0))
-                        target.Completed = true;
-            }
+            // NB: conditional-dialogue completion (a said-INFO's CONDITIONAL SetStage to a completing stage) is now a
+            // CompletionTrigger.DialogueSetStage rule applied via the unified completion walk below.
         }
 
         // ---- Fixpoint: run reached-stage scripts; non-conditional SetStage/StartQuest expand the running set. ----
@@ -348,15 +319,8 @@ public sealed class QuestPipboy
                         }
             }
 
-            foreach (var (infoFormId, conditions) in db.DialogueInfoConditions)
-            {
-                if (!saidPresent.Contains(infoFormId))
-                    continue;
-                foreach (var c in conditions)
-                    if (states.TryGetValue(c.QuestFormId, out var target) && target is { Running: true, Completed: false }
-                        && ImpliesCompleted(c, target.Def))
-                        target.Completed = true;
-            }
+            // NB: CTDA-proof completion (a said-INFO whose condition proves its quest reached a completing stage) is
+            // now a CompletionTrigger.CtdaProof rule applied via the unified completion walk below.
             // NB: a tried-and-reverted "Lever 1" also SURFACED implied-completed quests we don't otherwise compute
             // (reach their stages so they render greyed). It gained +1 on Save 420 with 0 measured FP across all three
             // oracles, but it removes the provable "can only reclassify a shown quest" guarantee — a completed-and-
@@ -365,86 +329,20 @@ public sealed class QuestPipboy
             // the Pip-Boy" quest flag is decoded, which would let it be done safely (ROADMAP §6 #16).
         }
 
-        // ---- Kill-event completion (ROADMAP §6 #16 Stage 2): re-derive event-completed quests from the save's
-        // GlobalData type-2 death registry. A UNIQUE killed actor is recorded by its base FormID; a runtime-SPAWNED
-        // one as a created reference whose template (a placed ACHR) resolves to that base. Both are bound to the
-        // script the base runs. Gated to ALREADY-RUNNING quests, so it can only reclassify a shown-active quest to
-        // completed — never add a Pip-Boy entry or drop one (precision-safe). ----
-        if (db.ActorScripts.Count > 0)
-        {
-            var dead = save.DeadReferences();
-            if (dead.Count > 0)
-            {
-                // The script a base actor (NPC_/CREA) runs, for a save-space FormID that is either that base itself
-                // or a placed ACHR whose NAME base it is.
-                uint ScriptOf(uint formId) =>
-                    db.ActorScripts.TryGetValue(formId, out var s) ? s
-                    : db.PlacedActorBases.TryGetValue(formId, out var b) && db.ActorScripts.TryGetValue(b, out var s2) ? s2
-                    : 0;
-
-                // Scripts run by a DEAD actor (an OnDeath block that has fired): for the single-kill path, and the
-                // per-quest dead count below.
-                var firedScripts = new HashSet<uint>();
-                foreach (var d in dead)
-                    if (ScriptOf(d) is var s && s != 0)
-                        firedScripts.Add(s);
-
-                // ---- (1) Single-kill: a kill-driven (OnDeath/OnHit) external completion NOT counter-gated — one boss
-                // death completes the quest (e.g. "I Fought the Law"). Counter-gated quests handled in (2). ----
-                if (firedScripts.Count > 0)
-                    foreach (var comp in db.ExternalCompletions)
-                        if (comp is { ViaKill: true, ViaCounter: false } && states.TryGetValue(comp.QuestFormId, out var t)
-                            && t is { Running: true, Completed: false } && comp.Scripts.Any(firedScripts.Contains))
-                            t.Completed = true;
-
-                // ---- (2) Counter-gated: count how many actors running the gate's increment script are DEAD, and if
-                // that reaches the threshold, complete (e.g. Ghost Town Gunfight, `nGangerDeathCount >= 6`). A unique
-                // ganger is a dead registry base; a spawned ganger is a created reference whose embedded template
-                // resolves to a ganger base — the two kinds are disjoint, so they sum without double-counting.
-                // Gated to running, so this strictly reclassifies a shown-active quest to completed. ----
-                if (db.CounterGates.Any(g => g.Bound && g.ExternallyIncremented))
-                {
-                    // Created references whose embedded template resolves to a base actor: the scripts those bases run.
-                    var createdScripts = new List<HashSet<uint>>();
-                    foreach (var (_, referenced) in save.CreatedReferenceForms())
-                    {
-                        var scripts = new HashSet<uint>();
-                        foreach (var f in referenced)
-                            if (ScriptOf(f) is var s && s != 0)
-                                scripts.Add(s);
-                        if (scripts.Count > 0)
-                            createdScripts.Add(scripts);
-                    }
-
-                    foreach (var gate in db.CounterGates)
-                    {
-                        if (!gate.Bound || !gate.ExternallyIncremented ||
-                            !states.TryGetValue(gate.QuestFormId, out var t) || t is not { Running: true, Completed: false })
-                            continue;
-                        var inc = gate.IncrementScripts.ToHashSet();
-                        var directDead = dead.Count(d => inc.Contains(ScriptOf(d)));               // unique ganger bases
-                        var spawnedDead = createdScripts.Count(s => s.Overlaps(inc));              // spawned (created) gangers
-                        if (directDead + spawnedDead >= gate.Threshold)
-                            t.Completed = true;
-                    }
-                }
-            }
-        }
-
-        // ---- Activator / world-state completion (ROADMAP §6 #16 Stage 2): an objective-driven quest whose
-        // completion has no stage and no kill — it runs `CompleteQuest` from an OnActivate script that also
-        // Enable's specific references (e.g. That Lucky Old Sun's reflector console powers on the HELIOS One FX).
-        // Those refs persist as ENABLED in the save, so a RUNNING quest with one of its completion-enabled refs
-        // enabled is completed. Intersecting the quest's specific enable-refs with the save's enabled set keeps it
-        // precise; gated to running ⇒ reclassify active→completed only (no add ⇒ no new FP). ----
-        if (db.CompletionEnableRefs.Count > 0)
-        {
-            var enabled = save.EnabledReferences();
-            if (enabled.Count > 0)
-                foreach (var (questFormId, refs) in db.CompletionEnableRefs)
-                    if (states.TryGetValue(questFormId, out var t) && t is { Running: true, Completed: false } && refs.Any(enabled.Contains))
-                        t.Completed = true;
-        }
+        // ---- Unified completion walk (ROADMAP §6 #16 Stage A): every way a quest's completion leaves a persisted
+        // save trace — a kill (OnDeath death registry / created-reference corpse), a counter threshold of such kills,
+        // an OnActivate-enabled world ref, a said-INFO's conditional SetStage to a completing stage, or a said-INFO
+        // CTDA proving a completing stage — is harvested once into a CompletionRule catalog and dispatched through
+        // SaveSignalEvaluator. Each rule is gated to an ALREADY-RUNNING, not-yet-completed quest, so a fired rule can
+        // only reclassify a shown-active quest to completed — never add a Pip-Boy entry or drop one (precision-safe).
+        // This replaces the formerly-separate single-kill, counter-gated, activator, conditional-dialogue and
+        // CTDA-proof passes; the diagnostic sources they scraped (db.ExternalCompletions / CounterGates /
+        // CompletionEnableRefs / DialogueInfoEffects / DialogueInfoConditions) are unchanged. ----
+        var evaluator = new SaveSignalEvaluator(save, db);
+        foreach (var rule in CompletionRule.Harvest(db))
+            if (states.TryGetValue(rule.TargetQuestFormId, out var t) && t is { Running: true, Completed: false }
+                && evaluator.TriggerFired(rule))
+                t.Completed = true;
 
         // ---- Apply each quest's reached-stage objective effects in stage order to settle objective state. ----
         foreach (var st in states.Values)
