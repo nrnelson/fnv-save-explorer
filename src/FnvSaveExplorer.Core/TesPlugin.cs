@@ -234,6 +234,74 @@ public sealed class TesPlugin
             completionEnables);
     }
 
+    /// <summary>R&D (full-decode, ROADMAP §6 #1): finds the record SIGNATURE (REFR/DOOR/STAT/NAVM/ACTI/…) for
+    /// the given plugin-LOCAL FormIDs (low 24 bits; the high byte is ignored) by traversing every group in the
+    /// plugin and reading only record/group <i>headers</i> — record data is seeked past, so it is cheap even on
+    /// the 245&#160;MB <c>FalloutNV.esm</c>. This identifies what a change form points at when the name index
+    /// can't (REFR/CELL/world records aren't indexed for naming), e.g. to confirm which record type a given
+    /// change-form type byte corresponds to. Returns localId → signature for those found; stops early once all
+    /// wanted ids are seen.</summary>
+    /// <summary>A located record: its signature (REFR/DOOR/…) and, for a placed reference (REFR/ACHR/ACRE/…),
+    /// the <c>NAME</c> base form it instances (0 if none) — e.g. a map marker's base is <c>0x00000010</c>.</summary>
+    public readonly record struct LocatedRecord(string Signature, uint BaseFormId);
+
+    public static Dictionary<uint, LocatedRecord> FindRecordSignatures(Stream fs, IReadOnlySet<uint> wantedLocalIds)
+    {
+        var found = new Dictionary<uint, LocatedRecord>();
+        if (wantedLocalIds.Count == 0)
+            return found;
+        fs.Seek(0, SeekOrigin.Begin);
+
+        var sig = ReadSignature(fs) ?? throw new SaveFormatException("empty file", 0);
+        if (sig != "TES4")
+            throw new SaveFormatException($"not a TES4 plugin (found '{sig}')", 0);
+        var headerDataSize = ReadU32(fs);
+        ReadExactly(fs, 16);                         // flags + FormID + version-control / form-version
+        fs.Seek(headerDataSize, SeekOrigin.Current); // skip the TES4 header data
+
+        void Walk(long end)
+        {
+            while (fs.Position < end && found.Count < wantedLocalIds.Count)
+            {
+                var s = ReadSignature(fs);
+                if (s is null)
+                    break;
+                var size = ReadU32(fs);
+                if (s == "GRUP")
+                {
+                    ReadExactly(fs, 16);             // rest of the 24-byte group header; GRUP size INCLUDES it
+                    Walk(fs.Position + ((long)size - HeaderSize));
+                }
+                else
+                {
+                    var flags = ReadU32(fs);
+                    var formId = ReadU32(fs) & 0xFFFFFF; // low 24 bits = plugin-local id
+                    ReadExactly(fs, 8);              // version-control / form-version
+                    if (wantedLocalIds.Contains(formId))
+                    {
+                        // For a wanted record (few), read its data to pull the NAME base form; cheap. A placed
+                        // reference's NAME is the base it instances (a map marker → 0x00000010).
+                        uint baseForm = 0;
+                        var data = ReadExactly(fs, (int)size);
+                        if ((flags & CompressedFlag) != 0)
+                            data = Decompress(data);
+                        foreach (var (t, sub) in ParseSubrecords(data))
+                            if (t == "NAME" && sub.Length >= 4)
+                            {
+                                baseForm = BinaryPrimitives.ReadUInt32LittleEndian(sub);
+                                break;
+                            }
+                        found.TryAdd(formId, new LocatedRecord(s, baseForm));
+                    }
+                    else
+                        fs.Seek(size, SeekOrigin.Current); // record `size` excludes the 24-byte header
+                }
+            }
+        }
+        Walk(fs.Length);
+        return found;
+    }
+
     /// <summary>Descends a dialogue (<c>DIAL</c>) group — which nests <c>INFO</c> records inside per-topic
     /// "Topic Children" sub-groups — collecting the quest-affecting calls in each <c>INFO</c>'s result-script
     /// source text (<c>SCTX</c>). Recurses through nested <c>GRUP</c>s and skips non-<c>INFO</c> records (the

@@ -523,22 +523,40 @@ fields). A single dominant length ⇒ a fixed-width struct (easy to decode); a l
 Pure corpus alignment (no masters, no in-game saves). Counts below are illustrative (vanilla 77-save + base-VNV
 98-save runs); regenerate with `survey`.
 
-**Form-type → record-type anchors (corpus-PROVEN; others left `?` per "label, don't guess"):** `0x01`=**REFR**
-(the inventory/reference records §4g, and note refs §4k), `0x02`=**ACHR** (PlayerRef §4f/§4e), `0x09`=**NPC_**
-(player base TESNPC_ §4d), `0x1F`=**NOTE** (read markers — all 45,783 resolve to NOTE, §4k.1 #2). The rest are
-named only when a controlled diff or resolved-FormID tally proves them.
+**The type byte is a change-CATEGORY, NOT the changed form's record type.** This was tested directly with the
+`recid` probe (FormID → masters record signature, below): for change forms whose refID is a type-0 array index
+(so `cf.FormId` is the §4f-resolved FormID — validated correct: iref 2 → `0x00104C1C` = the "Ain't That a Kick"
+QUST), the **directly-named forms of a single type byte span many unrelated record types**, and one record type
+appears under many type bytes:
+- `0x00` → ACHR / SCPT / REFR / MISC   ·   `0x07` → QUST / SCPT / ALCH / CELL   ·   `0x08` → INFO / NAVM / PACK
+- `0x09` → NPC_ / QUST / ACHR   ·   `0x0A` → ACRE / WEAP / ACHR / NPC_   ·   `0x22` → FACT / CHAL
+- `0x2B` → INFO / IDLE   ·   `0x32` → PACK / CHAL / REPU / REFR(CONT) / INFO / ACHR
+
+So a record type (e.g. ACHR) carries **several** change forms of different type bytes — each a different *kind* of
+change — and the type byte cannot be read as "this is a REFR/ACHR/NPC_." (The earlier framing that named
+`0x01`=REFR etc. was an over-generalization from the *player's* specific records — the player inventory REFR does
+carry a `0x01` change form, but `0x01` is not "the REFR type".) The one near-exception is `0x1F`: its **−1-hopped
+base** is uniformly NOTE (§4k.1 #2), though even there `cf.FormId` itself is the note's *reference object* (a REFR).
+**Practical consequence:** decode a type by its PAYLOAD shape (the survey/constancy map), and use `recid` to get
+the per-record target's record type when interpreting it — don't infer record type from the type byte.
 
 **Fixed-length / single-flag types — payload SIZED by corpus alignment (semantics unlabelled per "size, don't
 guess"):**
 - `0x08` — **len 0, flags `0x80000000`** (100%, every save). A **zero-payload marker** change form (like the
-  `0x1F` note-read marker but a different type). Very common (vanilla 7k, base VNV 273k). Located; the marker's
-  meaning isn't pinned (a "form active/known" high-bit marker — needs a controlled diff to name).
+  `0x1F` note-read marker but a different type). Very common (vanilla 7k, base VNV 273k). Its presence IS the
+  state; the marked forms span types (`recid`: **INFO / NAVM / PACK**). A controlled diff (`primm-*discover`)
+  inserted two — on a said **INFO** (a dialogue line) and a **NAVM** — when an NPC ran up and started dialogue, so
+  on an INFO the `0x08` marker reads as "this dialogue line has been said"; the general meaning isn't fully pinned.
 - `0x1F` — **len 0, flags `0x80000000`**. NOTE read marker — **fully DECODED** (§4k).
 - `0x20` — **len 17, flags `0x80000000`**. Four packed `u32 LE` then a trailing `7C` (no internal delimiters):
   `[u32][u32][u32=0][u32][7C]`. SIZED.
 - `0x21` — **len 20, flags `0x00000002`**. `[u32][7C][u32][7C][u32][7C][0xFFFFFFFF][7C]` (last field a `−1`
   sentinel). SIZED.
-- `0x2B` / `0x32` — **len 10, flags `0x00000002`**. `[u32][7C][u32][7C]` (two delimited `u32`). SIZED.
+- `0x2B` / `0x32` — **len 10, flags `0x00000002`**. `[u32][7C][u32][7C]` (two delimited `u32`). SIZED. **`0x32` is a
+  per-form COUNTER/value** (`[u32 value][7C][u32 = 0][7C]`; the 2nd `u32` is always 0): a controlled diff
+  (`primm-prediscover` → `primm-postdiscover`) changed exactly one — value `1 → 2` on a `REFR`(base `CONT`,
+  `0x001075F4`) — and the type's forms are countable across the board (`recid`: CHAL challenge-progress, REPU
+  reputation, PACK, REFR, INFO), so `u32[0]` is that form's count/progress; its exact meaning is per target form.
 - `0x28` — **len 62, flags `0x80000000`**. `[10][7C]` then **4×** `[u8=00][u8=19][u8][7C][u16=1][7C][u16][7C]
   [f32=1.0][7C]`. SIZED (a 4-entry fixed list).
 - `0x0B` — **len 25, flags `0x00000002`** on vanilla: a **fully constant** 24-byte block + `7C` (byte-identical on
@@ -583,7 +601,11 @@ Tooling: **`survey <save|dir> [0xNN]`** (the coverage survey above) and **`cfwal
 types above, `0x7C`-tokenized output for the delimited `0x00`/`0x0A` state, and a single explicit `unknown[n]` gap
 (hex-capped) for everything still undecoded, so coverage is always visible and never silently skipped. As a type
 graduates from "located" to "field-decoded", its emitter in `WalkPayload` replaces the gap. Still to fold in: the
-REFR/ACHR field tree (the `refdump` decode of §4g–§4j) and the ordered REFR/ACHR model (§8a).
+REFR/ACHR field tree (the `refdump` decode of §4g–§4j) and the ordered REFR/ACHR model (§8a). **`recid <save>
+<formId…>`** identifies the masters **record signature** (REFR/DOOR/CHAL/…) + a placed ref's base form for any
+save FormID — by traversing the owning plugin header-only (`TesPlugin.FindRecordSignatures`) — so a change form
+the name index can't resolve (world/reference records aren't indexed for naming) can still be classified; it is how
+the "type byte ≠ record type" census above was run.
 
 ---
 

@@ -38,6 +38,8 @@ if (args.Length < 2)
                                               NOTE record + inventory-reference confirmation (R&D §4k.1 #1-3)
           fnvsave resolve <save.fos> <formId> [dataDir]   Look up a FormID: record type + name + source plugin,
                                               and where it appears (FormID array iref / inventory / read note)
+          fnvsave recid <save.fos> <formId> [formId...]   Identify the masters record SIGNATURE (REFR/DOOR/CHAL/…)
+                                              + a placed ref's base form, for FormIDs the name index can't resolve (§6 #1)
           fnvsave setcount <in.fos> <out.fos> <formId> <count>  Edit a stack count (writes a new file)
           fnvsave setcondition <in.fos> <out.fos> <formId> <value>  Edit a stack's condition/health (new file)
           fnvsave caps <save.fos>             Show the player's caps (the 0x0000000F inventory stack)
@@ -310,6 +312,11 @@ try
         }
         case "resolve":
             Resolve(FalloutSave.Load(path), path, ParseOffset(args[2]), args.Length > 3 ? args[3] : null);
+            break;
+        case "recid":
+            // R&D (§6 #1): identify the masters record SIGNATURE for one or more save FormIDs (REFR/DOOR/…),
+            // for change forms the name index can't resolve. recid <save> <formId> [formId...]
+            RecId(FalloutSave.Load(path), path, args[2..].Select(ParseOffset).Select(x => (uint)x).ToArray());
             break;
         case "setcount":
             return SetCount(path, args[2], ParseOffset(args[3]), uint.Parse(args[4]));
@@ -1651,16 +1658,56 @@ static void Survey(string pathOrDir, int? onlyType)
     }
 }
 
-// FNV change-form FORM-TYPE labels — only the four corpus-PROVEN anchors are named; the rest stay "?"
-// per the "label, don't guess" rule (no-speculative-spec-code). Proven: 0x01 REFR (inventory record +
-// note refs §4g/§4k), 0x02 ACHR (PlayerRef §4f), 0x09 NPC_ (player base TESNPC_ §4d), 0x1F NOTE (read
-// markers all resolve to NOTE records §4k.1 #2, 45,783/45,783). Others get a name only when corpus-proven.
+// R&D (§6 #1): print the masters record SIGNATURE (REFR/DOOR/ACTI/STAT/…) for each save FormID, by opening
+// the owning plugin and traversing its groups (header-only, TesPlugin.FindRecordSignatures). Identifies what a
+// change form points at when the name index can't (world/reference records aren't indexed for naming).
+static void RecId(FalloutSave s, string savePath, uint[] formIds)
+{
+    var dataFolder = GameDataLocator.FindDataFolder();
+    var mo2 = GameDataLocator.FindMo2Mods(savePath);
+    var byPlugin = new Dictionary<string, List<uint>>(StringComparer.OrdinalIgnoreCase);
+    foreach (var f in formIds)
+    {
+        var plugin = s.PluginForModIndex((int)(f >> 24));
+        if (plugin is null) { Console.WriteLine($"0x{f:X8}  (mod index 0x{f >> 24:X2} not in load order)"); continue; }
+        (byPlugin.TryGetValue(plugin, out var l) ? l : byPlugin[plugin] = []).Add(f);
+    }
+    foreach (var (plugin, fs2) in byPlugin)
+    {
+        var file = FindPluginFile(plugin, dataFolder, mo2);
+        if (file is null) { Console.WriteLine($"{plugin}: file not found (need the game Data folder / MO2 mods)"); continue; }
+        using var stream = File.OpenRead(file);
+        var wanted = fs2.Select(f => f & 0xFFFFFFu).ToHashSet();
+        var found = TesPlugin.FindRecordSignatures(stream, wanted);
+        foreach (var f in fs2)
+        {
+            if (!found.TryGetValue(f & 0xFFFFFF, out var rec)) { Console.WriteLine($"0x{f:X8}  (not found)  [{plugin}]"); continue; }
+            var baseNote = rec.BaseFormId != 0 ? $"  base 0x{rec.BaseFormId:X8}{(rec.BaseFormId == 0x10 ? " (MapMarker)" : "")}" : "";
+            Console.WriteLine($"0x{f:X8}  {rec.Signature}{baseNote}  [{plugin}]");
+        }
+    }
+}
+
+static string? FindPluginFile(string plugin, string? dataFolder, string? mo2Mods)
+{
+    if (dataFolder is not null && File.Exists(Path.Combine(dataFolder, plugin)))
+        return Path.Combine(dataFolder, plugin);
+    if (mo2Mods is not null && Directory.Exists(mo2Mods))
+        foreach (var mod in Directory.EnumerateDirectories(mo2Mods))
+            if (File.Exists(Path.Combine(mod, plugin)))
+                return Path.Combine(mod, plugin);
+    return null;
+}
+
+// FNV change-form type-byte hints. NOTE: the type byte is a change-CATEGORY, NOT the changed form's record
+// type (SPEC §4l — a `recid` census shows each type byte spans many record types and vice-versa). These are
+// only the COMMON association for the player's own records (the usual cfwalk target), as a reading aid — use
+// `recid` for a given record's actual masters record type. Most types stay "?" (decode by payload shape).
 static string FormTypeName(int formType) => formType switch
 {
-    0x01 => "REFR",
-    0x02 => "ACHR",
-    0x09 => "NPC_",
-    0x1F => "NOTE",
+    0x01 => "REFR?",   // the player inventory ref is 0x01; but 0x01 ≠ "REFR" in general (§4l)
+    0x02 => "ACHR?",   // the PlayerRef is 0x02; not a record-type tag
+    0x1F => "NOTE-rd",  // read-note marker; its −1-hopped base is uniformly NOTE (§4k.1)
     _ => "?",
 };
 
