@@ -14,6 +14,10 @@ public readonly record struct RefField(int Offset, byte[] Bytes)
     /// <summary>The field read as a little-endian float, or null if it isn't exactly 4 bytes.</summary>
     public float? AsSingle => Bytes.Length == 4 ? BinaryPrimitives.ReadSingleLittleEndian(Bytes) : null;
 
+    /// <summary>The field read as a little-endian f64, or null if it isn't exactly 8 bytes. FNV stores quest
+    /// script variables as f64 (ROADMAP §6 #16 Stage B — the CHANGE_QUEST_SCRIPT var block).</summary>
+    public double? AsDouble => Bytes.Length == 8 ? BinaryPrimitives.ReadDoubleLittleEndian(Bytes) : null;
+
     /// <summary>The field read as a 3-byte big-endian refID (FormID-array index), or null if not 3 bytes.</summary>
     public int? AsRefId => Bytes.Length == 3 ? (Bytes[0] << 16) | (Bytes[1] << 8) | Bytes[2] : null;
 }

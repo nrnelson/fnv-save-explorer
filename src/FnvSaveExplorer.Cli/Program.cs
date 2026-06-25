@@ -178,6 +178,10 @@ try
             QuestConditions(FalloutSave.Load(path), path,
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
             break;
+        case "qvars":
+            QuestVars(FalloutSave.Load(path), path,
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path));
+            break;
         case "qguard":
             QuestGuard(FalloutSave.Load(path), path, args[2],
                 args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path && a != args[2]));
@@ -359,6 +363,26 @@ static void GlobalDataDump(FalloutSave s, string savePath, int type, string? dat
         }
         else if (f.AsUInt32 is { } v && v != 0) ann = $"   = {v}";
         Console.WriteLine($"  [{i,3}] ({f.Length}B) {hex,-14}{ann}");
+    }
+}
+
+static void QuestVars(FalloutSave s, string savePath, string? questHex)
+{
+    // ROADMAP §6 #16 Stage B: dump the persisted quest script local-variable blocks (CHANGE_QUEST_SCRIPT, bit30):
+    // [vsval count] count×(u32 SLSD index, f64 value). Names come from the masters when available (by index).
+    var db = PluginDatabase.ForSave(s, null, GameDataLocator.FindMo2Mods(savePath));
+    var vars = QuestScriptVars.Read(s);
+    if (vars.Count == 0) { Console.WriteLine("No quest carries a persisted script-var block (CHANGE_QUEST_SCRIPT)."); return; }
+
+    var filter = questHex is null ? (uint?)null : (uint)ParseOffset(questHex);
+    Console.WriteLine($"Quests with a persisted script-var block: {vars.Count}\n");
+    foreach (var (formId, vs) in vars.OrderBy(kv => kv.Key))
+    {
+        if (filter is { } f && formId != f) continue;
+        var name = db.Resolve(formId);
+        Console.WriteLine($"0x{formId:X8}  {name ?? "(unknown)"}  ({vs.Count} vars)");
+        foreach (var v in vs.OrderBy(v => v.Index))
+            Console.WriteLine($"    [{v.Index,3}] = {v.Value:g}");
     }
 }
 

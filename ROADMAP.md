@@ -1680,6 +1680,17 @@ modifications (§4e), inventory stack counts (§4g), **item condition/health (§
        So per the project's controlled-diff bar, the poll awaits a **kill-completion ground-truth save pair** (save
        just-before/after killing a GameMode-poll quest's targets) to prove it fires correctly. **The bottleneck is
        ground-truth breadth + the quest-local-var decode (the QUST changeform var block), not the evaluator.**
+       **QUEST-LOCAL-VAR BLOCK DECODED 2026-06-25 (`Core/QuestScriptVars.cs`, CLI `qvars`):** a quest change form
+       carrying `CHANGE_QUEST_SCRIPT` (changeFlags bit30, `0x40000000`) stores its script locals as
+       `[vsval count][7C] count×([u32 SLSD index][7C][f64 value][7C])` — confirmed on the corpus + controlled-diff
+       validated (the fih series: integer vars flip 2→1→3→2 / a quest gains var [5]=4 at turn-in / timer floats climb
+       monotonically). 3 unit tests pin it. **BUT it does NOT unblock the stuck quests:** the prizes don't persist
+       their vars — Wang Dang (`doonce`) has NO change form at all, VMQ01 (`GotJessupNote`) is a REFR/alias stub
+       (bit29, no var block), and the DLC-radio FP quests (`nEnableDLC`) have NO change form on Save 122. Only quests
+       whose change form carries bit30 expose vars; the stuck ones don't, so the engine recomputes their gate state at
+       load (no save signal). So var-decode is real, generalizable infrastructure but moves ZERO on the 4 oracles.
+       Remaining for full var use: map the SLSD index→source name (the masters reader keeps only local-var *names*
+       from source text, not SLSD indices) before wiring vars into the guard evaluator.
     **Target architecture:** `CompletionRule` catalog → `SaveSignalEvaluator.TriggerFired(rule, save, db)` (dispatch
     on TriggerKind — we already have most of these checks, just scattered) → `GuardEvaluator.Holds(guard, save, db)`
     (the new build) → a fixpoint applying fired-and-held rules, gated to running.
