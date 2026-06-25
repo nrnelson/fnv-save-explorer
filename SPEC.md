@@ -377,9 +377,21 @@ graceful path like the SPECIAL/skills locators), then index the slot. `FalloutSa
 (`karma`/`xp`/`setkarma`/`setxp`) and the GUI Edit tab. **Verified:** reads match the controlled deltas exactly on
 all six pairs + the second character; edits round-trip same-length. Tooling: CLI **`fdiff`** (§7).
 
-> **Note:** only two slots of this actor-value array are decoded so far. The rest (and the array's per-slot
-> meaning generally) stay labelled as the undecoded havok/float array — more controlled diffs can graduate
-> further slots (e.g. carry weight, action points) the same way.
+> **Note:** only a few slots of this actor-value array are decoded so far (karma 100, XP 101, plus the skill
+> modifiers below). The rest stay labelled as the undecoded havok/float array — more controlled diffs can
+> graduate further slots (e.g. carry weight, action points) the same way.
+
+> **Skill-book bonuses are MODIFIER floats in this same array (controlled diff, resolves §10).** `skillbook-pre →
+> skillbook-science` (read the Big Book of Science, +3 Science) flipped exactly **one slot `0.0 → 3.0`** in this
+> `[float32][7C]` array (the player **reference** record, iref = PlayerRef + 1) — `3.0` is the book's **+3
+> contribution**, i.e. a **modifier**, not the absolute Science total (~15–40). So skill values are composed from a
+> base + these per-skill modifier slots; a permanent book bonus is `+3` (or `+4` with Comprehension) added to the
+> skill's slot. The change form's length grew (the book was consumed from inventory in the same record), which is
+> why `fdiff` missed it — `fdiff` only compares **same-length** records, and this is a length-changed one. The
+> sparse `0x7C`-tagged AV-mod list of **§4e is a *different* structure and did NOT change** (the read skill stayed
+> `0` there), so book bonuses live in this dense slot array, not the §4e list. Also: the **"Books Read" Misc Stat**
+> increments per book read. (Mapping each slot index → skill, and whether the §4e list and this array are two views
+> of the same AVs, needs a few more single-skill diffs — the *modifier-vs-absolute* question itself is settled.)
 
 ### 4k. Player read notes — the Pip-Boy "Data → Notes" viewed markers
 The notes the player has **read/viewed** (Pip-Boy *Data → Notes*, shown in normal font; unread ones are bold)
@@ -791,7 +803,7 @@ structure. None is a fundamental wall.
 | **`vsval` over-read** — the decoder reads *more* stacks than the engine's `vsval` count (interspersed non-items the name filter hides); the full chain is kept rather than truncated (§9). **Measured: under-read 0 across all 607** (never drops items), benign over-read on some — now **reduced** by per-stack property sizing (§4i): 11 modded saves dropped phantom stacks, several to `vsval` exactly. | The extra stacks are hidden in display, and truncating by position would drop real trailing items. | Drop the residual `0x0D`-block over-reads — either by sizing `0x0D`, or using the `vsval` as the authoritative count (the name filter for that lives in the CLI/GUI, not `Core`; surface the vsval there as the cross-check). |
 | **Inventory edits target the *first* stack** of a given FormID (§4g). | Duplicate-FormID stacks (same item, different extra data) are uncommon; the everyday case is unambiguous. | Address stacks by file offset / extra-data signature rather than FormID — straightforward once a UI/CLI affordance picks the specific stack. |
 | **Per-stack extra-data semantics unpinned** — `0x21`/`0x1C`/`0x24`/`0x30`/`0x6E`/`0x0D` are all **sized** (by corpus alignment, §4i) but **unlabelled**. | Lengths are right so the per-stack walk is **fully deterministic** (every type sized; the ≤512 B resync is a never-hit safety net); sizes pinned across 607 saves (e.g. `0x6E` gap 2 on 929/929; `0x0D` = `12 + 14·(n/4)`). | Controlled diffs (attach a known weapon mod; inspect a modded weapon) to *name* each sized type — e.g. confirm what `0x0D`'s `(u32, f64)` pairs are (script vars? effects?). |
-| **Skills are sparse** (only modified entries stored) and the absolute-vs-modifier semantics of small natural entries aren't pinned (§4e). | Reads/edits exactly what's stored; SPECIAL/skill sums verified across all 16 saves. | A single +3 skill-book controlled diff to confirm modifier vs absolute, then enumerate the full 13 from base + perks + tags. |
+| **Skills are sparse** (only modified entries stored) in the §4e `0x7C`-tagged AV list; **modifier-vs-absolute now RESOLVED — modifier** (§4j skill-book diff). | Reads/edits exactly what's stored; SPECIAL/skill sums verified across all 16 saves. | A skill-book diff (`skillbook-pre→science`, §4j) proved book bonuses are **+3 modifier floats** in the dense AV slot array (not the §4e list). Remaining: map each AV slot → skill and reconcile the §4e list with the dense array, then enumerate the full 13 from base + perks + tags. |
 
 > **Is the inventory start *fully* deterministic now?** **Yes — on all 607 real saves** (vanilla 30/30, base VNV
 > 98/98, VNV Extended 479/479). The vanilla path is a pure structural walk (MOVE + havok array + sized
