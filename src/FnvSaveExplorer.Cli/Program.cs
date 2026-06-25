@@ -1917,6 +1917,15 @@ static IEnumerable<string> WalkPayload(int formType, uint flags, byte[] d)
             break;
         }
 
+        // Small single-value types (SPEC §4l), corpus-fixed across all three corpora:
+        // 0x0F/0x16/0x1A = [u32][7C] (len 5 always); 0x0D = [u32][7C] (len 5) or [refID:3 BE][7C] (len 4).
+        case 0x0F or 0x16 or 0x1A or 0x0D when d.Length == 5 && d[4] == 0x7C:
+            yield return Field(0, "u32", U32(d, 0).ToString());
+            break;
+        case 0x0D when d.Length == 4 && d[3] == 0x7C:
+            yield return Field(0, "ref", Hex(d, 0, 3));   // 3-byte BE refID
+            break;
+
         default:
             yield return Gap(0, d, d.Length);
             break;

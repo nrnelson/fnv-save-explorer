@@ -632,9 +632,15 @@ unlabelled):** both verified across vanilla + base VNV, the length matching the 
   map-fog data** (e.g. `0x0010D9F4`, per the quest RE) and more. Disambiguate by the masters' record type, not the
   form-type byte. Multiple flag-gated payload shapes (`0x60000000` len 9, `0xE0000000` len 42, `0xC0000000` large);
   not field-decoded here (quest stages/objectives are surfaced by `quests`, §6 #3).
-- `0x04` / `0x05` / `0x0D` / `0x0F` / `0x16` / `0x1A` — located by the walker; payloads not yet decoded. (`0x04`
-  large `0x7C`-delimited records, flags `0x20000000`, embedding `74`/`04`-typed ExtraDataList-like sub-blocks;
-  `0x0D` tiny.) Several appear only in modded corpora (`0x05`/`0x0F`/`0x16`/`0x1A`).
+- `0x04` / `0x05` — large `0x7C`-delimited reference-like records (flags `0x20000000`/`0x20000002`), embedding the
+  `04 7C 74 7C`-style ExtraDataList sub-blocks; variable, not field-decoded. (Modded-heavy.)
+- `0x0B` — fixed-constant 24-byte config on vanilla (sized, above) but **variable on modded** (11 distinct lengths)
+  — sized only per-variant.
+
+**More single-value types SIZED (corpus-fixed across all three corpora; semantics unlabelled):**
+- `0x0F` / `0x16` / `0x1A` — **`[u32][7C]`** (len 5 always; `0x16` is very common — 145k records on VNV Extended).
+- `0x0D` — **`[u32][7C]`** (len 5) or **`[refID:3 BE][7C]`** (len 4, flags `0x00800000`). Two fixed variants.
+  (Decoded by `cfwalk`; the `0x09`-prefixed `[u32]` value recurs — a small state/flag, meaning unpinned.)
 
 Tooling: **`survey <save|dir> [0xNN]`** (the coverage survey above) and **`cfwalk <save> <iref>|--type 0xNN [N]`**
 (the labeled **full walk**, §6 #1b): renders a change form's payload as a field tree — labeled fields for the sized
