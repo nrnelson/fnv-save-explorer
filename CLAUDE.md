@@ -4,7 +4,16 @@ Guidance for working in this repository.
 
 ## What this is
 A from-scratch C# / .NET 10 tool to analyze and (within limits) edit Fallout: New Vegas `.fos`
-save files. See [README.md](README.md) for the validated format spec and roadmap.
+save files.
+
+**Primary objective: fully decode the `.fos` binary into labeled fields** — the whole save
+(header, GlobalData, every change-form type, FormID array) parsed field-by-field, with unresolved
+regions marked as explicit `unknown[n]` gaps. The analyze/edit tooling and the quest / Pip-Boy
+interpreter are *consumers* of that decode, not the goal.
+
+Docs: **[SPEC.md](SPEC.md)** = validated byte-truth + decode-coverage map; **[ROADMAP.md](ROADMAP.md)** =
+forward plan; **[docs/DECISIONS.md](docs/DECISIONS.md)** = ruled-out dead-ends (don't re-grind);
+[README.md](README.md) = user-facing overview.
 
 ## Build / test / run
 ```pwsh
