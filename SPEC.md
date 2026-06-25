@@ -392,14 +392,28 @@ all six pairs + the second character; edits round-trip same-length. Tooling: CLI
 > `0` there), so book bonuses live in this dense slot array, not the §4e list. Also: the **"Books Read" Misc Stat**
 > increments per book read.
 >
-> **Confirmed cumulative + contiguous across four sequential books** (`science → repair → guns → lockpick`, read
-> back-to-back): each book adds **exactly one new `3.0` slot**, and the skill-modifier slots are a **contiguous run**
-> in the array ordered by actor-value index — Repair's slot sits just before Science's, Guns' just after, matching
-> the AV indices **Lockpick `0x24` … Repair `0x27`, Science `0x28`, Guns `0x29`** (§4e). So the dense array holds
-> the per-skill modifiers as a contiguous AV-indexed block (alongside karma slot 100 / XP slot 101). A full skills
-> reader (locate the array → read the contiguous skill block → totals = base + these modifiers) is the natural next
-> consumer; the exact slot indices weren't pinned to absolute numbers here because the records shifted offset
-> between the later saves (the *structure* — contiguous, AV-ordered, +3 per book — is confirmed).
+> **Slot map now PINNED to absolute indices** (from the four sequential books `science → repair → guns →
+> lockpick`). In the player **reference** record (iref = PlayerRef + 1) the MOVE block is **25 bytes**, so its AV
+> array starts at **data + 26** (vs the ACHR's 27-byte MOVE / data+28 — that's why the §4j locator's `data+28` is
+> tuned to the ACHR). Anchoring on karma (200.0 @ slot 100) and XP (547.0 @ slot 101), each skill-modifier slot is
+> **`slot = AV-index + 77`**, verified byte-exact (guns save: slots 116/117/118 = Repair/Science/Guns = `3.0`, slot
+> 113 Lockpick still `0` since it was read after):
+>
+> | Skill | AV idx | slot | Skill | AV idx | slot |
+> |---|---|---|---|---|---|
+> | Barter | 0x20 | 109 | Repair | 0x27 | 116 |
+> | Energy Weapons | 0x22 | 111 | Science | 0x28 | 117 |
+> | Explosives | 0x23 | 112 | Guns | 0x29 | 118 |
+> | Lockpick | 0x24 | 113 | Sneak | 0x2A | 119 |
+> | Medicine | 0x25 | 114 | Speech | 0x2B | 120 |
+> | Melee Weapons | 0x26 | 115 | Survival | 0x2C | 121 |
+> | | | | Unarmed | 0x2D | 122 |
+>
+> (`0x21` Big Guns = slot 110, unused in FNV → stays 0.) So the dense AV array's per-slot meaning is now decoded
+> for karma (100), XP (101), and the full skill-modifier block (109–122) — each holding the **permanent modifier**
+> (book/console bonus), `0` until modified. The remaining caveat is only that a skill *total* = base (SPECIAL + tag
+> + level) + this modifier + perks; the array stores the modifier portion, so a "skills total" reader still needs
+> the base composition. A reader for the modifier block is straightforward (locate the array → read slots 109–122).
 
 ### 4k. Player read notes — the Pip-Boy "Data → Notes" viewed markers
 The notes the player has **read/viewed** (Pip-Boy *Data → Notes*, shown in normal font; unread ones are bold)
