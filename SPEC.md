@@ -580,7 +580,10 @@ unlabelled):** both verified across vanilla + base VNV, the length matching the 
 - `0x00` — **DOMINANT** (vanilla 34k, base VNV 1.4M; the single most common change form). `0x7C`-delimited typed
   sub-records carrying embedded `[u16 len][7C][ascii][7C]` **strings** — animation/control names ("Idle",
   "SpecialIdle", "Forward", "Backward", "Close") — behind a leading tag byte; `changeFlags` selects the layout
-  (≫100 distinct flag values, hundreds of lengths). Reads as **script/animation/control state**. Not field-decoded.
+  (≫100 distinct flag values, hundreds of lengths). Reads as **script/animation/control state**. Mostly not
+  field-decoded — but one `0x00` sub-shape **IS decoded** (see §4m): the **len-6 `[04][7C][2C][7C][flags:u8][7C]`**
+  variant (flags `0x80000000`) is a per-form **flags/state** record — for a **map marker** REFR it holds the
+  marker's visibility flags (Visible / Can-Travel-To), i.e. the **discovered-location** state.
 - `0x0A` — `0x7C`-delimited, **float-heavy**, embeds NPC names (the player name; "Beagle" on a Primm save). The
   `0x020C`/len-58 variant dominates (vanilla 8k, base VNV 51k); larger variants (len 706) hold the player name + a
   long float run (position/rotation/scale-shaped). Reads as actor/placement state. Not field-decoded.
@@ -609,6 +612,25 @@ REFR/ACHR field tree (the `refdump` decode of §4g–§4j) and the ordered REFR/
 save FormID — by traversing the owning plugin header-only (`TesPlugin.FindRecordSignatures`) — so a change form
 the name index can't resolve (world/reference records aren't indexed for naming) can still be classified; it is how
 the "type byte ≠ record type" census above was run.
+
+### 4m. Discovered map-locations — the map-marker visibility flags (controlled diff)
+**How the save records which locations are discovered.** Each world-map location is a placed **map-marker REFR**
+(base form **`0x00000010`** = "MapMarker") carrying a `FULL` display name ("Abandoned BoS Bunker", …). When the
+player encounters one, the save holds a tiny **type-`0x00`, len-6 change form** on that REFR:
+```
+[04][7C] [2C][7C] [flags:u8][7C]      flags = map-marker visibility (GECK layout: bit0 0x01 = Visible, bit1 0x02 = Can Travel To)
+```
+**Cracked by a clean controlled diff** (`canyonwreckage-prediscover` → `canyonwreckage-postdiscover`, **no NPC** to
+confound it): discovering the location flipped exactly this byte on the marker REFR (`0x001558AA` "Abandoned BoS
+Bunker") **`0x01` → `0x03`** — i.e. Visible → Visible + **Can-Travel-To**. So a location is **"discovered"
+(fast-travelable) iff its map-marker REFR's change form has bit1 (`0x02`) set**; the discovered *set* is exactly
+those markers. (The same `[04][7C][2C][7C][flags][7C]` shape also appears on non-marker forms — e.g. an `INFO` went
+`0x01→0x03` in the Primm pair — so `0x2C` is a generic per-form flags field, here read for the marker REFR.)
+Alongside this, two running **tallies** also move per discovery (not the per-marker truth, just counts): the
+**"Locations Discovered" Misc Stat** (GlobalData type 0 — decoded/editable) and a `0x32` per-event counter on a
+CONT ref (§4l). The marker change form was initially missed by a `type 0x4`-only filter — it is **type `0x00`** (a
+REFR carrying only a flags change), a concrete instance of "type byte ≠ record type" (§4l). Found via `recid`
+(now reports `[MAP MARKER]` + the `FULL` name for any save FormID).
 
 ---
 

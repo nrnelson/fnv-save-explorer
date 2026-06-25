@@ -241,9 +241,10 @@ public sealed class TesPlugin
     /// can't (REFR/CELL/world records aren't indexed for naming), e.g. to confirm which record type a given
     /// change-form type byte corresponds to. Returns localId → signature for those found; stops early once all
     /// wanted ids are seen.</summary>
-    /// <summary>A located record: its signature (REFR/DOOR/…) and, for a placed reference (REFR/ACHR/ACRE/…),
-    /// the <c>NAME</c> base form it instances (0 if none) — e.g. a map marker's base is <c>0x00000010</c>.</summary>
-    public readonly record struct LocatedRecord(string Signature, uint BaseFormId);
+    /// <summary>A located record: its signature (REFR/DOOR/…), the <c>NAME</c> base form a placed reference
+    /// instances (0 if none), its <c>FULL</c> display name (null if none), and whether it carries an <c>XMRK</c>
+    /// subrecord — i.e. it is a <b>map marker</b> reference (how FO3/FNV mark world-map locations).</summary>
+    public readonly record struct LocatedRecord(string Signature, uint BaseFormId, string? Name, bool IsMapMarker);
 
     public static Dictionary<uint, LocatedRecord> FindRecordSignatures(Stream fs, IReadOnlySet<uint> wantedLocalIds)
     {
@@ -279,19 +280,21 @@ public sealed class TesPlugin
                     ReadExactly(fs, 8);              // version-control / form-version
                     if (wantedLocalIds.Contains(formId))
                     {
-                        // For a wanted record (few), read its data to pull the NAME base form; cheap. A placed
-                        // reference's NAME is the base it instances (a map marker → 0x00000010).
+                        // For a wanted record (few), read its data to pull the NAME base form + FULL name, and to
+                        // detect an XMRK subrecord (= a map marker reference). Cheap (only matched records).
                         uint baseForm = 0;
+                        string? full = null;
+                        var isMapMarker = false;
                         var data = ReadExactly(fs, (int)size);
                         if ((flags & CompressedFlag) != 0)
                             data = Decompress(data);
                         foreach (var (t, sub) in ParseSubrecords(data))
-                            if (t == "NAME" && sub.Length >= 4)
-                            {
-                                baseForm = BinaryPrimitives.ReadUInt32LittleEndian(sub);
-                                break;
-                            }
-                        found.TryAdd(formId, new LocatedRecord(s, baseForm));
+                        {
+                            if (t == "NAME" && sub.Length >= 4) baseForm = BinaryPrimitives.ReadUInt32LittleEndian(sub);
+                            else if (t == "FULL") full = ZString(sub);
+                            else if (t == "XMRK") isMapMarker = true; // map-marker data subrecord
+                        }
+                        found.TryAdd(formId, new LocatedRecord(s, baseForm, full, isMapMarker));
                     }
                     else
                         fs.Seek(size, SeekOrigin.Current); // record `size` excludes the 24-byte header

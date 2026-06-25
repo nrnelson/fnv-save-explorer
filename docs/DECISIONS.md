@@ -56,16 +56,16 @@ on; here's why,"** not "impossible."
   unrelated record types and one record type appears under many type bytes (e.g. `0x32` → PACK/CHAL/REPU/REFR/INFO;
   `0x09` → NPC_/QUST/ACHR). So the type byte is a change-CATEGORY (decode by payload shape, SPEC §4l), not a
   record-type tag — don't infer record type from it (use `recid`). Only `0x1F`'s −1-hopped base is uniformly NOTE.
-- **Location discovery records a COUNT (two places); there is NO per-marker change form** — confirmed by two
-  diffs incl. a clean no-NPC one (`primm-*discover` + `canyonwreckage-*discover`, 2026-06-25). Each discovery
-  increments **(a)** the **"Locations Discovered" Misc Stat** (GlobalData type 0 @ data+0x12 — decoded/editable)
-  and **(b)** a `0x32` per-event counter on a specific **CONT** ref (`0x001075F4`), in lock-step (`1→2` Primm,
-  `2→3` canyon). It does **NOT** write a map-marker change form: in the no-NPC canyon diff, **0 of the 90 changed
-  REFR/ACHR records have base MapMarker `0x10`** (checked via `recid`), and there were no inserts — so the
-  per-marker "which marker is discovered" flag is not a per-form change form. It is recomputed or packed elsewhere
-  (a GlobalData region — the type-8/10 areas churn with player-relative floats and weren't isolable here); a
-  *near-stationary* discovery (to kill the cell-load REFR churn) would be needed to pin it, if it's persisted at
-  all. The Primm pair's `0x08` markers (said INFO + NAVM) were the coupled NPC encounter, not discovery. SPEC §4l.
+- **Location discovery = the map-marker REFR's visibility flags (SOLVED, SPEC §4m), plus two running tallies.**
+  Confirmed by a clean no-NPC diff (`canyonwreckage-*discover`, 2026-06-25): the discovered location's **map-marker
+  REFR** (base `0x10`, `FULL` "Abandoned BoS Bunker") carries a **type-`0x00` len-6 change form**
+  `[04][7C][2C][7C][flags][7C]` whose flags byte went **`0x01`→`0x03`** (Visible → Visible+Can-Travel-To). A
+  location is discovered iff its marker REFR's change form has bit1 (`0x02`) set. *(Initial mis-call: I first said
+  "no per-marker change form" because I filtered `type 0x4` only — the marker change form is **type `0x00`** (a REFR
+  carrying just a flags change), a concrete "type byte ≠ record type" case. The `recid` XMRK/base check found it.)*
+  The "Locations Discovered" Misc Stat (GlobalData type 0) and a `0x32` per-event counter on a CONT ref (`0x001075F4`,
+  `1→2` Primm, `2→3` canyon) are just tallies, not the per-marker truth. The Primm pair's `0x08` markers (said INFO
+  + NAVM) were the coupled NPC encounter, not discovery.
 
 - **Havok physics blob (bit2/bit10 `CHANGE_REFR_HAVOK_MOVE` records):** deliberately *located, not
   byte-decoded* (SPEC §10). Variable-length with a truncated final entry and a trailing slot array

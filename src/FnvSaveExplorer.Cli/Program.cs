@@ -1682,8 +1682,10 @@ static void RecId(FalloutSave s, string savePath, uint[] formIds)
         foreach (var f in fs2)
         {
             if (!found.TryGetValue(f & 0xFFFFFF, out var rec)) { Console.WriteLine($"0x{f:X8}  (not found)  [{plugin}]"); continue; }
-            var baseNote = rec.BaseFormId != 0 ? $"  base 0x{rec.BaseFormId:X8}{(rec.BaseFormId == 0x10 ? " (MapMarker)" : "")}" : "";
-            Console.WriteLine($"0x{f:X8}  {rec.Signature}{baseNote}  [{plugin}]");
+            var baseNote = rec.BaseFormId != 0 ? $"  base 0x{rec.BaseFormId:X8}" : "";
+            var marker = rec.IsMapMarker ? "  [MAP MARKER]" : "";
+            var name = rec.Name is { } n ? $"  \"{n}\"" : "";
+            Console.WriteLine($"0x{f:X8}  {rec.Signature}{baseNote}{marker}{name}  [{plugin}]");
         }
     }
 }
