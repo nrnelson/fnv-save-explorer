@@ -144,7 +144,12 @@ bytes; when the name resolver is available the CLI/GUI **hide entries that don't
 the list is both complete and clean. Verified on real VNV saves: one that decoded 0/127 now reads its full
 inventory (Lead, caps, reloading components), and a 193 KB record's split item list reunites — a known
 1,414-count ammo stack that was dropped now appears. Editing a count is a **safe same-length splice**.
-Names resolve via §4h.
+**Adding a stack** is length-changing, now supported: **`FalloutSave.AddInventoryItem(itemFormId, count)`** (CLI
+`additem`) appends a minimal `[ref:3][7C][count:u32][7C][00][7C]` stack after the item run, bumps the inventory
+**`vsval` stack count** (`WriteVsval`, widening across the 63/16383 boundary), grows the record length field, and
+appends the item FormID to the array if absent — via `RebuildWithBodyEdits` (§4b). Requires the deterministic
+inventory path (it locates the vsval to bump). Verified on a real save (21→22 stacks, +11 B, byte-identical
+round-trip, walk lands). Names resolve via §4h.
 
 > **Superseded:** the 2048-byte window above is gone — the per-stack extra data is now decoded, so each stack's
 > exact length is known and the walk is deterministic. See **§4i** for the current decoder + the extra-data catalog
@@ -739,8 +744,12 @@ the perk was isolated **structurally**, not by change-form diff — `findname` l
 and `find` located its refID inside the player reference record. The decoded block reads `08 7C` (count*4 = **2**)
 then **Confirmed Bachelor** (rank 1) + **Hoarder** (the player's trait, also a PERK, rank 1) — exactly the
 character's perk + trait. **Taking a perk** therefore (a) **appends the perk's FormID to the FormID array** and
-(b) adds a `[perkRef][7C][rank][7C]` entry (count*4 += 4) — a length-changing edit, so this is **read-decodable but
-not same-length-editable** (like notes §4k). **Reader shipped:** `FalloutSave.PlayerPerks(isPerkForm)` scans the
+(b) adds a `[perkRef][7C][rank][7C]` entry (count*4 += 4) — a length-changing edit, now supported via offset-fixup:
+**`FalloutSave.AddPerk(perkFormId, rank, isPerkForm)`** (CLI `addperk`) appends the FormID-array entry if absent,
+inserts the 6-byte perk entry, bumps the `[count*4]` prefix, and grows the record's length field (`GrowRecordLengthSplice`
+— fixed width by `type>>6`) via `RebuildWithBodyEdits` (§4b). v1 requires ≥1 existing perk/trait (to locate the list).
+Verified on a real save (3→4 perks, +10 B, byte-identical round-trip, walk lands). **Reader shipped:**
+`FalloutSave.PlayerPerks(isPerkForm)` scans the
 player reference record for `7C [ref:3] 7C` entries whose `FormIdArray[ref−1]` is a `PERK` (the masters test is
 injected by the caller, as for notes) and reads each `rank`; **CLI `perks`** names them via the masters (`PERK` is
 now indexed by `TesPlugin`). **Verified** across saves/characters: gtg-complete = Hoarder + Companion Suite (no

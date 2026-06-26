@@ -83,6 +83,23 @@ public class ReferenceChangeFormTests
         Assert.Equal(-1, ReferenceChangeForm.ReadVsval([0x81], 0, out _)); // runs past the buffer
     }
 
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(36, 1)]
+    [InlineData(63, 1)]          // largest 1-byte value (6-bit payload)
+    [InlineData(64, 2)]          // crosses into 2 bytes — the boundary AddInventoryItem must handle
+    [InlineData(96, 2)]
+    [InlineData(16383, 2)]       // largest 2-byte value (14-bit payload)
+    [InlineData(16384, 4)]       // crosses into 4 bytes
+    [InlineData(1_000_000, 4)]
+    public void WriteVsval_uses_the_narrowest_width_and_round_trips(long value, int expectedWidth)
+    {
+        var bytes = ReferenceChangeForm.WriteVsval(value);
+        Assert.Equal(expectedWidth, bytes.Length);
+        Assert.Equal(value, ReferenceChangeForm.ReadVsval(bytes, 0, out var w));
+        Assert.Equal(expectedWidth, w);
+    }
+
     // A structurally-valid inventory stack [ref:3 BE][7C][count:u32 LE][7C] (the shape LooksLikeStackStart wants).
     static byte[] Stack(int refId, uint count) =>
     [

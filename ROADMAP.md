@@ -112,12 +112,14 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 | Deterministic inventory list *start* (§4i) | ✅ **deterministic on all 607 real saves** (vanilla 30/30, base VNV 98/98, VNV Extended 479/479): MOVE-skip + the typed-entry ExtraDataList walk (variable order + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor** for bit2/bit10 havok-physics records → the **`vsval` stack count** → first item. The §4g scan is now an unused safety net. vsval self-validates (decoded ≥ vsval, **0 under-reads**); verified **display byte-identical** across all 607 except **35 endgame inventories this *fixed* (empty → full)** |
 | Modded inventory start — **deterministic on all 3 corpora** (§4i) | ✅ the typed-entry walk is now the **live decoder**: variable-order entries (`0x18/0x74/0x5E/0x60` + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor scan** for bit2/bit10 `CHANGE_REFR_HAVOK_MOVE` records (whose pre-list region is a variable-length Havok physics blob, not a sized slot array) + a `vsval` sanity cap. Deterministic list start on **vanilla 30/30, base VNV 98/98, VNV Extended 479/479**; the §4g scan is now an unused safety net. **0 under-reads**; display **byte-identical** across all 607 except **35 VNV Extended endgame inventories that this *fixed* from decoding-empty → full** (the §4g scan had latched onto havok-blob garbage). New: `PlayerInventory.DeterministicStart`, CLI `invsig` (decode-signature cross-check). 347 tests green |
 | Length-changing edits — offset-fixup (§4b, former §6 #5) | ✅ `RebuildWithBodyEdits` applies `BodySplice`s (insert/remove in original-file coords) + recomputes the five **absolute** FLT offsets (each shifts by the net delta of splices before it; strict-`<` for a prepend, `≤` for an append — the boundary rule is the crux) + the three counts. No-op = byte-identical; result re-parses (walker still lands exactly on `GlobalData3Offset`, FormID array re-parses with new count). First consumer **add-reputation** (§4o): appends the `REPU` FormID to the array if absent, builds the 20-byte `0x2B` record (`changeFlags 0x00000002`/`version 0x1B` from real records — no guess), prepends it, fixes up offsets. Verified on a real 1.86 MB save (size +24, change forms 4134→4135, array 8108→8109, walk EXACT MATCH) + synthetic tests. CLI `addreputation` |
+| Length-changing edits — **grow an existing record** (§4b/§4n/§4g) | ✅ Two more consumers of `RebuildWithBodyEdits`, both *growing the player reference change form's payload* (vs add-reputation which prepends a whole new record). The shared piece is `GrowRecordLengthSplice` — the record's length-field **width is fixed by the type byte's top 2 bits** (`type>>6` → 1/2/4), so growth rewrites it in place (no width churn). **grant-perk** (`AddPerk`, CLI `addperk`): appends a `[perkRef:3 BE][7C][rank][7C]` entry to the count-prefixed perk list, bumps the `[count*4]` prefix, appends the PERK FormID to the array if absent. **add-inventory-item** (`AddInventoryItem`, CLI `additem`): appends a minimal `[ref:3][7C][count:u32][7C][00][7C]` stack and bumps the inventory **`vsval` stack count** (`WriteVsval`, widening across the 63/16383 boundary). Verified on real saves (addperk 3→4 perks +10 B, additem 21→22 stacks +11 B, both byte-identical round-trip + walk EXACT MATCH) + synthetic/real-save tests. (`AddPerk` v1 needs ≥1 existing perk to locate the list.) |
 
 **Editable today:** level, save number, name (same-length), Misc Stats, full SPECIAL, stored skill
 modifications (§4e), inventory stack counts (§4g), **item condition/health (§4i)**, **caps (§6.4 — the
 `0x0000000F` stack)**, **karma + XP (§4j)**, **faction reputation fame/infamy (§4o)** — all safe same-length splices.
-**Length-changing edits** are now also supported via offset-fixup (`RebuildWithBodyEdits`, §4b); the first such
-edit is **adding a faction reputation record** (§4o, CLI `addreputation`).
+**Length-changing edits** are supported via offset-fixup (`RebuildWithBodyEdits`, §4b): **add a faction
+reputation record** (§4o, CLI `addreputation`), **grant a perk/trait** (§4n, CLI `addperk`), and **add an
+inventory stack** (§4g, CLI `additem`).
 
 ---
 
@@ -156,8 +158,11 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    block's SLSD index→source name so the decoded `QuestScriptVars` become usable by `GuardEvaluator`.
 4. **Item condition maximums** (former #11): read the base-form Health so per-item condition shows a cap.
 5. ~~**Length-changing edits** (former #7): implement offset-fixup so renames / add / remove become safe.~~
-   ✅ **Done** — `RebuildWithBodyEdits` (offset-fixup core) + first consumer add-reputation (§4b/§4o). Follow-ups
-   now straightforward on the same core: add-inventory-item, grant-perk, length-changing rename.
+   ✅ **Done** — `RebuildWithBodyEdits` (offset-fixup core) + consumers add-reputation (§4o), **grant-perk**
+   (§4n, `AddPerk`/`addperk`), and **add-inventory-item** (§4g, `AddInventoryItem`/`additem`) — the latter two
+   grow an existing record via the shared `GrowRecordLengthSplice` + `WriteVsval`. Remaining follow-up on the same
+   core: **length-changing rename** (the name is duplicated in the header — with its own size field — and the
+   player-base `0x0A` record, so both copies + the header size must move together).
 6. **GUI/UX** (former #9): a raw-hex / full-walk field-tree viewer tab (surfacing deliverable 1b),
    screenshot export, backup management.
 

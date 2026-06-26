@@ -34,6 +34,10 @@ if (args.Length < 2)
           fnvsave setreputation <in.fos> <out.fos> <factionFormId> <fame> <infamy>   Edit a faction's fame/infamy (new file)
           fnvsave addreputation <in.fos> <out.fos> <factionFormId> <fame> <infamy>   Add a reputation record for a
                                               faction with none yet (length-changing; offset-fixup, ROADMAP §6 #5)
+          fnvsave addperk <in.fos> <out.fos> <perkFormId> [rank] [dataDir]   Grant a perk/trait (§4n; length-changing,
+                                              offset-fixup; resolves PERK forms via masters)
+          fnvsave additem <in.fos> <out.fos> <itemFormId> <count>   Add an inventory stack (§4g/§4i; length-changing,
+                                              offset-fixup; bumps the vsval stack count)
           fnvsave pipboy <save.fos> [dataDir]   The COMPUTED in-game Pip-Boy quest list (§6 #16): interprets the
                                               masters' quest scripts (SGE startup + reached-stage effects + guard eval).
                                               active/completed + displayed objectives. (Only "Back in the Saddle" omitted.)
@@ -366,6 +370,13 @@ try
         case "addreputation":
             // addreputation <in.fos> <out.fos> <factionFormId> <fame> <infamy>  (length-changing; writes a new file)
             return AddReputation(path, args[2], (uint)ParseOffset(args[3]), float.Parse(args[4]), float.Parse(args[5]));
+        case "addperk":
+            // addperk <in.fos> <out.fos> <perkFormId> [rank] [dataDir]  (length-changing; writes a new file)
+            return AddPerk(path, args[2], (uint)ParseOffset(args[3]),
+                           args.Length > 4 ? int.Parse(args[4]) : 0, args.Length > 5 ? args[5] : null);
+        case "additem":
+            // additem <in.fos> <out.fos> <itemFormId> <count>  (length-changing; writes a new file)
+            return AddItem(path, args[2], (uint)ParseOffset(args[3]), uint.Parse(args[4]));
         default:
             Console.Error.WriteLine($"Unknown command: {command}");
             return 1;
@@ -1403,6 +1414,82 @@ static int AddReputation(string inPath, string outPath, uint faction, float fame
     var ok = now.FactionFormId == faction && now.Fame == fame && now.Infamy == infamy && lands;
     Console.WriteLine(ok
         ? "OK: reputation added, re-parses, change-form walk lands exactly on GlobalData3Offset."
+        : "FAIL: did not verify.");
+    return ok ? 0 : 4;
+}
+
+// True when the rebuilt save re-parses with the change-form walker landing exactly on GlobalData3Offset
+// (the offset-fixup correctness invariant — see RebuildWithBodyEdits / AddReputation).
+static bool WalkLands(FalloutSave reloaded)
+{
+    var records = reloaded.EnumerateChangeForms().ToList();
+    return records.Count == (int)reloaded.Flt.ChangeFormCount
+           && (records.Count == 0 || records[^1].Next == (int)reloaded.Flt.GlobalData3Offset);
+}
+
+static int AddPerk(string inPath, string outPath, uint perkFormId, int rank, string? dataDir)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+    var db = PluginDatabase.ForSave(save, dataDir, GameDataLocator.FindMo2Mods(inPath));
+    if (db.Count == 0)
+    {
+        Console.WriteLine("FAIL: need the game Data folder to classify PERK forms (pass dataDir).");
+        return 3;
+    }
+
+    FalloutSave updated;
+    try
+    {
+        updated = save.AddPerk(perkFormId, rank, fid => db.RecordType(fid) == "PERK"); // length-changing
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+    {
+        Console.WriteLine($"FAIL: {ex.Message}");
+        return 4;
+    }
+    updated.Save(outPath, backup: false);
+
+    var reloaded = FalloutSave.Parse(File.ReadAllBytes(outPath));
+    var db2 = PluginDatabase.ForSave(reloaded, dataDir, GameDataLocator.FindMo2Mods(outPath));
+    var present = reloaded.PlayerPerks(fid => db2.RecordType(fid) == "PERK").Any(p => p.FormId == perkFormId);
+    var lands = WalkLands(reloaded);
+    Console.WriteLine($"Perk 0x{perkFormId:X8} (\"{db.Resolve(perkFormId) ?? "?"}\") rank {rank};  " +
+                      $"size {before.Length:N0} -> {File.ReadAllBytes(outPath).Length:N0};  " +
+                      $"FormID array {save.FormIdArray.Count:N0} -> {reloaded.FormIdArray.Count:N0}");
+    var ok = present && lands;
+    Console.WriteLine(ok
+        ? "OK: perk added, re-parses, change-form walk lands exactly on GlobalData3Offset."
+        : "FAIL: did not verify.");
+    return ok ? 0 : 4;
+}
+
+static int AddItem(string inPath, string outPath, uint itemFormId, uint count)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+
+    FalloutSave updated;
+    try
+    {
+        updated = save.AddInventoryItem(itemFormId, count); // length-changing
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+    {
+        Console.WriteLine($"FAIL: {ex.Message}");
+        return 4;
+    }
+    updated.Save(outPath, backup: false);
+
+    var reloaded = FalloutSave.Parse(File.ReadAllBytes(outPath));
+    var stack = reloaded.Inventory?.Items.FirstOrDefault(i => i.FormId == itemFormId && i.Count == count);
+    var lands = WalkLands(reloaded);
+    Console.WriteLine($"Item 0x{itemFormId:X8} x{count};  size {before.Length:N0} -> {File.ReadAllBytes(outPath).Length:N0};  " +
+                      $"stacks {save.Inventory?.Items.Count ?? 0} -> {reloaded.Inventory?.Items.Count ?? 0};  " +
+                      $"FormID array {save.FormIdArray.Count:N0} -> {reloaded.FormIdArray.Count:N0}");
+    var ok = stack is not null && lands;
+    Console.WriteLine(ok
+        ? "OK: item added, re-parses, change-form walk lands exactly on GlobalData3Offset."
         : "FAIL: did not verify.");
     return ok ? 0 : 4;
 }

@@ -473,6 +473,29 @@ public static class ReferenceChangeForm
         return raw >> 2;
     }
 
+    /// <summary>Encodes <paramref name="value"/> as a Bethesda <c>vsval</c> — the inverse of
+    /// <see cref="ReadVsval"/>: the low 2 bits hold the width code (0→1 byte / 1→2 / 2→4) and the value is
+    /// stored as <c>(value &lt;&lt; 2) | code</c> little-endian, using the narrowest width that fits (6/14/30
+    /// bits). Throws if <paramref name="value"/> is negative or exceeds 30 bits.</summary>
+    public static byte[] WriteVsval(long value)
+    {
+        if (value < 0)
+            throw new ArgumentOutOfRangeException(nameof(value));
+        if (value <= 0x3F)                 // 6-bit payload -> 1 byte
+            return [(byte)(value << 2)];
+        if (value <= 0x3FFF)               // 14-bit payload -> 2 bytes (code 1)
+        {
+            var raw = (value << 2) | 1;
+            return [(byte)raw, (byte)(raw >> 8)];
+        }
+        if (value <= 0x3FFFFFFF)           // 30-bit payload -> 4 bytes (code 2)
+        {
+            var raw = (value << 2) | 2;
+            return [(byte)raw, (byte)(raw >> 8), (byte)(raw >> 16), (byte)(raw >> 24)];
+        }
+        throw new ArgumentOutOfRangeException(nameof(value), "vsval exceeds 30 bits");
+    }
+
     /// <summary>
     /// Sizes the reference ExtraDataList + inventory count to land deterministically on the first item stack.
     /// <paramref name="data"/> is indexed by absolute file offset and bounded to the record end;

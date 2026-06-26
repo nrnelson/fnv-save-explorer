@@ -1485,23 +1485,7 @@ public sealed class FalloutSave
         var splices = new List<BodySplice>();
 
         // Find the faction's iref (FormID-array index); append it to the array end if missing.
-        var iref = FindIref(factionFormId);
-        if (iref < 0)
-        {
-            var arrayAt = (int)Flt.FormIdArrayCountOffset;
-            if (arrayAt <= 0 || arrayAt + 4 > _raw.Length)
-                throw new InvalidOperationException("save has no FormID array to extend");
-            var oldCount = (int)ReadUInt32At(arrayAt);
-            iref = oldCount; // new entry goes at the end
-
-            var newCount = new byte[4];
-            BinaryPrimitives.WriteUInt32LittleEndian(newCount, (uint)(oldCount + 1));
-            splices.Add(new BodySplice(arrayAt, 4, newCount)); // bump count (same length)
-
-            var entry = new byte[4];
-            BinaryPrimitives.WriteUInt32LittleEndian(entry, factionFormId);
-            splices.Add(BodySplice.InsertAt(arrayAt + 4 + oldCount * 4, entry)); // append FormID
-        }
+        var iref = ResolveOrAppendFormId(factionFormId, splices);
 
         // Build the 20-byte type-0x2B record and prepend it to the change-forms region.
         var refId = iref + 1; // persisted-reference "+1" convention; fits 22 bits => RefID type 0 (array index)
@@ -1520,5 +1504,211 @@ public sealed class FalloutSave
         splices.Add(BodySplice.Prepend((int)Flt.ChangeFormsOffset, record)); // new record becomes the region start
 
         return Parse(RebuildWithBodyEdits(splices, changeFormCountDelta: 1));
+    }
+
+    /// <summary>The change form's length-field width in bytes — fixed by the type byte's top 2 bits
+    /// (<c>type &gt;&gt; 6</c> → 1/2/4), independent of the value. So growing a record's payload (within the
+    /// width's range) rewrites the field in place; it never shifts the data start.</summary>
+    private static int LengthFieldWidth(byte typeByte) => (typeByte >> 6) switch { 0 => 1, 1 => 2, _ => 4 };
+
+    /// <summary>A same-length <see cref="BodySplice"/> that rewrites change form <paramref name="cf"/>'s length
+    /// field (at <c>cf.Offset + 9</c>, width <see cref="LengthFieldWidth"/>) to <c>cf.DataLength + delta</c> — the
+    /// shared piece for growing an existing record's payload (grant-perk / add-item). Throws if the new length
+    /// doesn't fit the field's fixed width (would need a wider header — not supported here).</summary>
+    private static BodySplice GrowRecordLengthSplice(ChangeFormHeader cf, int delta)
+    {
+        var width = LengthFieldWidth(cf.TypeByte);
+        var newLen = cf.DataLength + delta;
+        var max = width switch { 1 => 0xFF, 2 => 0xFFFF, _ => int.MaxValue };
+        if (newLen < 0 || newLen > max)
+            throw new InvalidOperationException(
+                $"record at 0x{cf.Offset:X} new length {newLen} doesn't fit its {width}-byte length field");
+        var bytes = new byte[width];
+        switch (width)
+        {
+            case 1: bytes[0] = (byte)newLen; break;
+            case 2: BinaryPrimitives.WriteUInt16LittleEndian(bytes, (ushort)newLen); break;
+            default: BinaryPrimitives.WriteUInt32LittleEndian(bytes, (uint)newLen); break;
+        }
+        return new BodySplice(cf.Offset + 9, width, bytes); // in-place rewrite (RemoveLength == Insert.Length)
+    }
+
+    /// <summary>Resolves <paramref name="formId"/> to its FormID-array index, or appends it to the array end
+    /// (emitting the count-bump + entry splices into <paramref name="splices"/>) when absent. Returns the index;
+    /// the persisted-reference refID is <c>index + 1</c>. Mirrors the array-extend in <see cref="AddReputation"/>.</summary>
+    private int ResolveOrAppendFormId(uint formId, List<BodySplice> splices)
+    {
+        var iref = FindIref(formId);
+        if (iref >= 0)
+            return iref;
+        var arrayAt = (int)Flt.FormIdArrayCountOffset;
+        if (arrayAt <= 0 || arrayAt + 4 > _raw.Length)
+            throw new InvalidOperationException("save has no FormID array to extend");
+        var oldCount = (int)ReadUInt32At(arrayAt);
+        var newCount = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(newCount, (uint)(oldCount + 1));
+        splices.Add(new BodySplice(arrayAt, 4, newCount));                       // bump count (same length)
+        var entry = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(entry, formId);
+        splices.Add(BodySplice.InsertAt(arrayAt + 4 + oldCount * 4, entry));     // append FormID
+        return oldCount;
+    }
+
+    /// <summary>
+    /// Grants the player a perk (or trait — FNV stores both as <c>PERK</c> forms; ROADMAP §4n / §6 #5). Appends a
+    /// <c>[perkRef:3 BE][7C][rank:u8][7C]</c> entry to the count-prefixed perk list inside the player reference
+    /// change form, bumps the <c>[count*4:u8]</c> prefix, grows the record's length field, and appends the perk's
+    /// FormID to the FormID array if absent — all via <see cref="RebuildWithBodyEdits"/>. Because "is this FormID a
+    /// PERK?" needs the masters (outside Core), the caller injects <paramref name="isPerkForm"/> (e.g.
+    /// <c>fid =&gt; db.RecordType(fid) == "PERK"</c>), used to locate the existing list. Returns a freshly parsed
+    /// save. Throws <see cref="InvalidOperationException"/> if the perk is already present, or if the perk list
+    /// can't be located (v1 requires at least one existing perk/trait — present from chargen).
+    /// </summary>
+    public FalloutSave AddPerk(uint perkFormId, int rank, Func<uint, bool> isPerkForm)
+    {
+        ArgumentNullException.ThrowIfNull(isPerkForm);
+        if (rank is < 0 or > 255)
+            throw new ArgumentOutOfRangeException(nameof(rank), "perk rank must be 0..255");
+        if (PlayerPerks(isPerkForm).Any(p => p.FormId == perkFormId))
+            throw new InvalidOperationException($"perk 0x{perkFormId:X8} is already present");
+        if (PlayerInventoryChangeForm is not { } cf)
+            throw new InvalidOperationException("player reference change form not found");
+        if (!TryLocatePerkList(cf, isPerkForm, out var countPrefixOffset, out var storedCount))
+            throw new InvalidOperationException(
+                "could not locate the perk list (v1 requires at least one existing perk/trait)");
+        if (storedCount >= 63)
+            throw new InvalidOperationException("perk list is full (count*4 would overflow its u8 prefix)");
+
+        var splices = new List<BodySplice>();
+        var perkRef = ResolveOrAppendFormId(perkFormId, splices) + 1; // persisted-reference "+1" convention
+
+        // New 6-byte entry, inserted as the new first entry (right after [count*4][7C]); order is irrelevant.
+        var entry = new byte[] { (byte)(perkRef >> 16), (byte)(perkRef >> 8), (byte)perkRef, Delimiter, (byte)rank, Delimiter };
+        splices.Add(BodySplice.InsertAt(countPrefixOffset + 2, entry));
+
+        // Bump the [count*4] prefix by 4 (one more entry) — a same-length 1-byte rewrite.
+        splices.Add(new BodySplice(countPrefixOffset, 1, [(byte)(_raw[countPrefixOffset] + 4)]));
+
+        // Grow the player-ref record's length field by the inserted entry.
+        splices.Add(GrowRecordLengthSplice(cf, entry.Length));
+
+        return Parse(RebuildWithBodyEdits(splices)); // no new record: change-form count unchanged
+    }
+
+    /// <summary>Locates the perk list's <c>[count*4:u8][7C]</c> prefix inside the player reference record by
+    /// finding the lowest-offset perk entry (<c>7C [ref:3] 7C</c> resolving to a PERK via
+    /// <paramref name="isPerkForm"/>) and stepping back to the prefix, then validating that exactly
+    /// <paramref name="storedCount"/> contiguous 6-byte <c>[ref:3][7C][rank][7C]</c> entries follow. Returns false
+    /// if no list is found or the structure doesn't validate.</summary>
+    private bool TryLocatePerkList(ChangeFormHeader cf, Func<uint, bool> isPerkForm, out int countPrefixOffset, out int storedCount)
+    {
+        countPrefixOffset = -1;
+        storedCount = 0;
+        var end = cf.DataOffset + cf.DataLength;
+        var firstEntryDelim = -1; // the 7C immediately before the first perk entry's ref
+        for (var i = cf.DataOffset; i + 6 < end; i++)
+        {
+            if (_raw[i] != 0x7C || _raw[i + 4] != 0x7C || _raw[i + 6] != 0x7C)
+                continue;
+            var refId = (_raw[i + 1] << 16) | (_raw[i + 2] << 8) | _raw[i + 3];
+            if (refId <= 0)
+                continue;
+            var formId = ResolveIref(refId - 1);
+            if (formId == 0 || !isPerkForm(formId))
+                continue;
+            firstEntryDelim = i;
+            break;
+        }
+        if (firstEntryDelim < 0)
+            return false;
+        // The prefix [count*4][7C] sits just before that leading 7C: count*4 at firstEntryDelim-1.
+        var cp = firstEntryDelim - 1;
+        if (cp < cf.DataOffset || _raw[cp] % 4 != 0 || _raw[cp + 1] != 0x7C)
+            return false;
+        var count = _raw[cp] / 4;
+        if (count <= 0)
+            return false;
+        // Validate: count contiguous 6-byte [ref:3][7C][rank][7C] entries start at cp+2.
+        var p = cp + 2;
+        for (var k = 0; k < count; k++, p += 6)
+            if (p + 6 > end || _raw[p + 3] != 0x7C || _raw[p + 5] != 0x7C)
+                return false;
+        countPrefixOffset = cp;
+        storedCount = count;
+        return true;
+    }
+
+    /// <summary>
+    /// Adds an inventory stack of <paramref name="count"/> × <paramref name="itemFormId"/> to the player
+    /// (ROADMAP §4g/§4i / §6 #5). Appends a minimal stack <c>[ref:3 BE][7C][count:u32 LE][7C][00][7C]</c> (no
+    /// extra data) after the existing item run, bumps the inventory's <c>vsval</c> stack count (growing its width
+    /// if it crosses a 63/16383 boundary), grows the record's length field, and appends the item's FormID to the
+    /// FormID array if absent — all via <see cref="RebuildWithBodyEdits"/>. Returns a freshly parsed save. Throws
+    /// <see cref="InvalidOperationException"/> if the player inventory list can't be located deterministically
+    /// (an atypical/modded ExtraDataList whose vsval the structural walk can't pin).
+    /// </summary>
+    public FalloutSave AddInventoryItem(uint itemFormId, uint count)
+    {
+        if (PlayerInventoryChangeForm is not { } cf)
+            throw new InvalidOperationException("player inventory change form not found");
+        var end = cf.DataOffset + cf.DataLength;
+        var span = _raw.AsSpan(0, end); // index == absolute file offset
+        var start = ReferenceChangeForm.InventorySearchStart(
+            _raw.AsSpan(cf.DataOffset, cf.DataLength), cf.DataOffset, cf.ChangeFlags);
+        if (!ReferenceChangeForm.TryInventoryItemsStart(span, start, out var itemsOffset, out var stackCount) || stackCount <= 0)
+            throw new InvalidOperationException("inventory list start not located deterministically (atypical/modded record)");
+
+        // The vsval stack count + its 0x7C delimiter sit just before the first item; recover its offset + width.
+        var vsvalOffset = -1;
+        var oldWidth = 0;
+        foreach (var w in (ReadOnlySpan<int>)[1, 2, 4])
+        {
+            var vp = itemsOffset - 1 - w;
+            if (vp >= cf.DataOffset && ReferenceChangeForm.ReadVsval(span, vp, out var vl) == stackCount && vl == w)
+            {
+                vsvalOffset = vp;
+                oldWidth = w;
+                break;
+            }
+        }
+        if (vsvalOffset < 0)
+            throw new InvalidOperationException("could not locate the inventory vsval stack count");
+
+        // Walk exactly stackCount stacks to find the true end of the item run (the insertion point) — not the
+        // full decoded chain, which can over-read a few non-item bytes past the engine's count.
+        var p = itemsOffset;
+        for (var k = 0; k < stackCount; k++)
+        {
+            if (!TryReadInventoryEntry(p, out _, out _, out _))
+                throw new InvalidOperationException($"inventory stack {k} not where the vsval count expects it");
+            p = AdvancePastStack(p, end, out _);
+            if (p <= itemsOffset || p > end)
+                throw new InvalidOperationException("inventory stack walk did not advance");
+        }
+        var listEnd = p;
+
+        var splices = new List<BodySplice>();
+        var refId = ResolveOrAppendFormId(itemFormId, splices) + 1; // persisted-reference "+1" convention
+
+        // Minimal stack: [ref:3 BE][7C][count:u32 LE][7C][00][7C] (the [00][7C] = "no extra data" block, §4i).
+        var stack = new byte[11];
+        stack[0] = (byte)(refId >> 16);
+        stack[1] = (byte)(refId >> 8);
+        stack[2] = (byte)refId;
+        stack[3] = Delimiter;
+        BinaryPrimitives.WriteUInt32LittleEndian(stack.AsSpan(4, 4), count);
+        stack[8] = Delimiter;
+        stack[9] = 0x00;
+        stack[10] = Delimiter;
+        splices.Add(BodySplice.InsertAt(listEnd, stack));
+
+        // Bump the vsval stack count (may widen the field); track the width delta for the record-length growth.
+        var newVsval = ReferenceChangeForm.WriteVsval(stackCount + 1);
+        splices.Add(new BodySplice(vsvalOffset, oldWidth, newVsval));
+        var vsvalDelta = newVsval.Length - oldWidth;
+
+        splices.Add(GrowRecordLengthSplice(cf, stack.Length + vsvalDelta));
+
+        return Parse(RebuildWithBodyEdits(splices)); // no new record: change-form count unchanged
     }
 }
