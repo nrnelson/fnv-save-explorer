@@ -744,6 +744,13 @@ same-length float splice, like karma/XP; matches the faction by FormID so no mas
 `reputation` + `setreputation`. The earlier `0x001558E6` `0x32`
 sighting was a *separate* per-form counter on the Powder Gangers REPU, not its reputation (which is the `0x2B`).
 
+**Lifecycle (standard change-form behaviour):** a faction's `0x2B` record is **created the first time its reputation
+deviates from the default 0**, and is **never removed** — setting it back to `0/0` zeroes the floats in place (the
+file stays the same size; confirmed `rep4-pre → rep4-post`: Goodsprings `100/0 → 0/0`, record still present at iref
+8656). The **Pip-Boy hides any faction with both fame and infamy 0**, so a wiped faction disappears in-game but its
+`0x2B` record persists in the save — which is why `reputation`/the GUI still list it at `0/0` (faithful to the save,
+not the Pip-Boy's display filter), and why `setreputation` can restore a wiped faction without re-creating the record.
+
 ---
 
 ## 8. Reference sources
