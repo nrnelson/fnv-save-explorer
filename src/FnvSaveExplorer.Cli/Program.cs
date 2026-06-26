@@ -32,6 +32,8 @@ if (args.Length < 2)
           fnvsave player <save.fos> [dataDir]   One-screen player summary: header + SPECIAL + karma/XP/caps +
                                               skill mods + perks + reputation + notes + inventory (read-only)
           fnvsave setreputation <in.fos> <out.fos> <factionFormId> <fame> <infamy>   Edit a faction's fame/infamy (new file)
+          fnvsave addreputation <in.fos> <out.fos> <factionFormId> <fame> <infamy>   Add a reputation record for a
+                                              faction with none yet (length-changing; offset-fixup, ROADMAP §6 #5)
           fnvsave pipboy <save.fos> [dataDir]   The COMPUTED in-game Pip-Boy quest list (§6 #16): interprets the
                                               masters' quest scripts (SGE startup + reached-stage effects + guard eval).
                                               active/completed + displayed objectives. (Only "Back in the Saddle" omitted.)
@@ -361,6 +363,9 @@ try
         case "setreputation":
             // setreputation <in.fos> <out.fos> <factionFormId> <fame> <infamy>  (writes a new file)
             return SetReputation(path, args[2], (uint)ParseOffset(args[3]), float.Parse(args[4]), float.Parse(args[5]));
+        case "addreputation":
+            // addreputation <in.fos> <out.fos> <factionFormId> <fame> <infamy>  (length-changing; writes a new file)
+            return AddReputation(path, args[2], (uint)ParseOffset(args[3]), float.Parse(args[4]), float.Parse(args[5]));
         default:
             Console.Error.WriteLine($"Unknown command: {command}");
             return 1;
@@ -1363,6 +1368,40 @@ static int SetReputation(string inPath, string outPath, uint faction, float fame
     Console.WriteLine($"Reputation 0x{faction:X8}: fame {now.Fame:0.#}, infamy {now.Infamy:0.#};  size {before.Length:N0} -> {after.Length:N0}");
     var ok = now.Fame == fame && now.Infamy == infamy && before.Length == after.Length;
     Console.WriteLine(ok ? "OK: reputation edit applied, size unchanged, re-parses." : "FAIL: did not verify.");
+    return ok ? 0 : 4;
+}
+
+static int AddReputation(string inPath, string outPath, uint faction, float fame, float infamy)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+
+    FalloutSave updated;
+    try
+    {
+        updated = save.AddReputation(faction, fame, infamy); // length-changing: appends a type-0x2B record
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.WriteLine($"FAIL: {ex.Message}");
+        return 4;
+    }
+    updated.Save(outPath, backup: false);
+
+    // Re-load from disk and confirm the new record reads back, the walker still lands, and the array grew if needed.
+    var after = File.ReadAllBytes(outPath);
+    var reloaded = FalloutSave.Parse(after);
+    var now = reloaded.Reputations(_ => true).FirstOrDefault(r => r.FactionFormId == faction);
+    var records = reloaded.EnumerateChangeForms().ToList();
+    var lands = records.Count == (int)reloaded.Flt.ChangeFormCount
+                && (records.Count == 0 || records[^1].Next == (int)reloaded.Flt.GlobalData3Offset);
+    Console.WriteLine($"Reputation 0x{faction:X8}: fame {now.Fame:0.#}, infamy {now.Infamy:0.#};  " +
+                      $"size {before.Length:N0} -> {after.Length:N0};  change forms {save.Flt.ChangeFormCount:N0} -> " +
+                      $"{reloaded.Flt.ChangeFormCount:N0};  FormID array {save.FormIdArray.Count:N0} -> {reloaded.FormIdArray.Count:N0}");
+    var ok = now.FactionFormId == faction && now.Fame == fame && now.Infamy == infamy && lands;
+    Console.WriteLine(ok
+        ? "OK: reputation added, re-parses, change-form walk lands exactly on GlobalData3Offset."
+        : "FAIL: did not verify.");
     return ok ? 0 : 4;
 }
 
