@@ -13,6 +13,7 @@ a CLI — and validated against real saves.
 | Read the plugin / load order list | ✅ |
 | Byte-identical round-trip (open → save) | ✅ all 16 real saves + autosave/quicksave |
 | Safe in-place edits (level, save #, same-length rename) | ✅ proven (1-byte diff, file size unchanged) |
+| Length-changing edits (offset-fixup) | ✅ `RebuildWithBodyEdits` recomputes the absolute offsets + counts; first consumer = add faction reputation (CLI `addreputation`) |
 | **File Location Table** (offsets/counts into the body) | ✅ decoded & verified on all 16 saves |
 | **Global data tables** (Player Location, Global Variables, Weather…) | ✅ 12 records (types 0–11) enumerated |
 | **Misc Stats** counters (quests, kills, locations…) | ✅ decoded, **named** (43 indices), **and safely editable** (stat 1→999 = 2-byte diff) |
@@ -61,9 +62,13 @@ and fields are separated by `0x7C` (`|`) delimiters.
 
 After the plugin list is a **File Location Table** of `u32` *absolute file offsets* into the
 body sections. Because those offsets are absolute, **any edit that changes a length shifts
-everything after it and invalidates the table.** So this tool only performs **same-length /
-fixed-width edits** (e.g. a `u32` level or stat in place), which shift nothing. Length-changing
-edits (arbitrary rename, plugin changes) need full offset rewriting and are not enabled yet.
+everything after it and invalidates the table.** Most edits are therefore **same-length /
+fixed-width** (e.g. a `u32` level or stat in place), which shift nothing. **Length-changing edits
+are also supported** through *offset-fixup* (`RebuildWithBodyEdits`): it inserts/removes body bytes
+and recomputes every absolute offset + count so the file still re-parses (the change-form walker
+keeps landing exactly on `GlobalData3Offset`). The first such edit is **adding a faction reputation
+record** (CLI `addreputation`); broader length-changing edits (arbitrary rename, add-item, grant-perk)
+build on the same core.
 
 ### Decoded body layout (verified across the 16 saves)
 

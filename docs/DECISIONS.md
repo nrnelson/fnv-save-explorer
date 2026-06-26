@@ -92,8 +92,23 @@ on; here's why,"** not "impossible."
   whose values locally collide with the ExtraDataList header — so a structural sizer would *still* need
   the self-validating anchor at the tail (zero correctness gain). The inventory list is found by the
   anchor instead. `HavokPhysicsEntryLength` recognises one entry for any future exact decode.
-- **Length-changing edits** (rename, add/remove items/plugins): unsafe until full offset-fixup, because
-  the File Location Table stores *absolute* offsets. Same-length splices only, by design.
+- **Length-changing edits** (rename, add/remove items/plugins): **now supported** via offset-fixup —
+  `FalloutSave.RebuildWithBodyEdits` (§4b). It applies `BodySplice`s (insert/remove in original-file
+  coordinates) and recomputes the File Location Table's five *absolute* offsets + three counts so the
+  result re-parses (the change-form walker still lands exactly on `GlobalData3Offset`; the FormID array
+  re-parses with its new count). No-op (no splices) stays byte-identical, preserving the retention
+  invariant. Two design points that bit and are now settled:
+  - **Boundary rule.** An FLT offset that *equals* a splice's position is the ambiguous case. A
+    `BodySplice` carries `ShiftBoundaryOffset`: an **append** (new bytes belong to the preceding region)
+    shifts a following region whose start equals the position (`≤`); a **prepend** (new bytes become the
+    new start of the region at that position — e.g. the new change form at `ChangeFormsOffset`) does
+    **not** move that region's own start offset (`<`). A single uniform `<` *or* `≤` rule is wrong — the
+    append (FormID entry at the array end == the next region's start) and the prepend (change form at the
+    region start) need *opposite* behaviour. Found by the synthetic append-path test walking 4 records
+    instead of 2.
+  - **Don't invent bytes.** The new `0x2B` record's `changeFlags` (`0x00000002`) and `version` (`0x1B`)
+    are copied verbatim from real reputation records (`cfwalk --type 0x2B`), per `no-speculative-spec-code`.
+  First consumer: add-reputation (§4o). Add-inventory-item / grant-perk are straightforward follow-ups.
 - **`vsval` inventory over-read:** a few modded saves decode slightly *more* stacks than the engine's
   `vsval` count (hidden by the name filter); **0 under-reads across all 607 saves**. The residual comes
   from the havok-anchor path, not per-stack sizing (every per-stack type is sized).

@@ -48,6 +48,13 @@ Five absolute offsets then three counts (NV has one fewer global-data table than
 [2] GlobalData1Offset (12 records)   [3] ChangeFormsOffset   [4] GlobalData3Offset (1 type-1000 rec)
 [5] GlobalData1Count (=12)   [6] GlobalData3Count (=1)   [7] ChangeFormCount (e.g. 4134)
 ```
+Because these five offsets are *absolute*, inserting/removing body bytes shifts every section after the edit.
+`FalloutSave.RebuildWithBodyEdits` makes that safe: it applies a set of `BodySplice`s (insert/remove in original-file
+coordinates) and recomputes the five offsets — each shifts by the summed net delta of the splices before it (strictly
+before for a *prepend*, at-or-before for an *append*; this boundary rule is the whole subtlety) — plus the three
+counts. The result re-parses cleanly: the change-form walker still lands exactly on `GlobalData3Offset` and the FormID
+array re-parses with its new count. The no-op case (no splices) is byte-identical to the input. This lifts the
+former same-length-only limit; the first consumer is add-reputation (§4o).
 
 ### 4c. Global data — `[type:u32][length:u32][data]`
 Table 1 holds 12 records, types 0–11: `0`=Misc Stats, `1`=Player Location, `2`=TES, `3`=Global
@@ -750,6 +757,16 @@ file stays the same size; confirmed `rep4-pre → rep4-post`: Goodsprings `100/0
 8656). The **Pip-Boy hides any faction with both fame and infamy 0**, so a wiped faction disappears in-game but its
 `0x2B` record persists in the save — which is why `reputation`/the GUI still list it at `0/0` (faithful to the save,
 not the Pip-Boy's display filter), and why `setreputation` can restore a wiped faction without re-creating the record.
+
+**Adding a record (length-changing).** For a faction with *no* `0x2B` record yet, `FalloutSave.AddReputation`
+creates one — the first consumer of the offset-fixup core (§4b). It appends the faction's `REPU` FormID to the
+FormID array if absent (array + count grow; new iref = old count), builds the 20-byte record
+`[refID:3 BE = iref+1][changeFlags:u32 = 0x00000002][type 0x2B][version 0x1B][len 10][fame:f32][7C][infamy:f32][7C]`
+(`changeFlags`/`version` copied verbatim from real `0x2B` records — not guessed), prepends it to the change-forms
+region (`ChangeFormCount++`), and fixes up every absolute offset via `RebuildWithBodyEdits`. CLI `addreputation`.
+Verified on a real 1.86 MB save: Goodsprings added to a save with none → size +24 B (20 record + 4 FormID entry),
+change forms 4134→4135, FormID array 8108→8109, the walk still lands exactly on `GlobalData3Offset`, and the new
+record reads back. Refuses (use `setreputation`) when the faction already has a record.
 
 ---
 
