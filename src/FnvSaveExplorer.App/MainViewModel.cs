@@ -125,6 +125,28 @@ public sealed class NoteRow
     public string Source { get; init; } = "";
 }
 
+/// <summary>One of the player's perks or traits; read-only display (ROADMAP §4n).</summary>
+public sealed class PerkRow
+{
+    public uint FormId { get; init; }
+    public int ModIndex { get; init; }
+    public string Form => $"0x{FormId:X8} (mod {ModIndex:X2})";
+    public string Name { get; init; } = "";
+    public int Rank { get; init; }
+    public string RankText => Rank > 1 ? Rank.ToString() : "";
+    public string Source { get; init; } = "";
+}
+
+/// <summary>One faction's reputation (fame/infamy); read-only display (ROADMAP §4o).</summary>
+public sealed class ReputationRow
+{
+    public uint FormId { get; init; }
+    public string Faction { get; init; } = "";
+    public float Fame { get; init; }
+    public float Infamy { get; init; }
+    public string Form => $"0x{FormId:X8}";
+}
+
 /// <summary>One quest in the read-only quest-log view (ROADMAP §6 #10). Its decoded stages and objectives
 /// are flattened into <see cref="Lines"/> for the master-detail row, with summary columns alongside.</summary>
 public sealed class QuestRow
@@ -158,6 +180,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<SkillRow> Skills { get; } = [];
     public ObservableCollection<InventoryRow> Inventory { get; } = [];
     public ObservableCollection<NoteRow> Notes { get; } = [];
+    public ObservableCollection<PerkRow> Perks { get; } = [];
+    public ObservableCollection<ReputationRow> Reputation { get; } = [];
     public ObservableCollection<QuestRow> Quests { get; } = [];
     public ObservableCollection<MiscStatRow> MiscStats { get; } = [];
 
@@ -209,6 +233,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private string _notesInfo = "";
     public string NotesInfo { get => _notesInfo; private set => Set(ref _notesInfo, value); }
+
+    private string _perksInfo = "";
+    public string PerksInfo { get => _perksInfo; private set => Set(ref _perksInfo, value); }
+
+    private string _reputationInfo = "";
+    public string ReputationInfo { get => _reputationInfo; private set => Set(ref _reputationInfo, value); }
 
     private string _questsInfo = "";
     public string QuestsInfo { get => _questsInfo; private set => Set(ref _questsInfo, value); }
@@ -312,6 +342,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 EditModsFolder = invDb.ModsFolder;
             PopulateInventory(save, invDb);
             PopulateNotes(save, invDb);
+            PopulatePerks(save, invDb);
+            PopulateReputation(save, invDb);
             PopulateQuests(save, invDb);
 
             MiscStats.Clear();
@@ -356,6 +388,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             EditModsFolder = db.ModsFolder;
         PopulateInventory(_save, db);
         PopulateNotes(_save, db);
+        PopulatePerks(_save, db);
+        PopulateReputation(_save, db);
         PopulateQuests(_save, db);
     }
 
@@ -424,6 +458,54 @@ public sealed class MainViewModel : INotifyPropertyChanged
             NotesInfo = $"{Notes.Count} note(s) read. Names + the unread list need the game's Data folder " +
                         "(FalloutNV.esm) — set it on the Edit tab.";
         }
+    }
+
+    /// <summary>Fills the perks/traits grid (ROADMAP §4n). Identifying PERK forms needs the masters; without
+    /// them the list can't be resolved (PERK refs are indistinguishable from other refs in the player record).</summary>
+    private void PopulatePerks(FalloutSave save, PluginDatabase db)
+    {
+        Perks.Clear();
+        if (db.Count == 0)
+        {
+            PerksInfo = "Perks + traits need the game's Data folder (FalloutNV.esm) to identify/name PERK forms " +
+                        "— set it on the Edit tab.";
+            return;
+        }
+        foreach (var p in save.PlayerPerks(fid => db.RecordType(fid) == "PERK")
+                     .OrderBy(p => db.Resolve(p.FormId) ?? "￿", StringComparer.OrdinalIgnoreCase))
+            Perks.Add(new PerkRow
+            {
+                FormId = p.FormId,
+                ModIndex = (int)(p.FormId >> 24),
+                Name = db.Resolve(p.FormId) ?? "",
+                Rank = p.Rank,
+                Source = save.FriendlySourceForModIndex((int)(p.FormId >> 24)) ?? "",
+            });
+        PerksInfo = $"{Perks.Count} perk(s) + trait(s) (FNV stores traits as PERK forms). Read-only — adding a " +
+                    "perk is a length-changing edit.";
+    }
+
+    /// <summary>Fills the reputation grid (ROADMAP §4o). Identifying REPU forms needs the masters.</summary>
+    private void PopulateReputation(FalloutSave save, PluginDatabase db)
+    {
+        Reputation.Clear();
+        if (db.Count == 0)
+        {
+            ReputationInfo = "Faction reputation needs the game's Data folder (FalloutNV.esm) to identify/name " +
+                             "REPU factions — set it on the Edit tab.";
+            return;
+        }
+        foreach (var r in save.Reputations(fid => db.RecordType(fid) == "REPU")
+                     .OrderByDescending(r => r.Fame + r.Infamy))
+            Reputation.Add(new ReputationRow
+            {
+                FormId = r.FactionFormId,
+                Faction = db.Resolve(r.FactionFormId) ?? "",
+                Fame = r.Fame,
+                Infamy = r.Infamy,
+            });
+        ReputationInfo = $"{Reputation.Count} faction(s) with standing (fame / infamy, 0–100). Editable via the " +
+                         "CLI (setreputation); a faction with both 0 shows no standing in the Pip-Boy.";
     }
 
     /// <summary>Fills the read-only Quests grid with the <b>computed Pip-Boy quest list</b> (ROADMAP §6 #16):

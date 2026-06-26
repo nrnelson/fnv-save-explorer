@@ -173,6 +173,38 @@
                     </StackPanel>
                 </TabItem>
 
+                <TabItem Header="Perks">
+                    <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10" Text="{Binding PerksInfo}"/>
+                        <DataGrid ItemsSource="{Binding Perks}" AutoGenerateColumns="False" IsReadOnly="True"
+                                  CanUserAddRows="False" HeadersVisibility="Column" FontFamily="Consolas"
+                                  Width="660" HorizontalAlignment="Left" MaxHeight="440">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Perk / Trait" Binding="{Binding Name}" Width="280"/>
+                                <DataGridTextColumn Header="Rank" Binding="{Binding RankText}" Width="50"/>
+                                <DataGridTextColumn Header="FormID" Binding="{Binding Form}" Width="160"/>
+                                <DataGridTextColumn Header="Source (mod)" Binding="{Binding Source}" Width="160"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </StackPanel>
+                </TabItem>
+
+                <TabItem Header="Reputation">
+                    <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10" Text="{Binding ReputationInfo}"/>
+                        <DataGrid ItemsSource="{Binding Reputation}" AutoGenerateColumns="False" IsReadOnly="True"
+                                  CanUserAddRows="False" HeadersVisibility="Column" FontFamily="Consolas"
+                                  Width="520" HorizontalAlignment="Left" MaxHeight="440">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Faction" Binding="{Binding Faction}" Width="240"/>
+                                <DataGridTextColumn Header="Fame" Binding="{Binding Fame}" Width="70"/>
+                                <DataGridTextColumn Header="Infamy" Binding="{Binding Infamy}" Width="70"/>
+                                <DataGridTextColumn Header="FormID" Binding="{Binding Form}" Width="120"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </StackPanel>
+                </TabItem>
+
                 <TabItem Header="Quests">
                     <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10" Text="{Binding QuestsInfo}"/>
