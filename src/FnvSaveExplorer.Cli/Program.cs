@@ -29,6 +29,7 @@ if (args.Length < 2)
           fnvsave notes <save.fos> [dataDir]  List the player's Pip-Boy Data -> Notes — READ and UNREAD (§4k/§4k.1)
           fnvsave perks <save.fos> [dataDir]  List the player's perks + traits (§4n; resolves PERK forms via masters)
           fnvsave reputation <save.fos> [dataDir]   List faction fame/infamy (§4o; type-0x2B forms keyed by REPU)
+          fnvsave setreputation <in.fos> <out.fos> <factionFormId> <fame> <infamy>   Edit a faction's fame/infamy (new file)
           fnvsave pipboy <save.fos> [dataDir]   The COMPUTED in-game Pip-Boy quest list (§6 #16): interprets the
                                               masters' quest scripts (SGE startup + reached-stage effects + guard eval).
                                               active/completed + displayed objectives. (Only "Back in the Saddle" omitted.)
@@ -352,6 +353,9 @@ try
             return SetPlayerStat(path, args[2], "Karma", float.Parse(args[3]), (s, v) => s.TrySetKarma(v), s => s.Karma);
         case "setxp":
             return SetPlayerStat(path, args[2], "XP", float.Parse(args[3]), (s, v) => s.TrySetXp(v), s => s.Xp);
+        case "setreputation":
+            // setreputation <in.fos> <out.fos> <factionFormId> <fame> <infamy>  (writes a new file)
+            return SetReputation(path, args[2], (uint)ParseOffset(args[3]), float.Parse(args[4]), float.Parse(args[5]));
         default:
             Console.Error.WriteLine($"Unknown command: {command}");
             return 1;
@@ -1299,6 +1303,25 @@ static void PlayerStat(FalloutSave s, string label, Func<FalloutSave, float?> re
         Console.WriteLine($"{label}: {v:0.###}");
     else
         Console.WriteLine($"{label}: (not located — player reference record/slot not found in this save)");
+}
+
+static int SetReputation(string inPath, string outPath, uint faction, float fame, float infamy)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+    if (!save.TrySetReputation(faction, fame, infamy))
+    {
+        Console.WriteLine($"FAIL: no reputation (type-0x2B) record for faction 0x{faction:X8} in this save.");
+        return 4;
+    }
+    save.Save(outPath, backup: false);
+
+    var after = File.ReadAllBytes(outPath);
+    var now = FalloutSave.Parse(after).Reputations(_ => true).FirstOrDefault(r => r.FactionFormId == faction);
+    Console.WriteLine($"Reputation 0x{faction:X8}: fame {now.Fame:0.#}, infamy {now.Infamy:0.#};  size {before.Length:N0} -> {after.Length:N0}");
+    var ok = now.Fame == fame && now.Infamy == infamy && before.Length == after.Length;
+    Console.WriteLine(ok ? "OK: reputation edit applied, size unchanged, re-parses." : "FAIL: did not verify.");
+    return ok ? 0 : 4;
 }
 
 static int SetPlayerStat(string inPath, string outPath, string label, float value,

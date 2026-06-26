@@ -1278,6 +1278,24 @@ public sealed class FalloutSave
         return result;
     }
 
+    /// <summary>Sets a faction's <see cref="FactionReputation.Fame"/> and <see cref="FactionReputation.Infamy"/>
+    /// (§4o) by splicing the two float32s in its type-<c>0x2B</c> change form (same-length, like karma/XP §4j).
+    /// Matches the faction by FormID directly (the change form's <c>FormIdArray[refID − 1]</c>), so no masters are
+    /// needed for the edit. Returns false if the faction has no reputation record in this save.</summary>
+    public bool TrySetReputation(uint factionFormId, float fame, float infamy)
+    {
+        foreach (var cf in EnumerateChangeForms())
+        {
+            if (cf.FormType != 0x2B || cf.DataLength != 10) continue;
+            if (_raw[cf.DataOffset + 4] != 0x7C || _raw[cf.DataOffset + 9] != 0x7C) continue;
+            if (ResolveIref(cf.Iref - 1) != factionFormId) continue;
+            StageSingle(cf.DataOffset, fame);          // fame  @ +0
+            StageSingle(cf.DataOffset + 5, infamy);    // infamy @ +5 (after the 0x7C at +4)
+            return true;
+        }
+        return false;
+    }
+
     // ---- Editing (same-length splices only) --------------------------------
     public void SetPlayerLevel(uint level) => StageUInt32(_playerLevelOffset, level);
 

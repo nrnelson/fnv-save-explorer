@@ -739,8 +739,9 @@ non-churn change was two bytes `C8 42 → 00 00` (i.e. `100.0 → 0.0`) inside t
 rep4-pre = Goodsprings 100/0 + Powder Gangers 0/12; rep4-post = Goodsprings 0/0 (gone) + Powder Gangers unchanged;
 a late VNV Extended save reads 12 factions with sane values (NCR 80/2, Caesar's Legion 12/100, Boomers 50/0, …).
 **Why it was missed earlier:** `0x2B` was mistaken for `[u32][7C][u32][7C]` (§4l) and `cf.FormId` (`array[iref]`)
-gave the off-by-one neighbour, not the REPU — both fixed. `FalloutSave.Reputations(isRepuForm)` + CLI `reputation`
-(read-only; fame/infamy are same-length float splices if editing is added). The earlier `0x001558E6` `0x32`
+gave the off-by-one neighbour, not the REPU — both fixed. `FalloutSave.Reputations(isRepuForm)` (read) + `TrySetReputation(faction, fame, infamy)` (**editable** — a
+same-length float splice, like karma/XP; matches the faction by FormID so no masters needed for the edit); CLI
+`reputation` + `setreputation`. The earlier `0x001558E6` `0x32`
 sighting was a *separate* per-form counter on the Powder Gangers REPU, not its reputation (which is the `0x2B`).
 
 ---

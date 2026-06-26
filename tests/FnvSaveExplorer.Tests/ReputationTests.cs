@@ -31,6 +31,32 @@ public class ReputationTests
         Assert.Equal(0f, after.Infamy);
     }
 
+    [Fact]
+    public void Setting_reputation_is_a_same_length_splice_that_round_trips()
+    {
+        // Edit Goodsprings (0x00104C22) fame/infamy in rep4-pre and confirm the file stays the same length and the
+        // value re-reads (§4o, same-length float splice like karma/XP). Skips if the save isn't on this machine.
+        const uint goodsprings = 0x00104C22;
+        var pre = SaveNamed("rep4-pre");
+        if (pre is null)
+            return;
+
+        var bytes = File.ReadAllBytes(pre);
+        var save = FalloutSave.Parse(bytes);
+        Assert.True(save.TrySetReputation(goodsprings, 75f, 20f));
+
+        var after = save.ToBytes();
+        Assert.Equal(bytes.Length, after.Length);                    // same-length splice
+        var reread = FalloutSave.Parse(after).Reputations(f => f == goodsprings).Single();
+        Assert.Equal(75f, reread.Fame);
+        Assert.Equal(20f, reread.Infamy);
+
+        // Editing an absent faction fails cleanly and stages nothing.
+        var clean = FalloutSave.Parse(bytes);
+        Assert.False(clean.TrySetReputation(0xDEADBEEF, 1f, 1f));
+        Assert.False(clean.HasPendingEdits);
+    }
+
     [Theory]
     [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
     public void Real_saves_reputation_decode_is_well_formed_and_read_only(string path)
