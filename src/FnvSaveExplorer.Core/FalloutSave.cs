@@ -1220,39 +1220,89 @@ public sealed class FalloutSave
     public readonly record struct PlayerPerk(int RefId, uint FormId, int Rank);
 
     /// <summary>
-    /// The player's <b>perks and traits</b> (ROADMAP §4n). They live as a count-prefixed list inside the player
+    /// The player's <b>perks and traits</b> (ROADMAP §4n). They live as count-prefixed lists inside the player
     /// reference change form (iref = PlayerRef + 1 — the same record as inventory §4g and karma/XP §4j):
     /// <c>[count*4 : u8][7C]</c> then <c>count × ( [perkRef : 3 BE][7C][rank : u8][7C] )</c>, where each
     /// <c>perkRef</c> is the FormID-array index + 1 (the §4g "+1" convention) and resolves to a <c>PERK</c> record.
-    /// Like <see cref="PipBoyNotes"/>, deciding "is this FormID a PERK?" needs the game masters (outside <c>Core</c>),
-    /// so the caller injects that test via <paramref name="isPerkForm"/> (e.g. <c>fid =&gt; db.RecordType(fid) ==
-    /// "PERK"</c>). The list start isn't separately located — we scan the record for <c>7C [ref:3] 7C</c> entries
-    /// whose <c>FormIdArray[ref − 1]</c> is a PERK (the all-PERK filter makes a false positive vanishingly unlikely)
-    /// and read the following <c>rank</c> byte. Deduplicated by FormID; empty if the record or masters are missing.
-    /// Read-only — adding a perk appends to the FormID array and grows the list (length-changing, unsupported).
+    /// <b>There are several such lists, same grammar:</b> the player's <b>chosen perks + chargen trait share one
+    /// list</b> (taking a perk grows it — observed 1→2 across a controlled diff), while an <b>engine-granted perk</b>
+    /// (e.g. Companion Suite) sits in its <b>own</b> separate list, so the reader must <b>union every</b> list, not
+    /// pick one. Like <see cref="PipBoyNotes"/>, deciding "is this FormID a PERK?" needs the game masters (outside
+    /// <c>Core</c>), so the caller injects that test via <paramref name="isPerkForm"/> (e.g. <c>fid =&gt;
+    /// db.RecordType(fid) == "PERK"</c>).
+    /// <para><b>Anchored, not loose.</b> Rather than report any bracketed <c>7C [ref:3] 7C</c> hit (which can match
+    /// coincidental refIDs in the record's havok/actor-value bytes), we only read entries that sit inside a
+    /// <b>structurally validated</b> count-prefixed list (<see cref="EnumeratePerkListEntries"/>): a positive
+    /// multiple-of-4 count byte, then exactly that many contiguous 6-byte entries whose refIDs resolve. Because a
+    /// list entry is always itself preceded by a <c>7C</c> (the prefix's or the previous entry's trailing one), this
+    /// set is a strict subset of the old loose scan — it can never over-report, and every real perk lives in such a
+    /// list so it never drops one (verified across the corpus). Validation is masters-independent; the PERK filter is
+    /// applied after, so a narrow single-FormID predicate still finds its perk inside a multi-perk list.</para>
+    /// Deduplicated by FormID; empty if the record or masters are missing. Read-only.
     /// </summary>
     public IReadOnlyList<PlayerPerk> PlayerPerks(Func<uint, bool> isPerkForm)
     {
+        ArgumentNullException.ThrowIfNull(isPerkForm);
         if (PlayerInventoryChangeForm is not { } cf)
             return [];
         var seen = new HashSet<uint>();
         var result = new List<PlayerPerk>();
-        var end = cf.DataOffset + cf.DataLength;
-        for (var i = cf.DataOffset; i + 6 < end; i++)
+        foreach (var (refId, rank, _) in EnumeratePerkListEntries(cf))
         {
-            // A perk entry is [ref:3 BE][7C][rank:u8][7C]; the ref is bracketed 7C [ref:3] 7C (i..i+4).
-            if (_raw[i] != 0x7C || _raw[i + 4] != 0x7C)
-                continue;
-            var refId = (_raw[i + 1] << 16) | (_raw[i + 2] << 8) | _raw[i + 3];
-            if (refId <= 0)
-                continue;
             var formId = ResolveIref(refId - 1);
             if (formId == 0 || !isPerkForm(formId) || !seen.Add(formId))
                 continue;
-            var rank = _raw[i + 6] == 0x7C ? _raw[i + 5] : 0; // [7C][rank][7C] follows the ref
             result.Add(new PlayerPerk(refId, formId, rank));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Enumerates every perk-list entry — <c>(refId, rank, entryOffset)</c> for a <c>[ref:3 BE][7C][rank:u8][7C]</c>
+    /// entry — that sits inside a <b>structurally validated</b> count-prefixed list (<c>[count*4:u8][7C]</c> then
+    /// <c>count ×</c> entries) anywhere in the player reference record (§4n). Validation is masters-independent (see
+    /// <see cref="TryValidatePerkListAt"/>), so every yielded entry is anchored to a real list rather than a
+    /// coincidental <c>7C [ref] 7C</c> hit. Callers apply the PERK filter + dedup. The scan checks every byte offset
+    /// (it never skips ahead), so it can't miss a real list hidden behind a spurious earlier anchor.
+    /// </summary>
+    private IEnumerable<(int RefId, int Rank, int EntryOffset)> EnumeratePerkListEntries(ChangeFormHeader cf)
+    {
+        var end = cf.DataOffset + cf.DataLength;
+        for (var p = cf.DataOffset; p + 1 < end; p++)
+        {
+            if (!TryValidatePerkListAt(p, end, out var count))
+                continue;
+            var entry = p + 2;
+            for (var k = 0; k < count; k++, entry += 6)
+            {
+                var refId = (_raw[entry] << 16) | (_raw[entry + 1] << 8) | _raw[entry + 2];
+                yield return (refId, _raw[entry + 4], entry);
+            }
+        }
+    }
+
+    /// <summary>Validates a <c>[count*4:u8][7C]</c> perk-list prefix at <paramref name="p"/>: the count byte is a
+    /// positive multiple of 4, a <c>7C</c> follows, and exactly <c>count</c> contiguous 6-byte
+    /// <c>[ref:3][7C][rank][7C]</c> entries follow, each with a positive refID resolving to a non-zero form (the
+    /// §4g "+1" convention). Masters-independent — the PERK test is applied by the caller.</summary>
+    private bool TryValidatePerkListAt(int p, int end, out int count)
+    {
+        count = 0;
+        var countByte = _raw[p];
+        if (countByte == 0 || countByte % 4 != 0 || _raw[p + 1] != 0x7C)
+            return false;
+        var n = countByte / 4;
+        var entry = p + 2;
+        for (var k = 0; k < n; k++, entry += 6)
+        {
+            if (entry + 6 > end || _raw[entry + 3] != 0x7C || _raw[entry + 5] != 0x7C)
+                return false;
+            var refId = (_raw[entry] << 16) | (_raw[entry + 1] << 8) | _raw[entry + 2];
+            if (refId <= 0 || ResolveIref(refId - 1) == 0)
+                return false;
+        }
+        count = n;
+        return true;
     }
 
     /// <summary>The player's standing with one faction: the <c>REPU</c> faction FormID and its
@@ -1605,47 +1655,34 @@ public sealed class FalloutSave
         return Parse(RebuildWithBodyEdits(splices)); // no new record: change-form count unchanged
     }
 
-    /// <summary>Locates the perk list's <c>[count*4:u8][7C]</c> prefix inside the player reference record by
-    /// finding the lowest-offset perk entry (<c>7C [ref:3] 7C</c> resolving to a PERK via
-    /// <paramref name="isPerkForm"/>) and stepping back to the prefix, then validating that exactly
-    /// <paramref name="storedCount"/> contiguous 6-byte <c>[ref:3][7C][rank][7C]</c> entries follow. Returns false
-    /// if no list is found or the structure doesn't validate.</summary>
+    /// <summary>Locates the <b>chosen-perks/trait</b> list's <c>[count*4:u8][7C]</c> prefix inside the player
+    /// reference record for <see cref="AddPerk"/>: the first <b>validated</b> count-prefixed list
+    /// (<see cref="TryValidatePerkListAt"/>) that holds at least one entry resolving to a PERK via
+    /// <paramref name="isPerkForm"/> (engine-granted perks like Companion Suite sit in their own separate list
+    /// later in the record, so the first PERK-bearing list by offset is the chosen/trait one a new perk joins).
+    /// Returns false if no such list exists — the zero-perk first-perk case is handled by <see cref="AddPerk"/>.</summary>
     private bool TryLocatePerkList(ChangeFormHeader cf, Func<uint, bool> isPerkForm, out int countPrefixOffset, out int storedCount)
     {
         countPrefixOffset = -1;
         storedCount = 0;
         var end = cf.DataOffset + cf.DataLength;
-        var firstEntryDelim = -1; // the 7C immediately before the first perk entry's ref
-        for (var i = cf.DataOffset; i + 6 < end; i++)
+        for (var p = cf.DataOffset; p + 1 < end; p++)
         {
-            if (_raw[i] != 0x7C || _raw[i + 4] != 0x7C || _raw[i + 6] != 0x7C)
+            if (!TryValidatePerkListAt(p, end, out var count))
                 continue;
-            var refId = (_raw[i + 1] << 16) | (_raw[i + 2] << 8) | _raw[i + 3];
-            if (refId <= 0)
-                continue;
-            var formId = ResolveIref(refId - 1);
-            if (formId == 0 || !isPerkForm(formId))
-                continue;
-            firstEntryDelim = i;
-            break;
+            var entry = p + 2;
+            for (var k = 0; k < count; k++, entry += 6)
+            {
+                var refId = (_raw[entry] << 16) | (_raw[entry + 1] << 8) | _raw[entry + 2];
+                if (isPerkForm(ResolveIref(refId - 1)))
+                {
+                    countPrefixOffset = p;
+                    storedCount = count;
+                    return true;
+                }
+            }
         }
-        if (firstEntryDelim < 0)
-            return false;
-        // The prefix [count*4][7C] sits just before that leading 7C: count*4 at firstEntryDelim-1.
-        var cp = firstEntryDelim - 1;
-        if (cp < cf.DataOffset || _raw[cp] % 4 != 0 || _raw[cp + 1] != 0x7C)
-            return false;
-        var count = _raw[cp] / 4;
-        if (count <= 0)
-            return false;
-        // Validate: count contiguous 6-byte [ref:3][7C][rank][7C] entries start at cp+2.
-        var p = cp + 2;
-        for (var k = 0; k < count; k++, p += 6)
-            if (p + 6 > end || _raw[p + 3] != 0x7C || _raw[p + 5] != 0x7C)
-                return false;
-        countPrefixOffset = cp;
-        storedCount = count;
-        return true;
+        return false;
     }
 
     /// <summary>

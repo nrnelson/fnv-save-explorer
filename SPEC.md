@@ -735,34 +735,53 @@ initially missed by a `type 0x4`-only filter. Found via `recid` (now reports `[M
 > changes are player-position and game-time/global-variable **floats** (no clean `0→1` boolean). Whether the popup
 > is a persisted seen-flag or a one-shot scripted event needs a *no-movement* controlled pair around the popup.
 
-### 4n. Player perks (and traits) — the perk list in the player reference change form
-The player's **perks and traits** are a **count-prefixed list embedded in the player reference change form** (iref =
-PlayerRef + 1 — the same record that holds inventory §4g, karma/XP §4j), inside its ExtraDataList region:
+### 4n. Player perks (and traits) — the perk lists in the player reference change form
+The player's **perks and traits** are stored as **count-prefixed lists embedded in the player reference change form**
+(iref = PlayerRef + 1 — the same record that holds inventory §4g, karma/XP §4j), inside its ExtraDataList region. Each
+list:
 ```
 [count*4 : u8][7C]   then count × ( [perkRef : 3 BE][7C][rank : u8][7C] )      # 6 bytes per perk; count*4 = the b/4 vsval convention (§4i)
 ```
 Each `perkRef` is a 3-byte big-endian refID = **FormID-array index + 1** (the §4g "+1" convention), resolving to a
 **`PERK`** record (named via the masters; FNV stores **traits as PERK forms too**). `rank` is the perk rank (1 for
-single-rank perks). **Cracked by a controlled diff** (`gtg-complete` → `level2-gunsbachelor`: level 1→2, 13 skill
-points into Guns 15→28, **Confirmed Bachelor** perk taken): the saves are far apart (noisy change-form churn), so
-the perk was isolated **structurally**, not by change-form diff — `findname` located the perk
-(`Confirmed Bachelor = 0x001361B4`), which is **absent from the FormID array before and present after** (iref 8669),
-and `find` located its refID inside the player reference record. The decoded block reads `08 7C` (count*4 = **2**)
-then **Confirmed Bachelor** (rank 1) + **Hoarder** (the player's trait, also a PERK, rank 1) — exactly the
-character's perk + trait. **Taking a perk** therefore (a) **appends the perk's FormID to the FormID array** and
-(b) adds a `[perkRef][7C][rank][7C]` entry (count*4 += 4) — a length-changing edit, now supported via offset-fixup:
+single-rank perks). **There are several such lists, same grammar — and they must be UNIONED, not treated as one**
+(corpus-aligned across gtg-complete / level2 / q2 / Save 146): the player's **chosen perks and chargen trait share
+ONE list**, while an **engine-granted perk** (e.g. **Companion Suite** `0x0015C571`, granted on leaving Doc
+Mitchell's) sits in its **OWN separate count-prefixed list** elsewhere in the record. Example (level2): the chosen
+list reads `08 7C │ Confirmed Bachelor 7C 01 7C │ Hoarder 7C 01 7C` (count 2 = the taken perk + the trait), and a
+separate `04 7C │ Companion Suite 7C 01 7C` holds the engine perk. A single-list reader is wrong (it drops the
+engine perk); the reader unions every validated list.
+
+**Cracked by a controlled diff** (`gtg-complete` → `level2-gunsbachelor`: level 1→2, **Confirmed Bachelor** taken):
+`findname` located `Confirmed Bachelor = 0x001361B4`, **absent from the FormID array before and present after** (array
+index 8669); `find` showed the chosen/trait list grow **count 1→2** (gtg had `04 7C │ Hoarder` — just the trait;
+level2 prepended Confirmed Bachelor → `08 7C │ Confirmed Bachelor │ Hoarder`), with Companion Suite's own `04`-list
+unchanged. **Taking a perk** therefore (a) **appends the perk's FormID to the FormID array** and (b) adds a
+`[perkRef][7C][rank][7C]` entry to the chosen list (count*4 += 4) — a length-changing edit supported via offset-fixup:
 **`FalloutSave.AddPerk(perkFormId, rank, isPerkForm)`** (CLI `addperk`) appends the FormID-array entry if absent,
 inserts the 6-byte perk entry, bumps the `[count*4]` prefix, and grows the record's length field (`GrowRecordLengthSplice`
 — fixed width by `type>>6`) via `RebuildWithBodyEdits` (§4b). v1 requires ≥1 existing perk/trait (to locate the list).
-Verified on a real save (3→4 perks, +10 B, byte-identical round-trip, walk lands). **Reader shipped:**
-`FalloutSave.PlayerPerks(isPerkForm)` scans the
-player reference record for `7C [ref:3] 7C` entries whose `FormIdArray[ref−1]` is a `PERK` (the masters test is
-injected by the caller, as for notes) and reads each `rank`; **CLI `perks`** names them via the masters (`PERK` is
-now indexed by `TesPlugin`). **Verified** across saves/characters: gtg-complete = Hoarder + Companion Suite (no
-Confirmed Bachelor); level2-gunsbachelor = Confirmed Bachelor + Hoarder + Companion Suite; a vanilla mid-game save =
-Built to Destroy + Fast Shot + Swift Learner + Companion Suite (the always-granted engine perk) — no false
-positives; controlled + read-only-invariant tests pin it. Tooling: **`findname <save> "<text>" [SIG]`** (find a base
-form by name → save-space FormID; how the perk was located) + `recid`/`find`.
+Verified on a real save (3→4 perks, +10 B, byte-identical round-trip, walk lands).
+
+**No "havok phantom" false positive — q2 is a real trait (corrected).** A prior reading mis-called q2's Hoarder a
+coincidental havok match. It is the player's genuinely-selected chargen **trait**: `q1` (2.5 min, pre-trait) has the
+FormID **nowhere** in the file and decodes **0 perks**; `q2` (5 min, post-trait) carries a real `04 7C │ Hoarder 7C 01 7C`
+list and the appended FormID — so **`q1`→`q2` is a valid 0→1 perk diff**. The earlier "58-byte-stride `00 1D 7A`" hits
+resolve to `array[7545]` (a non-perk) and never produce the report; the Hoarder report comes from the genuine entry at
+`00 1D 7B` (→ `array[7546]`). **Across the whole corpus every reported perk sits inside a validated count-prefixed list
+— there are no false positives.**
+
+**Reader shipped (anchored, not loose):** `FalloutSave.PlayerPerks(isPerkForm)` reads only entries inside a
+**structurally validated** count-prefixed list (`TryValidatePerkListAt` / `EnumeratePerkListEntries`: positive
+multiple-of-4 count, then exactly that many contiguous 6-byte entries whose refIDs resolve), unioning **all** lists and
+filtering by `PERK` (masters test injected by the caller, as for notes). Because a list entry is always itself preceded
+by a `7C`, this set is a **strict subset of the old free `7C [ref:3] 7C` scan** — it can't over-report on coincidental
+havok/actor-value bytes, and every real perk lives in such a list so it can't drop one (verified: gtg / level2 / Save 146
+/ q1 / q2 decode byte-identically to the loose scan). **CLI `perks`** names them via the masters (`PERK` is indexed by
+`TesPlugin`). **Verified** across saves/characters: gtg-complete = Hoarder + Companion Suite; level2 = Confirmed
+Bachelor + Hoarder + Companion Suite; Save 146 = Confirmed Bachelor + Heavy Handed + Companion Suite; q2 = Hoarder
+(trait); a vanilla mid-game save = Built to Destroy + Fast Shot + Swift Learner + Companion Suite — controlled +
+read-only-invariant + q1→q2 + separate-list-union tests pin it. Tooling: **`findname <save> "<text>" [SIG]`** + `recid`/`find`.
 
 ### 4o. Faction reputation (fame / infamy) — the type-0x2B change forms
 The player's **reputation with each faction** is a **type-`0x2B` change form** (len 10):

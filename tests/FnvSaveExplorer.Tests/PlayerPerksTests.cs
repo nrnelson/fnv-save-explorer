@@ -57,4 +57,45 @@ public class PlayerPerksTests
         Assert.NotNull(save.PlayerPerks(_ => false));
         Assert.Empty(save.PlayerPerks(_ => false));
     }
+
+    [Fact]
+    public void q1_to_q2_is_a_real_zero_to_one_perk_diff_the_chargen_trait()
+    {
+        // CORRECTION (ROADMAP §4n): q2's Hoarder was previously mis-called a "havok phantom". It is the player's
+        // genuinely-selected chargen *trait* (FNV stores traits as PERK forms). Proof, masters-free via a narrow
+        // predicate: q1 (2.5 min, pre-trait) has the FormID nowhere and decodes 0 perks; q2 (5 min, after trait
+        // selection) carries a real count-1 perk list 04 7C [Hoarder] 7C 01 7C. So q1->q2 IS a valid 0->1 pair.
+        const uint hoarder = 0x0501276D;
+        bool IsHoarder(uint fid) => fid == hoarder;
+
+        var (q1, q2) = (SaveNamed("q1"), SaveNamed("q2"));
+        if (q1 is null || q2 is null)
+            return; // controlled pair not present on this machine — nothing to assert
+
+        Assert.Empty(FalloutSave.Load(q1).PlayerPerks(IsHoarder));
+
+        var trait = FalloutSave.Load(q2).PlayerPerks(IsHoarder).Single();
+        Assert.Equal(hoarder, trait.FormId);
+        Assert.Equal(1, trait.Rank);
+    }
+
+    [Fact]
+    public void Chosen_and_engine_perks_are_unioned_across_separate_lists()
+    {
+        // Regression guard for the reverted single-list bug: a chosen perk (Confirmed Bachelor, in the chosen/trait
+        // list) and the engine-granted Companion Suite (in its OWN separate count-prefixed list) must BOTH decode.
+        // Masters-free: the predicate accepts exactly those two FormIDs, so Hoarder (also in the chosen list) is
+        // filtered out — proving the reader validates list structure independently of the PERK filter.
+        const uint confirmedBachelor = 0x001361B4;
+        const uint companionSuite = 0x0015C571;
+        bool IsEither(uint fid) => fid == confirmedBachelor || fid == companionSuite;
+
+        var save = SaveNamed("level2-gunsbachelor");
+        if (save is null)
+            return; // not present on this machine
+
+        var perks = FalloutSave.Load(save).PlayerPerks(IsEither).Select(p => p.FormId).ToHashSet();
+        Assert.Contains(confirmedBachelor, perks);   // chosen perk, in the multi-entry chosen list
+        Assert.Contains(companionSuite, perks);      // engine perk, in a separate count-1 list
+    }
 }
