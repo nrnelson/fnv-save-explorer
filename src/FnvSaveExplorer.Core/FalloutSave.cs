@@ -1244,6 +1244,40 @@ public sealed class FalloutSave
         return result;
     }
 
+    /// <summary>The player's standing with one faction: the <c>REPU</c> faction FormID and its
+    /// <see cref="Fame"/>/<see cref="Infamy"/> (0–100 floats). A faction with both 0 shows no standing in the
+    /// Pip-Boy.</summary>
+    public readonly record struct FactionReputation(int RefId, uint FactionFormId, float Fame, float Infamy);
+
+    /// <summary>
+    /// The player's <b>faction reputation</b> (ROADMAP §4o). Each faction the player has standing with gets a
+    /// <b>type-<c>0x2B</c> change form</b> whose payload is <c>[fame:f32 LE][7C][infamy:f32 LE][7C]</c> (len 10),
+    /// keyed by the faction's <c>REPU</c> record: the change form's refID is the REPU's FormID-array index + 1
+    /// (the §4g "+1"/persisted-reference convention), so the faction is <c>FormIdArray[refID − 1]</c>. As with
+    /// <see cref="PipBoyNotes"/>/<see cref="PlayerPerks"/>, deciding "is this FormID a REPU?" needs the masters, so
+    /// the caller injects <paramref name="isRepuForm"/> (e.g. <c>fid =&gt; db.RecordType(fid) == "REPU"</c>).
+    /// Cracked by a controlled diff (Goodsprings idolized → wiped: fame 100.0 → 0.0). Read-only; fame/infamy are
+    /// same-length float splices if editing is added later.
+    /// </summary>
+    public IReadOnlyList<FactionReputation> Reputations(Func<uint, bool> isRepuForm)
+    {
+        var result = new List<FactionReputation>();
+        foreach (var cf in EnumerateChangeForms())
+        {
+            if (cf.FormType != 0x2B || cf.DataLength != 10)
+                continue;
+            if (_raw[cf.DataOffset + 4] != 0x7C || _raw[cf.DataOffset + 9] != 0x7C)
+                continue;
+            var faction = ResolveIref(cf.Iref - 1);             // the +1 (persisted-reference) convention
+            if (faction == 0 || !isRepuForm(faction))
+                continue;
+            var fame = BitConverter.ToSingle(_raw, cf.DataOffset);
+            var infamy = BitConverter.ToSingle(_raw, cf.DataOffset + 5);
+            result.Add(new FactionReputation(cf.Iref, faction, fame, infamy));
+        }
+        return result;
+    }
+
     // ---- Editing (same-length splices only) --------------------------------
     public void SetPlayerLevel(uint level) => StageUInt32(_playerLevelOffset, level);
 

@@ -28,6 +28,7 @@ if (args.Length < 2)
           fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
           fnvsave notes <save.fos> [dataDir]  List the player's Pip-Boy Data -> Notes — READ and UNREAD (§4k/§4k.1)
           fnvsave perks <save.fos> [dataDir]  List the player's perks + traits (§4n; resolves PERK forms via masters)
+          fnvsave reputation <save.fos> [dataDir]   List faction fame/infamy (§4o; type-0x2B forms keyed by REPU)
           fnvsave pipboy <save.fos> [dataDir]   The COMPUTED in-game Pip-Boy quest list (§6 #16): interprets the
                                               masters' quest scripts (SGE startup + reached-stage effects + guard eval).
                                               active/completed + displayed objectives. (Only "Back in the Saddle" omitted.)
@@ -286,6 +287,9 @@ try
             break;
         case "perks":
             Perks(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
+            break;
+        case "reputation":
+            Reputation(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
             break;
         case "quests":
             Quests(FalloutSave.Load(path), path,
@@ -862,6 +866,24 @@ static void Perks(FalloutSave s, string savePath, string? dataDir)
         var rank = p.Rank > 1 ? $"  (rank {p.Rank})" : "";
         Console.WriteLine($"  {db.Resolve(p.FormId) ?? "?",-40}{rank}  0x{p.FormId:X8} (mod {modIndex:X2})  {src}");
     }
+}
+
+static void Reputation(FalloutSave s, string savePath, string? dataDir)
+{
+    // The player's faction reputation (ROADMAP §4o) — type-0x2B change forms holding [fame:f32][7C][infamy:f32][7C],
+    // keyed by the REPU faction (array[refID-1]). Naming the faction (and confirming it's a REPU) needs the masters.
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    if (db.Count == 0)
+    {
+        Console.WriteLine("Reputation needs the game Data folder to identify/name REPU factions — pass it as the 2nd argument.");
+        return;
+    }
+
+    var reps = s.Reputations(fid => db.RecordType(fid) == "REPU");
+    Console.WriteLine($"Faction reputation ({reps.Count} factions with standing):");
+    Console.WriteLine($"  {"Faction",-32}  {"Fame",6}  {"Infamy",6}");
+    foreach (var r in reps.OrderBy(r => db.Resolve(r.FactionFormId) ?? "￿", StringComparer.OrdinalIgnoreCase))
+        Console.WriteLine($"  {db.Resolve(r.FactionFormId) ?? "?",-32}  {r.Fame,6:0.#}  {r.Infamy,6:0.#}  0x{r.FactionFormId:X8}");
 }
 
 static void Quests(FalloutSave s, string savePath, string? dataDir, bool raw)
@@ -1828,8 +1850,13 @@ static IEnumerable<string> WalkPayload(int formType, uint flags, byte[] d)
     switch (formType)
     {
         // Fixed-width sized types (SPEC §4l). Each field labelled u32/i32; the 0x7C delimiters shown inline.
-        case 0x2B or 0x32 when d.Length == 10 && d[4] == 0x7C && d[9] == 0x7C:
-            yield return Field(0, "u32[0]", U32(d, 0).ToString());
+        case 0x2B when d.Length == 10 && d[4] == 0x7C && d[9] == 0x7C:
+            // Reputation (§4o): [fame:f32][7C][infamy:f32][7C], keyed by the REPU faction (array[refID-1]).
+            yield return Field(0, "fame",   BitConverter.ToSingle(d, 0).ToString());
+            yield return Field(5, "infamy", BitConverter.ToSingle(d, 5).ToString());
+            break;
+        case 0x32 when d.Length == 10 && d[4] == 0x7C && d[9] == 0x7C:
+            yield return Field(0, "u32[0]", U32(d, 0).ToString());   // per-form counter (§4l)
             yield return Field(5, "u32[1]", U32(d, 5).ToString());
             break;
         case 0x21 when d.Length == 20 && d[4] == 0x7C && d[9] == 0x7C && d[14] == 0x7C && d[19] == 0x7C:

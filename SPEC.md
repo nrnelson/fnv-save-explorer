@@ -593,7 +593,9 @@ guess"):**
   `[u32][u32][u32=0][u32][7C]`. SIZED.
 - `0x21` — **len 20, flags `0x00000002`**. `[u32][7C][u32][7C][u32][7C][0xFFFFFFFF][7C]` (last field a `−1`
   sentinel). SIZED.
-- `0x2B` / `0x32` — **len 10, flags `0x00000002`**. `[u32][7C][u32][7C]` (two delimited `u32`). SIZED. **`0x32` is a
+- `0x2B` — **len 10, flags `0x00000002`** = **FACTION REPUTATION** (§4o): `[fame:f32][7C][infamy:f32][7C]`, keyed by
+  the faction's `REPU` record. **DECODED** (was mistakenly read as two `u32`). `0x32` — **len 10, flags
+  `0x00000002`**, `[u32][7C][u32][7C]`. **`0x32` is a
   per-form COUNTER/value** (`[u32 value][7C][u32 = 0][7C]`; the 2nd `u32` is always 0): a controlled diff
   (`primm-prediscover` → `primm-postdiscover`) changed exactly one — value `1 → 2` on a `REFR`(base `CONT`,
   `0x001075F4`) — and the type's forms are countable across the board (`recid`: CHAL challenge-progress, REPU
@@ -721,6 +723,25 @@ Confirmed Bachelor); level2-gunsbachelor = Confirmed Bachelor + Hoarder + Compan
 Built to Destroy + Fast Shot + Swift Learner + Companion Suite (the always-granted engine perk) — no false
 positives; controlled + read-only-invariant tests pin it. Tooling: **`findname <save> "<text>" [SIG]`** (find a base
 form by name → save-space FormID; how the perk was located) + `recid`/`find`.
+
+### 4o. Faction reputation (fame / infamy) — the type-0x2B change forms
+The player's **reputation with each faction** is a **type-`0x2B` change form** (len 10):
+```
+[fame : f32 LE][7C][infamy : f32 LE][7C]      # both 0–100; a faction with both 0 shows no standing in the Pip-Boy
+```
+keyed by the faction's **`REPU`** record (FNV has one REPU per playable faction). The change form's refID is the
+REPU's FormID-array index **+ 1** (the §4g/§4k persisted-reference convention — confirmed stable across reload by
+`nhps-resave`, see [docs/DECISIONS.md]), so the faction is `FormIdArray[refID − 1]` and resolves to a `REPU`
+(named via the masters; `REPU` is now indexed by `TesPlugin`). **Cracked by a controlled diff** (`rep4-pre →
+rep4-post`: Goodsprings set from idolized to nothing via `setreputation 104c22 … 0` — fame `100.0 → 0.0`, removing
+it from the Pip-Boy). The change is a clean float splice found by a **whole-file byte diff** (`cmp`): the only
+non-churn change was two bytes `C8 42 → 00 00` (i.e. `100.0 → 0.0`) inside the Goodsprings `0x2B` record. **Verified**:
+rep4-pre = Goodsprings 100/0 + Powder Gangers 0/12; rep4-post = Goodsprings 0/0 (gone) + Powder Gangers unchanged;
+a late VNV Extended save reads 12 factions with sane values (NCR 80/2, Caesar's Legion 12/100, Boomers 50/0, …).
+**Why it was missed earlier:** `0x2B` was mistaken for `[u32][7C][u32][7C]` (§4l) and `cf.FormId` (`array[iref]`)
+gave the off-by-one neighbour, not the REPU — both fixed. `FalloutSave.Reputations(isRepuForm)` + CLI `reputation`
+(read-only; fame/infamy are same-length float splices if editing is added). The earlier `0x001558E6` `0x32`
+sighting was a *separate* per-form counter on the Powder Gangers REPU, not its reputation (which is the `0x2B`).
 
 ---
 
