@@ -979,6 +979,12 @@ public sealed class FalloutSave
         if (formId == 0)
             return false;
         count = ReadUInt32At(p + 4);
+        // 0xFFFFFFFF (= -1) is the engine's sentinel for an equipped base/quest item that can't be
+        // dropped — e.g. the starting Pip-Boy 3000 + Pip-Boy Glove, which sit as the first inventory
+        // stacks (controlled saves q1/q2). It's a genuine stack, so accept it explicitly; the 1,000,000
+        // sane-count cap below is only a heuristic against misaligned reads of other large junk values.
+        if (count == uint.MaxValue)
+            return true;
         // A real stack count is a small integer: its upper three bytes are never the 0x7C delimiter.
         // Rejecting a delimiter there discards misaligned reads of a stack's extra data (where a 0x7C
         // field separator falls inside the misread count), which is the main source of false entries.

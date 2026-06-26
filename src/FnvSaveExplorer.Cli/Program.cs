@@ -790,7 +790,8 @@ static void Inventory(FalloutSave s, string savePath, string? dataDir)
     // With names available, hide entries that don't resolve to an item: on large records the decoder's
     // run can absorb a few non-item bytes that validate structurally but aren't real stacks.
     var items = db.Count > 0 ? inv.Items.Where(i => db.Resolve(i.FormId) is not null).ToList() : inv.Items;
-    Console.WriteLine($"Player inventory @ 0x{inv.Offset:X}  ({items.Count} stacks, {items.Sum(i => (long)i.Count):N0} items):");
+    var totalItems = items.Sum(i => i.IsCountSentinel ? 1L : (long)i.Count);   // equipped base/quest stacks count as 1, not -1
+    Console.WriteLine($"Player inventory @ 0x{inv.Offset:X}  ({items.Count} stacks, {totalItems:N0} items):");
     if (db.Count == 0)
         Console.WriteLine("  (item names unavailable — game Data folder not found; pass it as the 2nd argument)");
     foreach (var item in items.OrderByDescending(i => i.Count))
@@ -805,7 +806,8 @@ static void Inventory(FalloutSave s, string savePath, string? dataDir)
             extra += "  [equipped]";
         if (item.ExtraRefIds.Count > 0)
             extra += $"  0x21-ref: {string.Join(", ", item.ExtraRefIds.Select(r => db.Resolve(s.ResolveIref(r)) ?? $"0x{s.ResolveIref(r):X8}"))}";
-        Console.WriteLine($"  {name,-28}  {tab,-14} 0x{item.FormId:X8} (mod {item.ModIndex:X2})  {src,-22}  x{item.Count,-6} iref {item.Iref,-6} (edit 0x{item.CountValueOffset:X}){extra}");
+        var countStr = item.IsCountSentinel ? "-1" : item.Count.ToString();   // -1 = equipped base/quest sentinel
+        Console.WriteLine($"  {name,-28}  {tab,-14} 0x{item.FormId:X8} (mod {item.ModIndex:X2})  {src,-22}  x{countStr,-6} iref {item.Iref,-6} (edit 0x{item.CountValueOffset:X}){extra}");
     }
 }
 

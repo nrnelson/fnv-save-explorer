@@ -14,6 +14,12 @@ public sealed record InventoryItem(int Iref, uint FormId, uint Count, int CountV
     /// <summary>The mod (plugin load-order) index of the item's FormID — its high byte.</summary>
     public int ModIndex => (int)(FormId >> 24);
 
+    /// <summary><see cref="Count"/> == <c>0xFFFFFFFF</c> (-1): the engine's sentinel for an equipped base/quest
+    /// item that can't be dropped — e.g. the starting Pip-Boy 3000 + Pip-Boy Glove. The stack is a single
+    /// item, so it counts as 1 toward <see cref="PlayerInventory.TotalItems"/>; the raw value is retained for
+    /// fidelity (and editing).</summary>
+    public bool IsCountSentinel => Count == uint.MaxValue;
+
     /// <summary>The stack's condition/health (a weapon/armor's degradation float), or null if the stack
     /// carries no condition extra-data (ammo, aid, misc, or undamaged-and-never-tracked items).</summary>
     public float? Condition { get; init; }
@@ -79,8 +85,9 @@ public sealed class PlayerInventory
         Items = items;
     }
 
-    /// <summary>The total number of individual items across all stacks.</summary>
-    public long TotalItems => Items.Sum(i => (long)i.Count);
+    /// <summary>The total number of individual items across all stacks. An equipped base/quest stack
+    /// (<see cref="InventoryItem.IsCountSentinel"/>, count -1) counts as a single item rather than ~4 billion.</summary>
+    public long TotalItems => Items.Sum(i => i.IsCountSentinel ? 1L : i.Count);
 
     /// <summary>Absolute file offset of the first item stack's 3-byte ref (the start of the item list,
     /// i.e. just past the reference's ExtraDataList + vsval count), or null if the inventory is empty. The

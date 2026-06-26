@@ -21,6 +21,19 @@ public class PlayerInventoryTests
     }
 
     [Fact]
+    public void Equipped_count_sentinel_is_one_item_not_four_billion()
+    {
+        // 0xFFFFFFFF (-1) is the engine's equipped base/quest-item count (the starting Pip-Boy 3000 + glove,
+        // controlled saves q1/q2). It's a valid stack of a single item, so TotalItems counts it as 1 — not the
+        // ~4.29 billion a raw u32 sum would give.
+        var normal = new InventoryItem(1, 0x00AAAA01, 5, 0x100);
+        var equipped = new InventoryItem(2, 0x00015038, uint.MaxValue, 0x200);
+        Assert.False(normal.IsCountSentinel);
+        Assert.True(equipped.IsCountSentinel);
+        Assert.Equal(6, new PlayerInventory(0, [normal, equipped]).TotalItems);   // 5 + 1
+    }
+
+    [Fact]
     public void Synthetic_count_edit_is_same_length_and_reparses()
     {
         var original = InventorySave.Build();

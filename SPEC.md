@@ -122,7 +122,13 @@ preamble and a zeroed array, the items are a run of stacks:
 **plus one** (index 0 reserved), so the item is `FormIdArray[ref - 1]` and `count` is the entry's **own**
 stack count. **Confirmed by a controlled in-game diff:** save A → `player.additem 000E2C6F 1` → save B →
 consume one → save C (Saves 28/29/30). `idiff` pinned a single u32 in the inventory change form going
-**1 → 2 → 1**; that entry's `ref` resolved to *Antivenom* only through the `- 1` index. The `- 1` fix
+**1 → 2 → 1**; that entry's `ref` resolved to *Antivenom* only through the `- 1` index.
+**Count sentinel `0xFFFFFFFF` (-1):** an equipped base/quest item that can't be dropped stores its count as
+`0xFFFFFFFF` — observed on the starting **Pip-Boy 3000 + Pip-Boy Glove**, which sit as the first two stacks
+(controlled saves q1/q2). It is a genuine single-item stack, so the decoder accepts it (the `count <= 1,000,000`
+sane-count cap is only a misalignment heuristic and explicitly excludes `0xFFFFFFFF`), it counts as **1** toward
+the item total (`InventoryItem.IsCountSentinel`), and the CLI shows it as `x-1`. Earlier corpora never surfaced
+it because those saves were past the early state where the Pip-Boy leads the list. The `- 1` fix
 alone makes the whole list correct: every stack now resolves (Stimpak ×10, Super Stimpak ×3, Doctor's
 Bag ×3, Weapon Repair Kit ×4, Bleak Venom ×5, Antivenom ×1, Bottle Cap/caps ×18, Pip-Boy 3000, …), with
 **no spurious entries** — the earlier `?` rows (ACHR/ACRE/REFR) were just `FormIdArray[ref]` landing on
