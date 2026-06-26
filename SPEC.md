@@ -763,6 +763,21 @@ inserts the 6-byte perk entry, bumps the `[count*4]` prefix, and grows the recor
 — fixed width by `type>>6`) via `RebuildWithBodyEdits` (§4b). v1 requires ≥1 existing perk/trait (to locate the list).
 Verified on a real save (3→4 perks, +10 B, byte-identical round-trip, walk lands).
 
+**First-perk (zero-perk) case — mechanism CRACKED, robust locator deferred.** A clean controlled diff
+(`perk-pre` → `perk-post`: a no-trait level-1 character, console `player.addperk 1361b4` only, no other churn) pins it
+exactly: a zero-perk save **already holds an empty perk list `00 7C` (count = 0)** at the perk slot, and adding the
+first perk is the **same** edit as the ≥1 path — an **in-place count bump `00`→`04`** plus a **6-byte entry insert**
+`[ref:3][7C][rank][7C]` right after the prefix (record **+6 B**; the FormID-array append is the other **+4 B**, total
+**+10 B**), everything after shifting by 6. So no new sub-record is created — the empty list is present, not absent.
+**What's missing is a robust *locator* for that empty `00 7C` slot:** the perk slots live in a **trailing actor-data
+region after the inventory item stacks** (perk-pre: items at `data+0x4D1`, perk slot ~`data+0xD57`), interleaved with
+other `04 7C [ref] 7C [val] 7C` mini-lists and `00 7C` slots whose **position varies per character** (after the
+`ref391` mini-list in early saves, after `ref6336` in developed ones — no stable ref/offset anchor, and the ref
+*values* differ per save since they're array-index-dependent). Picking the wrong `00 7C` would corrupt the save, so
+per "don't ship guesses to the writer" `AddPerk` still declines the zero-perk case; unblocking it needs decoding that
+trailing actor-data grammar (a logged follow-up, ROADMAP §6 #5). The clean `perk-pre`→`perk-post` pair is retained as
+the controlled-diff asset for that work.
+
 **No "havok phantom" false positive — q2 is a real trait (corrected).** A prior reading mis-called q2's Hoarder a
 coincidental havok match. It is the player's genuinely-selected chargen **trait**: `q1` (2.5 min, pre-trait) has the
 FormID **nowhere** in the file and decodes **0 perks**; `q2` (5 min, post-trait) carries a real `04 7C │ Hoarder 7C 01 7C`

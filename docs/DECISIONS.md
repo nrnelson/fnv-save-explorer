@@ -112,3 +112,17 @@ on; here's why,"** not "impossible."
 - **`vsval` inventory over-read:** a few modded saves decode slightly *more* stacks than the engine's
   `vsval` count (hidden by the name filter); **0 under-reads across all 607 saves**. The residual comes
   from the havok-anchor path, not per-stack sizing (every per-stack type is sized).
+- **AddPerk first-perk (zero-perk) write — mechanism cracked, locator walled (NOT shipped).** A clean
+  controlled diff (`perk-pre`→`perk-post`: no-trait L1 char, console `player.addperk` only) proved the
+  edit is trivial: a zero-perk save already holds an empty `00 7C` (count 0) perk list, so the first
+  perk is the same `00`→`04` bump + 6-byte `[ref][7C][rank][7C]` insert as the ≥1 path (record +6 B,
+  +4 B FormID append). **Walled on *locating* that empty `00 7C` slot:** the perk slots sit in the
+  **undecoded trailing actor-data region after the inventory item stacks**, interleaved with other
+  `04 7C [ref] 7C [val] 7C` mini-lists and `00 7C` slots whose **position varies per character** (after
+  `ref391` in early saves, after `ref6336` in developed ones) and whose ref *values* differ per save
+  (array-index-dependent) — so there's no stable anchor and a wrong `00 7C` would corrupt the save.
+  Don't anchor on a specific ref or fixed offset. Unblock by decoding the trailing actor-data grammar
+  (the region between the inventory `vsval`/stacks and the record end), then the perk slot is found
+  deterministically. The q2 "havok phantom" was also a misread — q2's Hoarder is a genuine chargen
+  trait (q1 has 0 perks + the FormID nowhere; q2 has the real `04 7C [Hoarder] 7C 01 7C` list), so
+  `q1`→`q2` and `perk-pre`→`perk-post` are both valid 0→1 perk diffs (SPEC §4n).

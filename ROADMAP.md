@@ -164,7 +164,12 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    via the shared `GrowRecordLengthSplice` + `WriteVsval`), and **length-changing rename** (`RenamePlayer`/`rename`):
    the rebuild now also accepts **pre-body (header) splices**, so rename resizes `SaveHeaderSize`, shifts the whole
    body (every FLT offset moves), and updates both the header + body name copies. Remaining smaller follow-up:
-   **AddPerk's first-perk case** (a zero-perk save has no list to locate — needs a 0→1 perk controlled diff).
+   **AddPerk's first-perk case** — the *mechanism* is now cracked by a clean 0→1 controlled diff
+   (`perk-pre`→`perk-post`, SPEC §4n): a zero-perk save already holds an empty `00 7C` perk list, and the first perk is
+   the same bump+insert as the ≥1 path (+6 B). What's still missing is a **robust locator** for that empty `00 7C`
+   slot — the perk slots live in an undecoded trailing actor-data region (after the inventory stacks) with no stable
+   per-character anchor, so picking the wrong slot would corrupt the save. Unblocking it needs decoding that trailing
+   region's grammar; until then `AddPerk` declines the zero-perk case rather than ship a guess.
 6. **GUI/UX** (former #9): a raw-hex / full-walk field-tree viewer tab (surfacing deliverable 1b),
    screenshot export, backup management.
 

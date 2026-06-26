@@ -80,6 +80,27 @@ public class PlayerPerksTests
     }
 
     [Fact]
+    public void Clean_zero_to_one_perk_diff_perk_pre_to_perk_post()
+    {
+        // The clean first-perk controlled pair (SPEC §4n): a no-trait level-1 character, console `player.addperk
+        // 1361b4` only (no leveling/skill churn). perk-pre = 0 perks; perk-post = exactly Confirmed Bachelor. This is
+        // the asset for the deferred first-perk *writer* (the zero-perk save holds an empty 00 7C list; adding the
+        // perk bumps 00->04 + inserts the 6-byte entry, +6 B record / +10 B file). Masters-free via a narrow predicate.
+        const uint confirmedBachelor = 0x001361B4;
+        bool IsCb(uint fid) => fid == confirmedBachelor;
+
+        var (pre, post) = (SaveNamed("perk-pre"), SaveNamed("perk-post"));
+        if (pre is null || post is null)
+            return; // clean pair not present on this machine
+
+        Assert.Empty(FalloutSave.Load(pre).PlayerPerks(IsCb));
+
+        var taken = FalloutSave.Load(post).PlayerPerks(IsCb).Single();
+        Assert.Equal(confirmedBachelor, taken.FormId);
+        Assert.Equal(1, taken.Rank);
+    }
+
+    [Fact]
     public void Chosen_and_engine_perks_are_unioned_across_separate_lists()
     {
         // Regression guard for the reverted single-list bug: a chosen perk (Confirmed Bachelor, in the chosen/trait
