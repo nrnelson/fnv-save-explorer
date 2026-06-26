@@ -117,12 +117,17 @@ on; here's why,"** not "impossible."
   edit is trivial: a zero-perk save already holds an empty `00 7C` (count 0) perk list, so the first
   perk is the same `00`→`04` bump + 6-byte `[ref][7C][rank][7C]` insert as the ≥1 path (record +6 B,
   +4 B FormID append). **Walled on *locating* that empty `00 7C` slot:** the perk slots sit in the
-  **undecoded trailing actor-data region after the inventory item stacks**, interleaved with other
-  `04 7C [ref] 7C [val] 7C` mini-lists and `00 7C` slots whose **position varies per character** (after
-  `ref391` in early saves, after `ref6336` in developed ones) and whose ref *values* differ per save
-  (array-index-dependent) — so there's no stable anchor and a wrong `00 7C` would corrupt the save.
-  Don't anchor on a specific ref or fixed offset. Unblock by decoding the trailing actor-data grammar
-  (the region between the inventory `vsval`/stacks and the record end), then the perk slot is found
-  deterministically. The q2 "havok phantom" was also a misread — q2's Hoarder is a genuine chargen
+  **undecoded trailing actor-data region after the inventory item stacks**, and resolving the
+  neighbours proves that region is the actor's **volatile AI / animation / package state** with no
+  character-invariant anchor: the `04`-mini-list ref immediately before the perk slot is
+  **`0x001055C0` = an IDLE animation record** (the actor's current idle anim — moment-specific); the
+  region "header" ref differs by save (HonestHearts **QUST** in perk-pre vs DeadMoney **GLOB** in q2);
+  in a developed save (level2) the form right before the perk list is an **ACRE** creature ref. So the
+  perk slot's position, neighbours, and ref *values* (array-index-dependent) all vary per
+  character/moment — a fixed offset or specific-ref anchor would corrupt other saves. **Don't anchor on
+  a ref or offset.** Unblock only by decoding the ACHR `CHANGE_ACTOR`/`ACTOR_PACKAGE_DATA` change-record
+  grammar (bit11+ sections, between the inventory `vsval`/stacks and the record end), after which the
+  perk slot is found deterministically; controlled diffs of these saves can't reveal it (volatile
+  state, not a clean fixed structure). The q2 "havok phantom" was also a misread — q2's Hoarder is a genuine chargen
   trait (q1 has 0 perks + the FormID nowhere; q2 has the real `04 7C [Hoarder] 7C 01 7C` list), so
   `q1`→`q2` and `perk-pre`→`perk-post` are both valid 0→1 perk diffs (SPEC §4n).

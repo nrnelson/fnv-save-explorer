@@ -770,13 +770,15 @@ first perk is the **same** edit as the ≥1 path — an **in-place count bump `0
 `[ref:3][7C][rank][7C]` right after the prefix (record **+6 B**; the FormID-array append is the other **+4 B**, total
 **+10 B**), everything after shifting by 6. So no new sub-record is created — the empty list is present, not absent.
 **What's missing is a robust *locator* for that empty `00 7C` slot:** the perk slots live in a **trailing actor-data
-region after the inventory item stacks** (perk-pre: items at `data+0x4D1`, perk slot ~`data+0xD57`), interleaved with
-other `04 7C [ref] 7C [val] 7C` mini-lists and `00 7C` slots whose **position varies per character** (after the
-`ref391` mini-list in early saves, after `ref6336` in developed ones — no stable ref/offset anchor, and the ref
-*values* differ per save since they're array-index-dependent). Picking the wrong `00 7C` would corrupt the save, so
-per "don't ship guesses to the writer" `AddPerk` still declines the zero-perk case; unblocking it needs decoding that
-trailing actor-data grammar (a logged follow-up, ROADMAP §6 #5). The clean `perk-pre`→`perk-post` pair is retained as
-the controlled-diff asset for that work.
+region after the inventory item stacks** (perk-pre: items at `data+0x4D1`, perk slot ~`data+0xD57`), and resolving its
+neighbours shows that region is the actor's **volatile AI / animation / package state** with no character-invariant
+anchor — the `04`-mini-list ref right before the perk slot is **`0x001055C0`, an IDLE animation record**
+(moment-specific); the region "header" ref differs by save (HonestHearts **QUST** vs DeadMoney **GLOB**); in a
+developed save the form before the perk list is an **ACRE** creature ref. So the slot's position, neighbours, and ref
+*values* (array-index-dependent) all vary per character/moment. Picking the wrong `00 7C` would corrupt the save, so
+per "don't ship guesses to the writer" `AddPerk` still declines the zero-perk case; unblocking it needs decoding the
+ACHR `CHANGE_ACTOR`/`ACTOR_PACKAGE_DATA` change-record grammar (a logged follow-up, ROADMAP §6 #5). The clean
+`perk-pre`→`perk-post` pair is retained as the controlled-diff asset for that work.
 
 **No "havok phantom" false positive — q2 is a real trait (corrected).** A prior reading mis-called q2's Hoarder a
 coincidental havok match. It is the player's genuinely-selected chargen **trait**: `q1` (2.5 min, pre-trait) has the
