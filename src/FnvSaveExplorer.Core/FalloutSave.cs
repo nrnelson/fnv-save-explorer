@@ -24,6 +24,11 @@ public sealed class FalloutSave
     private static readonly Encoding Latin1 = Encoding.Latin1;
     private const byte Delimiter = 0x7C; // '|'
 
+    /// <summary>Change-form record version byte — 0x1B on New Vegas (SPEC §4f).</summary>
+    private const byte ChangeFormVersionNv = 0x1B;
+    /// <summary>changeFlags on a type-0x2B reputation record — 0x00000002 on every real record observed (§4o).</summary>
+    private const uint ReputationChangeFlags = 0x00000002;
+
     private readonly byte[] _raw;
     private readonly Dictionary<int, byte[]> _edits = [];
 
@@ -1350,5 +1355,164 @@ public sealed class FalloutSave
         if (backup && File.Exists(path))
             File.Copy(path, $"{path}.{DateTime.Now:yyyyMMdd-HHmmss}.bak", overwrite: false);
         File.WriteAllBytes(path, ToBytes());
+    }
+
+    // ---- Editing (length-changing — offset-fixup) --------------------------
+    // The File Location Table holds *absolute* file offsets, so inserting/removing body bytes shifts
+    // every section after the edit. RebuildWithBodyEdits applies a set of body splices and recomputes
+    // the five FLT offsets + the three counts so the result re-parses cleanly (the change-form walker
+    // still lands exactly on GlobalData3Offset and the FormID array re-parses with its new count).
+    // ROADMAP §6 #5; the no-op path (no splices) still equals ToBytes() byte-for-byte.
+
+    /// <summary>One length-changing body edit in original-file coordinates: replace the
+    /// <paramref name="RemoveLength"/> bytes at <paramref name="At"/> with <paramref name="Insert"/>.
+    /// A pure insertion has RemoveLength 0; a same-length rewrite has Insert.Length == RemoveLength.
+    ///
+    /// <para><paramref name="ShiftBoundaryOffset"/> decides what happens to an FLT offset that exactly
+    /// equals <paramref name="At"/> (a region boundary). Default <c>true</c> (an <b>append</b>: the new
+    /// bytes belong to the preceding region, so a following region whose start equals <c>At</c> shifts).
+    /// <c>false</c> (a <b>prepend</b>: the new bytes become the new start of the region at <c>At</c>, so
+    /// that region's own start offset must <i>not</i> move while later regions do).</para></summary>
+    public readonly record struct BodySplice(int At, int RemoveLength, byte[] Insert, bool ShiftBoundaryOffset = true)
+    {
+        /// <summary>Net change in file length this splice contributes (insert minus removed).</summary>
+        public int NetDelta => Insert.Length - RemoveLength;
+
+        /// <summary>Append <paramref name="bytes"/> at <paramref name="at"/> — the bytes belong to the region
+        /// ending there, so a following region whose start equals <paramref name="at"/> shifts forward.</summary>
+        public static BodySplice InsertAt(int at, byte[] bytes) => new(at, 0, bytes);
+
+        /// <summary>Prepend <paramref name="bytes"/> as the new start of the region beginning at
+        /// <paramref name="at"/> — that region's own start offset stays put while later regions shift.</summary>
+        public static BodySplice Prepend(int at, byte[] bytes) => new(at, 0, bytes, ShiftBoundaryOffset: false);
+    }
+
+    /// <summary>
+    /// Rebuilds the save applying length-changing body <paramref name="splices"/> (in original-file
+    /// coordinates, non-overlapping) on top of any staged same-length edits, recomputing the File
+    /// Location Table's five absolute offsets and bumping the requested counts. Returns fresh bytes
+    /// (the caller re-parses); this instance is untouched. With no splices and no count deltas the
+    /// result equals <see cref="ToBytes"/> byte-for-byte.
+    ///
+    /// <para><b>Offset rule:</b> each FLT offset shifts by the summed <see cref="BodySplice.NetDelta"/>
+    /// of every splice before it — strictly before (<c>splice.At &lt; value</c>) for a prepend, or at-or-
+    /// before (<c>splice.At &lt;= value</c>) for an append (see <see cref="BodySplice.ShiftBoundaryOffset"/>).
+    /// The FLT sits at <see cref="BodyOffset"/> ahead of every body section, so it never moves; its eight
+    /// u32 slots are overwritten in place.</para>
+    /// </summary>
+    public byte[] RebuildWithBodyEdits(
+        IReadOnlyList<BodySplice> splices,
+        int changeFormCountDelta = 0,
+        int globalData1CountDelta = 0,
+        int globalData3CountDelta = 0)
+    {
+        ArgumentNullException.ThrowIfNull(splices);
+        var baseBytes = ToBytes(); // honours staged same-length edits; same length as _raw
+
+        var ordered = splices.OrderBy(s => s.At).ToArray();
+        for (var i = 0; i < ordered.Length; i++)
+        {
+            var s = ordered[i];
+            if (s.RemoveLength < 0 || s.At < BodyOffset || s.At + s.RemoveLength > baseBytes.Length)
+                throw new ArgumentOutOfRangeException(nameof(splices), $"body splice at 0x{s.At:X} is out of range");
+            if (i > 0 && ordered[i - 1].At + ordered[i - 1].RemoveLength > s.At)
+                throw new ArgumentException("overlapping body splices", nameof(splices));
+        }
+
+        // Emit the new bytes: copy each gap between splices, then write the splice's Insert.
+        var output = new byte[baseBytes.Length + ordered.Sum(s => s.NetDelta)];
+        var src = 0; // read cursor in baseBytes
+        var dst = 0; // write cursor in output
+        foreach (var s in ordered)
+        {
+            var gap = s.At - src;
+            Array.Copy(baseBytes, src, output, dst, gap);
+            dst += gap;
+            Array.Copy(s.Insert, 0, output, dst, s.Insert.Length);
+            dst += s.Insert.Length;
+            src = s.At + s.RemoveLength;
+        }
+        Array.Copy(baseBytes, src, output, dst, baseBytes.Length - src);
+
+        // Recompute the five FLT offsets (shift by splices strictly before each) and bump the counts.
+        var raw = Flt.Raw;
+        Span<uint> slots = stackalloc uint[8];
+        for (var i = 0; i < 5; i++)
+        {
+            long shift = 0;
+            foreach (var s in ordered)
+                // A boundary offset (== At) shifts for an append but not a prepend (see ShiftBoundaryOffset).
+                if (s.ShiftBoundaryOffset ? s.At <= raw[i] : s.At < raw[i])
+                    shift += s.NetDelta;
+            slots[i] = (uint)(raw[i] + shift);
+        }
+        slots[5] = (uint)(raw[5] + globalData1CountDelta);
+        slots[6] = (uint)(raw[6] + globalData3CountDelta);
+        slots[7] = (uint)(raw[7] + changeFormCountDelta);
+        for (var i = 0; i < 8; i++)
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(BodyOffset + i * 4, 4), slots[i]);
+
+        return output;
+    }
+
+    /// <summary>
+    /// Adds a faction reputation record (§4o) for a faction that has none yet — the first length-changing
+    /// consumer of <see cref="RebuildWithBodyEdits"/>. Appends the faction's FormID to the FormID array if
+    /// absent (array + count grow), creates a type-<c>0x2B</c> change form
+    /// <c>[fame:f32][7C][infamy:f32][7C]</c> with refID = (its array index)+1 (the persisted-reference
+    /// convention), prepends it to the change-forms region (ChangeFormCount++), and fixes up every
+    /// absolute offset. Returns a freshly parsed save containing the new record. Throws
+    /// <see cref="InvalidOperationException"/> if the faction already has a reputation record (use
+    /// <see cref="TrySetReputation"/> instead).
+    /// </summary>
+    public FalloutSave AddReputation(uint factionFormId, float fame, float infamy)
+    {
+        foreach (var cf in EnumerateChangeForms())
+        {
+            if (cf.FormType != 0x2B || cf.DataLength != 10) continue;
+            if (_raw[cf.DataOffset + 4] != 0x7C || _raw[cf.DataOffset + 9] != 0x7C) continue;
+            if (ResolveIref(cf.Iref - 1) == factionFormId)
+                throw new InvalidOperationException(
+                    $"faction 0x{factionFormId:X8} already has a reputation record — use TrySetReputation");
+        }
+
+        var splices = new List<BodySplice>();
+
+        // Find the faction's iref (FormID-array index); append it to the array end if missing.
+        var iref = FindIref(factionFormId);
+        if (iref < 0)
+        {
+            var arrayAt = (int)Flt.FormIdArrayCountOffset;
+            if (arrayAt <= 0 || arrayAt + 4 > _raw.Length)
+                throw new InvalidOperationException("save has no FormID array to extend");
+            var oldCount = (int)ReadUInt32At(arrayAt);
+            iref = oldCount; // new entry goes at the end
+
+            var newCount = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(newCount, (uint)(oldCount + 1));
+            splices.Add(new BodySplice(arrayAt, 4, newCount)); // bump count (same length)
+
+            var entry = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(entry, factionFormId);
+            splices.Add(BodySplice.InsertAt(arrayAt + 4 + oldCount * 4, entry)); // append FormID
+        }
+
+        // Build the 20-byte type-0x2B record and prepend it to the change-forms region.
+        var refId = iref + 1; // persisted-reference "+1" convention; fits 22 bits => RefID type 0 (array index)
+        var record = new byte[20];
+        record[0] = (byte)(refId >> 16);
+        record[1] = (byte)(refId >> 8);
+        record[2] = (byte)refId;
+        BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(3, 4), ReputationChangeFlags);
+        record[7] = 0x2B;               // formType 0x2B; length 10 => u8 width (top 2 bits 0)
+        record[8] = ChangeFormVersionNv; // 0x1B
+        record[9] = 10;                 // payload length
+        BinaryPrimitives.WriteSingleLittleEndian(record.AsSpan(10, 4), fame);
+        record[14] = Delimiter;
+        BinaryPrimitives.WriteSingleLittleEndian(record.AsSpan(15, 4), infamy);
+        record[19] = Delimiter;
+        splices.Add(BodySplice.Prepend((int)Flt.ChangeFormsOffset, record)); // new record becomes the region start
+
+        return Parse(RebuildWithBodyEdits(splices, changeFormCountDelta: 1));
     }
 }
