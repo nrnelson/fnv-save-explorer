@@ -92,6 +92,71 @@ public class LengthChangingEditTests
         AssertRoundTrips(after);
     }
 
+    // ---- length-changing rename (RenamePlayer) ----
+
+    [Theory]
+    [InlineData("Heroine", 6)]   // grow by 3 chars -> +3 in each of the two name copies = +6
+    [InlineData("He", -4)]       // shrink by 2 chars -> -2 in each copy = -4
+    [InlineData("Zero", 0)]      // same length (4 == 4) -> in-place rewrites, size unchanged
+    public void RenamePlayer_updates_both_name_copies_and_fixes_offsets(string newName, int expectedSizeDelta)
+    {
+        var original = RenameSave.Build();           // header name "Hero" + a body change form carrying "Hero"
+        var before = FalloutSave.Parse(original);
+        Assert.Equal("Hero", before.PlayerName);
+
+        var after = before.RenamePlayer(newName);
+
+        Assert.Equal(newName, after.PlayerName);                       // header copy updated (re-parsed)
+        Assert.Equal(original.Length + expectedSizeDelta, after.ToBytes().Length); // both copies moved (2× delta)
+        AssertWalkerLandsExactly(after, expectedRecords: 1);           // body copy grew + offsets fixed up
+        // the body copy moved with the header copy: the new name appears in the change-forms region too
+        Assert.True(ContainsNameField(after.ToBytes(), after, newName), "body name copy should be updated");
+        AssertRoundTrips(after);
+    }
+
+    [Fact]
+    public void RenamePlayer_same_length_matches_TrySetPlayerName_size()
+    {
+        var before = FalloutSave.Parse(RenameSave.Build());
+        var after = before.RenamePlayer("Zorp"); // 4 == 4
+        Assert.Equal(before.ToBytes().Length, after.ToBytes().Length);
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_rename_longer_relands_and_round_trips(string path)
+    {
+        var save = FalloutSave.Load(path);
+        if (string.IsNullOrEmpty(save.PlayerName))
+            return;
+        var sizeBefore = save.FileLength;
+        var newName = save.PlayerName + "_X";
+
+        var after = save.RenamePlayer(newName);
+
+        Assert.Equal(newName, after.PlayerName);
+        Assert.True(after.FileLength > sizeBefore);                    // grew (header copy at least)
+        AssertWalkerLandsExactly(after, expectedRecords: (int)save.Flt.ChangeFormCount); // count unchanged
+        if (save.Special is not null)
+            Assert.NotNull(after.Special);                             // body name copy relocated correctly
+        AssertRoundTrips(after);
+    }
+
+    // True if [u16 len][7C][name][7C] for `name` appears anywhere in the change-forms region.
+    private static bool ContainsNameField(byte[] bytes, FalloutSave save, string name)
+    {
+        var n = System.Text.Encoding.Latin1.GetBytes(name);
+        var pat = new byte[3 + n.Length + 1];
+        pat[0] = (byte)(n.Length & 0xFF); pat[1] = (byte)((n.Length >> 8) & 0xFF); pat[2] = 0x7C;
+        Array.Copy(n, 0, pat, 3, n.Length); pat[^1] = 0x7C;
+        var start = (int)save.Flt.ChangeFormsOffset;
+        var end = Math.Min((int)save.Flt.GlobalData3Offset, bytes.Length) - pat.Length;
+        for (var i = start; i <= end; i++)
+            if (bytes.AsSpan(i, pat.Length).SequenceEqual(pat))
+                return true;
+        return false;
+    }
+
     private static void AssertWalkerLandsExactly(FalloutSave save, int expectedRecords)
     {
         var records = save.EnumerateChangeForms().ToList();
@@ -193,6 +258,88 @@ internal static class PerkSave
         foreach (var f in formIds) U32(f);
 
         b.AddRange(rec);               // change-forms region (the one player-ref record)
+
+        var bytes = b.ToArray();
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(headerSizeAt, 4), (uint)(screenshotStart - 15));
+        return bytes;
+    }
+}
+
+/// <summary>
+/// Builds a minimal New Vegas <c>.fos</c> whose player name "Hero" appears in BOTH places a length-changing
+/// rename must touch: the file header field (governed by <c>SaveHeaderSize</c>) and a change-form record's
+/// payload (<c>[u16 4][7C]Hero[7C]</c>). Tuned for the rename / header-splice offset-fixup tests.
+/// </summary>
+internal static class RenameSave
+{
+    public static byte[] Build()
+    {
+        var b = new List<byte>();
+        void Str(string s) => b.AddRange(Encoding.Latin1.GetBytes(s));
+        void Delim() => b.Add(0x7C);
+        void U16(ushort v) { var t = new byte[2]; BinaryPrimitives.WriteUInt16LittleEndian(t, v); b.AddRange(t); }
+        void U32(uint v) { var t = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(t, v); b.AddRange(t); }
+        void StringField(string s) { U16((ushort)s.Length); Delim(); Str(s); Delim(); }
+
+        Str("FO3SAVEGAME");
+        var headerSizeAt = b.Count;
+        U32(0);            // saveHeaderSize placeholder (patched below)
+        U32(0x30);         // version
+        Delim();
+        Str("ENGLISH"); Delim();
+        U32(4); Delim();   // width
+        U32(2); Delim();   // height
+        U32(7); Delim();   // save number
+        StringField("Hero");   // <-- the header copy of the player name
+        StringField("Title");
+        U32(3); Delim();   // level
+        StringField("Vault1");
+        StringField("000.01.02");
+
+        var screenshotStart = b.Count;
+        for (var i = 0; i < 4 * 2 * 3; i++) b.Add((byte)i);
+
+        b.Add(0x15);       // trailer
+        U32(0);            // pluginStructSize
+        b.Add(1); Delim(); // one plugin
+        StringField("A.esm");
+
+        // ---- Body: File Location Table, FormID array, then a change form carrying the body name copy ----
+        var bodyStart = b.Count;
+        var formIdArrayOffset = bodyStart + 32;             // right after the 8-u32 FLT
+        uint[] formIds = [0x00000007, 0x00000014];          // player base + PlayerRef
+        var changeFormsOffset = formIdArrayOffset + 4 + formIds.Length * 4;
+
+        // Player-actor change form (type 0x0A -> formType 0x0A, 1-byte length width). Payload contains the body
+        // copy of the name as [u16 4][7C]Hero[7C] (8 bytes) — the same field LocateSpecial/RenamePlayer find.
+        var data = new List<byte> { 0x04, 0x00, 0x7C };
+        data.AddRange(Encoding.Latin1.GetBytes("Hero"));
+        data.Add(0x7C);
+
+        var rec = new List<byte>();
+        rec.AddRange([0x00, 0x00, 0x02]);            // refID (any)
+        rec.AddRange([0x00, 0x00, 0x00, 0x00]);      // changeFlags
+        rec.Add(0x0A);                               // type: formType 0x0A, high bits 00 -> u8 length width
+        rec.Add(0x1B);                               // version
+        rec.Add((byte)data.Count);                   // u8 payload length
+        rec.AddRange(data);
+
+        var globalData3Offset = changeFormsOffset + rec.Count;
+
+        // FLT (8 u32) — must sit exactly at bodyStart.
+        U32((uint)formIdArrayOffset);  // [0] FormIdArrayCountOffset
+        U32((uint)globalData3Offset);  // [1] UnknownTable3Offset
+        U32((uint)formIdArrayOffset);  // [2] GlobalData1Offset (unused here)
+        U32((uint)changeFormsOffset);  // [3] ChangeFormsOffset
+        U32((uint)globalData3Offset);  // [4] GlobalData3Offset (= end of change forms)
+        U32(0);                        // [5] GlobalData1Count
+        U32(0);                        // [6] GlobalData3Count
+        U32(1);                        // [7] ChangeFormCount
+
+        U32((uint)formIds.Length);     // FormID array: count
+        foreach (var f in formIds) U32(f);
+
+        b.AddRange(rec);
 
         var bytes = b.ToArray();
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(headerSizeAt, 4), (uint)(screenshotStart - 15));

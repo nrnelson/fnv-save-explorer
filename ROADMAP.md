@@ -118,8 +118,9 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 modifications (§4e), inventory stack counts (§4g), **item condition/health (§4i)**, **caps (§6.4 — the
 `0x0000000F` stack)**, **karma + XP (§4j)**, **faction reputation fame/infamy (§4o)** — all safe same-length splices.
 **Length-changing edits** are supported via offset-fixup (`RebuildWithBodyEdits`, §4b): **add a faction
-reputation record** (§4o, CLI `addreputation`), **grant a perk/trait** (§4n, CLI `addperk`), and **add an
-inventory stack** (§4g, CLI `additem`).
+reputation record** (§4o, CLI `addreputation`), **grant a perk/trait** (§4n, CLI `addperk`), **add an
+inventory stack** (§4g, CLI `additem`), and **rename the player** (CLI `rename` — the first edit that splices the
+**header** too: it resizes `SaveHeaderSize`, shifts the whole body, and updates both the header + body name copies).
 
 ---
 
@@ -159,10 +160,11 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
 4. **Item condition maximums** (former #11): read the base-form Health so per-item condition shows a cap.
 5. ~~**Length-changing edits** (former #7): implement offset-fixup so renames / add / remove become safe.~~
    ✅ **Done** — `RebuildWithBodyEdits` (offset-fixup core) + consumers add-reputation (§4o), **grant-perk**
-   (§4n, `AddPerk`/`addperk`), and **add-inventory-item** (§4g, `AddInventoryItem`/`additem`) — the latter two
-   grow an existing record via the shared `GrowRecordLengthSplice` + `WriteVsval`. Remaining follow-up on the same
-   core: **length-changing rename** (the name is duplicated in the header — with its own size field — and the
-   player-base `0x0A` record, so both copies + the header size must move together).
+   (§4n, `AddPerk`/`addperk`), **add-inventory-item** (§4g, `AddInventoryItem`/`additem` — grow an existing record
+   via the shared `GrowRecordLengthSplice` + `WriteVsval`), and **length-changing rename** (`RenamePlayer`/`rename`):
+   the rebuild now also accepts **pre-body (header) splices**, so rename resizes `SaveHeaderSize`, shifts the whole
+   body (every FLT offset moves), and updates both the header + body name copies. Remaining smaller follow-up:
+   **AddPerk's first-perk case** (a zero-perk save has no list to locate — needs a 0→1 perk controlled diff).
 6. **GUI/UX** (former #9): a raw-hex / full-walk field-tree viewer tab (surfacing deliverable 1b),
    screenshot export, backup management.
 

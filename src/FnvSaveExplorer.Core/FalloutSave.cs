@@ -1394,17 +1394,19 @@ public sealed class FalloutSave
     }
 
     /// <summary>
-    /// Rebuilds the save applying length-changing body <paramref name="splices"/> (in original-file
-    /// coordinates, non-overlapping) on top of any staged same-length edits, recomputing the File
-    /// Location Table's five absolute offsets and bumping the requested counts. Returns fresh bytes
-    /// (the caller re-parses); this instance is untouched. With no splices and no count deltas the
-    /// result equals <see cref="ToBytes"/> byte-for-byte.
+    /// Rebuilds the save applying length-changing <paramref name="splices"/> (in original-file coordinates,
+    /// non-overlapping) on top of any staged same-length edits, recomputing the File Location Table's five
+    /// absolute offsets and bumping the requested counts. Returns fresh bytes (the caller re-parses); this
+    /// instance is untouched. With no splices and no count deltas the result equals <see cref="ToBytes"/>
+    /// byte-for-byte. Splices may target the body (the common case — add-reputation/perk/item) or the
+    /// <b>header</b> (a length-changing rename, which also resizes <c>SaveHeaderSize</c> and shifts the whole body).
     ///
     /// <para><b>Offset rule:</b> each FLT offset shifts by the summed <see cref="BodySplice.NetDelta"/>
     /// of every splice before it — strictly before (<c>splice.At &lt; value</c>) for a prepend, or at-or-
     /// before (<c>splice.At &lt;= value</c>) for an append (see <see cref="BodySplice.ShiftBoundaryOffset"/>).
-    /// The FLT sits at <see cref="BodyOffset"/> ahead of every body section, so it never moves; its eight
-    /// u32 slots are overwritten in place.</para>
+    /// A pre-body (header) splice is before every FLT offset, so it shifts them all — and it also shifts the
+    /// FLT's own position, so the eight u32 slots are written at the FLT's <em>new</em> base, not
+    /// <see cref="BodyOffset"/>.</para>
     /// </summary>
     public byte[] RebuildWithBodyEdits(
         IReadOnlyList<BodySplice> splices,
@@ -1419,10 +1421,12 @@ public sealed class FalloutSave
         for (var i = 0; i < ordered.Length; i++)
         {
             var s = ordered[i];
-            if (s.RemoveLength < 0 || s.At < BodyOffset || s.At + s.RemoveLength > baseBytes.Length)
-                throw new ArgumentOutOfRangeException(nameof(splices), $"body splice at 0x{s.At:X} is out of range");
+            // Splices may target the header (pre-body, e.g. a length-changing rename) as well as the body; only
+            // the bounds + non-overlap matter. A pre-body splice shifts the whole body, including the FLT (below).
+            if (s.RemoveLength < 0 || s.At < 0 || s.At + s.RemoveLength > baseBytes.Length)
+                throw new ArgumentOutOfRangeException(nameof(splices), $"splice at 0x{s.At:X} is out of range");
             if (i > 0 && ordered[i - 1].At + ordered[i - 1].RemoveLength > s.At)
-                throw new ArgumentException("overlapping body splices", nameof(splices));
+                throw new ArgumentException("overlapping splices", nameof(splices));
         }
 
         // Emit the new bytes: copy each gap between splices, then write the splice's Insert.
@@ -1455,8 +1459,14 @@ public sealed class FalloutSave
         slots[5] = (uint)(raw[5] + globalData1CountDelta);
         slots[6] = (uint)(raw[6] + globalData3CountDelta);
         slots[7] = (uint)(raw[7] + changeFormCountDelta);
+        // The FLT sits at the start of the body; a pre-body (header) splice shifts it forward by that splice's
+        // net delta, so locate the slots at their new base in the output. Body-only edits leave this at BodyOffset.
+        var fltBase = BodyOffset;
+        foreach (var s in ordered)
+            if (s.At < BodyOffset)
+                fltBase += s.NetDelta;
         for (var i = 0; i < 8; i++)
-            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(BodyOffset + i * 4, 4), slots[i]);
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(fltBase + i * 4, 4), slots[i]);
 
         return output;
     }
@@ -1711,4 +1721,81 @@ public sealed class FalloutSave
 
         return Parse(RebuildWithBodyEdits(splices)); // no new record: change-form count unchanged
     }
+
+    /// <summary>
+    /// Renames the player — a <b>length-changing</b> edit (ROADMAP §6 #5), unlike same-length
+    /// <see cref="TrySetPlayerName"/>. The name appears twice, with different accounting, and both are updated:
+    /// the <b>file header</b> field (<c>[u16 len][7C][name][7C]</c>), which also resizes <c>SaveHeaderSize</c> and
+    /// thereby shifts the whole body (every absolute FLT offset moves), and the <b>player-actor change-form
+    /// record</b> in the body (grown via <see cref="GrowRecordLengthSplice"/>). Offset fixup is done by
+    /// <see cref="RebuildWithBodyEdits"/>. Returns a freshly parsed save (this instance is untouched). A
+    /// same-length name reduces to in-place rewrites (result equals the original size). Throws
+    /// <see cref="ArgumentException"/> for an empty/over-long name or one that overflows the body record's
+    /// length field.
+    /// </summary>
+    public FalloutSave RenamePlayer(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        var newBytes = Latin1.GetBytes(name);
+        if (newBytes.Length is 0 or > 0xFFFF)
+            throw new ArgumentException("player name must be 1..65535 bytes", nameof(name));
+
+        var oldBytes = Latin1.GetBytes(PlayerName);
+        var headerDelta = newBytes.Length - _playerNameByteLength;
+        var splices = new List<BodySplice>();
+
+        // --- Header copy: [u16 len][7C][name][7C]; resize SaveHeaderSize by the same delta (the header grew). ---
+        splices.Add(new BodySplice(_playerNameValueOffset - 3, 2, U16LE((ushort)newBytes.Length)));
+        splices.Add(new BodySplice(_playerNameValueOffset, _playerNameByteLength, newBytes));
+        splices.Add(new BodySplice(SaveHeaderSizeOffset, 4, U32LE((uint)(SaveHeaderSize + headerDelta))));
+
+        // --- Body copy: the same [u16 len][7C][name][7C] inside the player-actor change-form record. ---
+        if (TryLocateBodyNameField(oldBytes, out var bodyNameValueOffset, out var bodyCf))
+        {
+            splices.Add(new BodySplice(bodyNameValueOffset - 3, 2, U16LE((ushort)newBytes.Length)));
+            splices.Add(new BodySplice(bodyNameValueOffset, oldBytes.Length, newBytes));
+            splices.Add(GrowRecordLengthSplice(bodyCf, headerDelta));
+        }
+
+        return Parse(RebuildWithBodyEdits(splices)); // no new record: counts unchanged
+    }
+
+    /// <summary>Finds the player-name field <c>[u16 len][7C][name][7C]</c> inside the change-forms region (the
+    /// body copy <see cref="LocateSpecial"/> keys on, distinct from the header copy) and the change form that
+    /// contains it. Returns false if the name isn't serialized in a change form (e.g. a very-early save).</summary>
+    private bool TryLocateBodyNameField(byte[] nameBytes, out int valueOffset, out ChangeFormHeader containingForm)
+    {
+        valueOffset = -1;
+        containingForm = default;
+        if (nameBytes.Length == 0)
+            return false;
+
+        var pattern = new byte[3 + nameBytes.Length + 1];
+        pattern[0] = (byte)(nameBytes.Length & 0xFF);
+        pattern[1] = (byte)((nameBytes.Length >> 8) & 0xFF);
+        pattern[2] = Delimiter;
+        Array.Copy(nameBytes, 0, pattern, 3, nameBytes.Length);
+        pattern[^1] = Delimiter;
+
+        var start = (int)Flt.ChangeFormsOffset;
+        var end = Math.Min((int)Flt.GlobalData3Offset, _raw.Length) - pattern.Length;
+        for (var i = start; i <= end; i++)
+        {
+            if (!MatchAt(i, pattern))
+                continue;
+            // Identify the change form whose payload [DataOffset, DataOffset+DataLength) covers this field.
+            foreach (var cf in EnumerateChangeForms())
+            {
+                if (i < cf.DataOffset || i + pattern.Length > cf.DataOffset + cf.DataLength)
+                    continue;
+                valueOffset = i + 3; // past [u16 len][7C]
+                containingForm = cf;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static byte[] U16LE(ushort v) { var b = new byte[2]; BinaryPrimitives.WriteUInt16LittleEndian(b, v); return b; }
+    private static byte[] U32LE(uint v) { var b = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(b, v); return b; }
 }

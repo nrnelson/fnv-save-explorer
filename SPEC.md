@@ -54,7 +54,13 @@ coordinates) and recomputes the five offsets — each shifts by the summed net d
 before for a *prepend*, at-or-before for an *append*; this boundary rule is the whole subtlety) — plus the three
 counts. The result re-parses cleanly: the change-form walker still lands exactly on `GlobalData3Offset` and the FormID
 array re-parses with its new count. The no-op case (no splices) is byte-identical to the input. This lifts the
-former same-length-only limit; the first consumer is add-reputation (§4o).
+former same-length-only limit. **Splices may also target the header** (not just the body): a pre-body splice is before
+every FLT offset, so it shifts them all — and it shifts the FLT's own position, so the eight u32 slots are written at
+the FLT's *new* base. Consumers: **add-reputation** (§4o, prepends a new record), **grant-perk** (§4n) and
+**add-inventory-item** (§4g) (grow an existing record via `GrowRecordLengthSplice` — the record's length-field width
+is fixed by the type byte's top 2 bits, `type>>6`, so growth rewrites it in place), and **rename** (`RenamePlayer`,
+the header-splice case — resizes `SaveHeaderSize`, shifts the whole body, updates both the header and body name copies;
+the body copy lives in the player-actor change form, `[u16 len][7C][name][7C]`, the same field `LocateSpecial` keys on).
 
 ### 4c. Global data — `[type:u32][length:u32][data]`
 Table 1 holds 12 records, types 0–11: `0`=Misc Stats, `1`=Player Location, `2`=TES, `3`=Global
@@ -885,8 +891,9 @@ validation of the method:
   different extra data) can't be disambiguated by FormID alone yet.
 - SPECIAL locator relies on the player-name field appearing in the player base record (held on all 16
   saves); a save lacking it would return null (handled gracefully).
-- Only **same-length** edits are supported by design (see §1). Length-changing edits are unsafe until
-  full offset-fixup is implemented.
+- **Length-changing edits are now supported** via offset-fixup (`RebuildWithBodyEdits`, §4b): add-reputation,
+  grant-perk, add-inventory-item, and rename. Same-length splices remain the in-place editing path (level, SPECIAL,
+  skills, counts, condition, caps, karma/XP, reputation fame/infamy, same-length name).
 - Read notes (§4k) capture only notes the player has **opened** (each leaves a change-form marker); the **full**
   Pip-Boy list incl. **unread** notes is now decoded via `PipBoyNotes` (§4k.1 #4 — note refs in the player inventory
   record ∪ read markers). Two soft caveats: it needs the masters to tell which references are `NOTE` records (no

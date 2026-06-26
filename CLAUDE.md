@@ -28,9 +28,11 @@ dotnet run --project src/FnvSaveExplorer.Cli -- dump "<save.fos>"
   decodes the header/screenshot/plugin region, recording editable-field offsets. The body
   (globals/change forms/FormID array) is **never re-serialized from a model** — it is preserved
   byte-for-byte. `ToBytes()` with no edits MUST equal the input. Don't break this invariant.
-- **Editing is same-length only.** The body's File Location Table holds *absolute* file offsets,
-  so a length change would shift them. Fixed-width edits (e.g. `u32` level) are safe; rejecting
-  length-changing edits is intentional until offset-fixup is implemented.
+- **Two editing paths.** Same-length edits are in-place byte splices (the default — `_edits`, applied by
+  `ToBytes()`; e.g. `u32` level, SPECIAL, counts). Length-changing edits go through `RebuildWithBodyEdits`
+  (offset-fixup): the body's File Location Table holds *absolute* offsets, so it recomputes them when bytes are
+  inserted/removed (and now handles header splices too — see rename). Consumers: add-reputation, grant-perk,
+  add-inventory-item, rename. The retention invariant still holds: no-op rebuild == input, byte-for-byte.
 
 ## Key files
 - `Core/FalloutSave.cs` — parse + retention writer + edits.

@@ -38,6 +38,8 @@ if (args.Length < 2)
                                               offset-fixup; resolves PERK forms via masters)
           fnvsave additem <in.fos> <out.fos> <itemFormId> <count>   Add an inventory stack (§4g/§4i; length-changing,
                                               offset-fixup; bumps the vsval stack count)
+          fnvsave rename <in.fos> <out.fos> <name>   Rename the player (length-changing; offset-fixup; updates the
+                                              header + body name copies + SaveHeaderSize, §6 #5)
           fnvsave pipboy <save.fos> [dataDir]   The COMPUTED in-game Pip-Boy quest list (§6 #16): interprets the
                                               masters' quest scripts (SGE startup + reached-stage effects + guard eval).
                                               active/completed + displayed objectives. (Only "Back in the Saddle" omitted.)
@@ -377,6 +379,9 @@ try
         case "additem":
             // additem <in.fos> <out.fos> <itemFormId> <count>  (length-changing; writes a new file)
             return AddItem(path, args[2], (uint)ParseOffset(args[3]), uint.Parse(args[4]));
+        case "rename":
+            // rename <in.fos> <out.fos> <name>  (length-changing; writes a new file)
+            return Rename(path, args[2], args[3]);
         default:
             Console.Error.WriteLine($"Unknown command: {command}");
             return 1;
@@ -1490,6 +1495,39 @@ static int AddItem(string inPath, string outPath, uint itemFormId, uint count)
     var ok = stack is not null && lands;
     Console.WriteLine(ok
         ? "OK: item added, re-parses, change-form walk lands exactly on GlobalData3Offset."
+        : "FAIL: did not verify.");
+    return ok ? 0 : 4;
+}
+
+static int Rename(string inPath, string outPath, string name)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+    var oldName = save.PlayerName;
+
+    FalloutSave updated;
+    try
+    {
+        updated = save.RenamePlayer(name); // length-changing (header + body name copies + SaveHeaderSize)
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+    {
+        Console.WriteLine($"FAIL: {ex.Message}");
+        return 4;
+    }
+    updated.Save(outPath, backup: false);
+
+    var after = File.ReadAllBytes(outPath);
+    var reloaded = FalloutSave.Parse(after);
+    var lands = WalkLands(reloaded);
+    // Re-parse's SPECIAL locator keys on the (new) player name in the body, so a non-null locate proves the
+    // body name copy moved correctly and the offsets still line up.
+    var bodyOk = save.Special is null || reloaded.Special is not null;
+    Console.WriteLine($"Rename \"{oldName}\" -> \"{reloaded.PlayerName}\";  size {before.Length:N0} -> {after.Length:N0} " +
+                      $"(delta {after.Length - before.Length:+#;-#;0});  walk {(lands ? "lands" : "MISMATCH")}");
+    var ok = reloaded.PlayerName == name && lands && bodyOk;
+    Console.WriteLine(ok
+        ? "OK: renamed, re-parses, change-form walk lands exactly on GlobalData3Offset."
         : "FAIL: did not verify.");
     return ok ? 0 : 4;
 }
