@@ -29,6 +29,8 @@ if (args.Length < 2)
           fnvsave notes <save.fos> [dataDir]  List the player's Pip-Boy Data -> Notes — READ and UNREAD (§4k/§4k.1)
           fnvsave perks <save.fos> [dataDir]  List the player's perks + traits (§4n; resolves PERK forms via masters)
           fnvsave reputation <save.fos> [dataDir]   List faction fame/infamy (§4o; type-0x2B forms keyed by REPU)
+          fnvsave player <save.fos> [dataDir]   One-screen player summary: header + SPECIAL + karma/XP/caps +
+                                              skill mods + perks + reputation + notes + inventory (read-only)
           fnvsave setreputation <in.fos> <out.fos> <factionFormId> <fame> <infamy>   Edit a faction's fame/infamy (new file)
           fnvsave pipboy <save.fos> [dataDir]   The COMPUTED in-game Pip-Boy quest list (§6 #16): interprets the
                                               masters' quest scripts (SGE startup + reached-stage effects + guard eval).
@@ -291,6 +293,9 @@ try
             break;
         case "reputation":
             Reputation(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
+            break;
+        case "player":
+            PlayerSummary(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
             break;
         case "quests":
             Quests(FalloutSave.Load(path), path,
@@ -869,6 +874,43 @@ static void Perks(FalloutSave s, string savePath, string? dataDir)
         var src = s.FriendlySourceForModIndex(modIndex) ?? "?";
         var rank = p.Rank > 1 ? $"  (rank {p.Rank})" : "";
         Console.WriteLine($"  {db.Resolve(p.FormId) ?? "?",-40}{rank}  0x{p.FormId:X8} (mod {modIndex:X2})  {src}");
+    }
+}
+
+// Unified read-only player summary — composes everything decoded (header, SPECIAL, karma/XP/caps, skills,
+// perks, reputation, notes, inventory) into one view. Names (perks/reputation/notes) need the masters; the
+// summary degrades gracefully without them. The ROADMAP's "analyze tooling" capstone over the decode.
+static void PlayerSummary(FalloutSave s, string savePath, string? dataDir)
+{
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    var masters = db.Count > 0;
+
+    Console.WriteLine($"{s.PlayerName}  —  Level {s.PlayerLevel}  —  {s.PlayerLocation}");
+    Console.WriteLine($"  playtime {s.Playtime}   save #{s.SaveNumber}");
+    if (s.Special is { } sp)
+        Console.WriteLine($"  SPECIAL  S{sp.Strength} P{sp.Perception} E{sp.Endurance} C{sp.Charisma} I{sp.Intelligence} A{sp.Agility} L{sp.Luck}");
+    Console.WriteLine($"  karma {s.Karma?.ToString("0.#") ?? "?"}   XP {s.Xp?.ToString("0.#") ?? "?"}   caps {s.Caps?.ToString() ?? "?"}");
+
+    if (s.Skills is { Skills.Count: > 0 } sk)
+        Console.WriteLine($"  skill mods (§4e): {string.Join(", ", sk.Skills.Where(x => x.Value != 0).Select(x => $"{x.Name} {x.Value:+0;-0}"))}");
+
+    if (masters)
+    {
+        var perks = s.PlayerPerks(fid => db.RecordType(fid) == "PERK");
+        Console.WriteLine($"  perks/traits ({perks.Count}): {string.Join(", ", perks.Select(p => db.Resolve(p.FormId) ?? "?").OrderBy(n => n))}");
+
+        var reps = s.Reputations(fid => db.RecordType(fid) == "REPU")
+            .OrderByDescending(r => r.Fame + r.Infamy).ToList();
+        Console.WriteLine($"  reputation ({reps.Count} factions): {string.Join(", ", reps.Select(r => $"{db.Resolve(r.FactionFormId) ?? "?"} {r.Fame:0}/{r.Infamy:0}"))}");
+
+        var notes = s.PipBoyNotes(fid => db.RecordType(fid) == "NOTE");
+        Console.WriteLine($"  notes: {notes.Count} ({notes.Count(n => n.Read)} read, {notes.Count(n => !n.Read)} unread)");
+        var inv = s.Inventory;
+        Console.WriteLine($"  inventory: {inv?.Items.Count(i => db.Resolve(i.FormId) is not null) ?? 0} named item stacks");
+    }
+    else
+    {
+        Console.WriteLine("  (perks / reputation / notes / item names need the game Data folder — pass it as the 2nd arg)");
     }
 }
 
