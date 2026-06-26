@@ -631,23 +631,33 @@ unlabelled):** both verified across vanilla + base VNV, the length matching the 
   sub-records carrying embedded `[u16 len][7C][ascii][7C]` **strings** — animation/control names ("Idle",
   "SpecialIdle", "Forward", "Backward", "Close") — behind a leading tag byte; `changeFlags` selects the layout
   (≫100 distinct flag values, hundreds of lengths). Reads as **script/animation/control state**. Mostly not
-  field-decoded — but one `0x00` sub-shape **IS decoded** (see §4m): the **len-6 `[04][7C][2C][7C][flags:u8][7C]`**
-  variant (flags `0x80000000`) is a per-form **flags/state** record — for a **map marker** REFR it holds the
-  marker's visibility flags (Visible / Can-Travel-To), i.e. the **discovered-location** state.
+  field-decoded — but one `0x00` sub-shape **IS decoded** (see §4m) and now **emitted labeled by `cfwalk`**: the
+  **len-6 `[04][7C][2C][7C][flags:u8][7C]`** variant (flags `0x80000000`) is a per-form **flags/state** record —
+  for a **map marker** REFR it holds the marker's visibility flags (Visible / Can-Travel-To), i.e. the
+  **discovered-location** state.
 - `0x0A` — `0x7C`-delimited, **float-heavy**, embeds NPC names (the player name; "Beagle" on a Primm save). The
-  `0x020C`/len-58 variant dominates (vanilla 8k, base VNV 51k); larger variants (len 706) hold the player name + a
-  long float run (position/rotation/scale-shaped). Reads as actor/placement state. Not field-decoded.
+  **dominant `0x020C`/len-58 variant (≥99% of all `0x0A`: vanilla 22.6k, base VNV 50.3k) is now SIZED** by `cfwalk`
+  into its three `0x7C`-delimited spans (delimiters at `+0x07`/`+0x1C`/`+0x39`), with a **constant `0x32` tag at
+  `+0x0B`** and **zero padding at `+0x2B..+0x38`**; the variable bytes are float-shaped placement/havok state, not
+  yet field-named (needs a §7 controlled diff). Larger variants (len 706) hold the player name + a long float run
+  (position/rotation/scale-shaped) and remain located, not field-decoded.
 - `0x01` REFR / `0x02` ACHR — the reference path: MOVE block, havok/AV array, ExtraDataList, inventory, and the
   karma/XP slots are decoded (§4g–§4j); the rest of the actor-value array and most base state remain `unknown`.
   `cfwalk` breaks a MOVE-anchored record into its located spans — `MOVE block[27]`, `havok/actor-value
   array[n]`, `ExtraDataList + inventory[n]` — rather than one opaque gap; the byte-level field walk + item list
   stay in `refdump`/`inventory`. Records without the MOVE bit fall to a single gap (anchor via `refdump`).
-- `0x09` NPC_ — player base: SPECIAL + name (§4d) decoded; most records are tiny (modal len 6) FaceGen/flag stubs.
+- `0x09` NPC_ — player base: SPECIAL + name (§4d) decoded. The remaining records (flags `0x40000000`, 80–95%) are
+  now **SIZED as one count-prefixed family**: `[n:u8][7C]` then `n/4` × 14-byte entry (`[u32][7C][8 B][7C]`) then a
+  `[00][7C][00][7C]` trailer, `len = 6 + 14·(n/4)` (n = 0/4/8/12/16 → len 6/20/34/48/62; the modal len-6 stub is the
+  n=0 case). Verified across vanilla + base VNV; `cfwalk` emits count + entries + trailer. Entry internals (a small
+  `u32` + an 8-byte block, FaceGen-ish) not yet field-named.
 - `0x07` — **HETEROGENEOUS** (not one record type): some are **QUST** change forms ("Ain't That a Kick in the
   Head" resolves; the packed formType-7 stage encoding the quest work decodes — §6 #3), but others are **cell /
   map-fog data** (e.g. `0x0010D9F4`, per the quest RE) and more. Disambiguate by the masters' record type, not the
-  form-type byte. Multiple flag-gated payload shapes (`0x60000000` len 9, `0xE0000000` len 42, `0xC0000000` large);
-  not field-decoded here (quest stages/objectives are surfaced by `quests`, §6 #3).
+  form-type byte. The two cross-corpus-stable fixed variants are now **SIZED**: **len 9 (flags `0x60000000`,
+  dominant) = `[u32][u32][7C]`**, and **len 42 (flags `0xE0000000`) = that same 8-byte header + a 32-byte variable
+  block (`unknown[32]`, float-heavy) + `7C`**. The large `0xC0000000` variant stays an `unknown[n]` gap (quest
+  stages/objectives are surfaced by `quests`, §6 #3).
 - `0x04` / `0x05` — large `0x7C`-delimited reference-like records (flags `0x20000000`/`0x20000002`), embedding the
   `04 7C 74 7C`-style ExtraDataList sub-blocks; variable, not field-decoded. (Modded-heavy.)
 - `0x0B` — fixed-constant 24-byte config on vanilla (sized, above) but **variable on modded** (11 distinct lengths)
@@ -660,10 +670,12 @@ unlabelled):** both verified across vanilla + base VNV, the length matching the 
 
 Tooling: **`survey <save|dir> [0xNN]`** (the coverage survey above) and **`cfwalk <save> <iref>|--type 0xNN [N]`**
 (the labeled **full walk**, §6 #1b): renders a change form's payload as a field tree — labeled fields for the sized
-types above, `0x7C`-tokenized output for the delimited `0x00`/`0x0A` state, and a single explicit `unknown[n]` gap
-(hex-capped) for everything still undecoded, so coverage is always visible and never silently skipped. As a type
-graduates from "located" to "field-decoded", its emitter in `WalkPayload` replaces the gap. Still to fold in: the
-REFR/ACHR field tree (the `refdump` decode of §4g–§4j) and the ordered REFR/ACHR model (§8a). **`recid <save>
+types above, `0x7C`-tokenized output for the still-undecoded `0x00`/`0x0A` variants, and a single explicit
+`unknown[n]` gap (hex-capped) for everything else, so coverage is always visible and never silently skipped. The
+decoder now lives in **`Core/ChangeFormPayload.Walk`** (pure bytes→lines, unit-tested on synthetic payloads, reused
+by the planned GUI full-walk tab); as a type graduates from "located" to "field-decoded", its emitter there replaces
+the gap. Still to fold in: the REFR/ACHR field tree (the `refdump` decode of §4g–§4j) and the ordered REFR/ACHR
+model (§8a). **`recid <save>
 <formId…>`** identifies the masters **record signature** (REFR/DOOR/CHAL/…) + a placed ref's base form for any
 save FormID — by traversing the owning plugin header-only (`TesPlugin.FindRecordSignatures`) — so a change form
 the name index can't resolve (world/reference records aren't indexed for naming) can still be classified; it is how

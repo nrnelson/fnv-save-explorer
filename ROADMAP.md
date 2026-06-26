@@ -137,14 +137,17 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    explicit gaps; (c) the coverage map maintained in SPEC. This folds in the former #14 (the ordered
    REFR/ACHR field model per SPEC §8a) and, optionally, the byte-decode of the havok blob (former #12).
    **Status:** (a)+(b) shipped — the `survey` CLI (per-type length/`changeFlags` distribution + a per-offset
-   constancy map) and the **coverage map in SPEC §4l**: the fixed-length types (`0x20`/`0x21`/`0x28`/
-   `0x2B`/`0x32`/`0x0B`, plus the `0x08` zero-payload marker) are sized; the dominant `0x00` (script/
-   animation/control state) and `0x0A` (actor/placement, float-heavy) are located, not field-decoded. The
-   `cfwalk` CLI renders any change form as a labeled field tree with explicit `unknown[n]` gaps. Sized so far:
-   the fixed types above + the count-prefixed list types `0x22`/`0x25`; REFR/ACHR are broken into their located
-   spans (MOVE / havok-AV array / ExtraDataList+inventory). **Remaining is mostly SEMANTICS (needs controlled
-   diffs):** name the sized types (`0x20`–`0x32`), decode the `0x00`/`0x0A` delimited script/actor fields, and
-   fold the QUST stage/objective decode (§6 #3) into the walk. See the controlled-diff shopping list below.
+   constancy map) and the **coverage map in SPEC §4l**, rendered by the **`cfwalk` CLI** (labeled field tree with
+   explicit `unknown[n]` gaps; the decoder now lives in the reusable **`Core/ChangeFormPayload.Walk`**, unit-tested
+   on synthetic payloads). **Sized so far:** the fixed-length types (`0x20`/`0x21`/`0x28`/`0x2B`/`0x32`/`0x0B`, the
+   `0x08`/`0x1F` zero-payload markers, `0x0F`/`0x16`/`0x1A`/`0x0D`), the count-prefixed list types `0x22`/`0x25`,
+   and — **new (structural corpus-alignment pass)** — the `0x00` len-6 map-marker/flags variant (§4m), the dominant
+   `0x0A` len-58/`0x020C` actor record (3 delimited spans + pinned tag/zero-pad), the `0x07` len-9/`0x60000000` +
+   len-42/`0xE0000000` variants, and the `0x09`/`0x40000000` count-prefixed family (`len = 6 + 14·(n/4)`). REFR/ACHR
+   are broken into their located spans (MOVE / havok-AV array / ExtraDataList+inventory). **Remaining is mostly
+   SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`, the new `0x07`/`0x09`/`0x0A` fields),
+   decode the remaining `0x00`/`0x0A` delimited script/actor variants, and fold the QUST stage/objective decode
+   (§6 #3) into the walk. See the controlled-diff shopping list below.
 2. **GlobalData full type coverage.** Several numbered types are still only partially decoded; finish
    them, and pin the type-2 registry status codes (only `1` = death is confirmed; 2–7 unknown).
 3. **Quest / Pip-Boy interpreter** (former #16) — now a *consumer* of the decode, not bespoke probes.
