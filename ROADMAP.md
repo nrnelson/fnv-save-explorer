@@ -94,6 +94,7 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 | Player inventory decode + edit (§4g) | ✅ located via PlayerRef iref+1; `[ref][7C][u32 count][7C]` entries with **ref = array index + 1**; same-length count edit round-trips; confirmed by a controlled diff (Saves 28/29/30: Antivenom 1→2→1) — every stack resolves, no spurious rows |
 | Deterministic inventory walk + per-stack extra data (§4i) | ✅ 2048-byte window removed; extra-data catalog cracked by a controlled 3-save diff (31/32/33): `0x25`=condition float (**editable**, 52.5→67.5 on repair), `0x16`=equipped flag, `0x21`=ref (weapon mod). Save 31 = 36 stacks, VNV = 103 stacks/12,999 items; condition edit round-trips |
 | FormID → display name (§4h / §6.3) | ✅ custom TES4 reader over the ESM/ESP masters; 10/10 plugins of a real save parse, 3,985 named forms; DLC renumbering + compressed records handled; inventory CLI + GUI show names + source mod (friendly name) |
+| Item condition maximums (§6 #4 / §4i) | ✅ the per-item condition cap is base-form metadata: the int32 at offset 4 of the `WEAP`/`ARMO` `DATA` subrecord (`value, health, weight`), read from the masters by `TesPlugin` → `PluginDatabase.ItemHealthMax`. Corpus-verified (every stored condition ≤ its base-form max; fresh gear ≈max, worn below — e.g. 9mm Pistol 60/150). CLI `inventory` shows `cond X / max (%)`; GUI **Max** column. Same pattern as `NoteMediaType` (§4k.1 #6); read-only base-form lookup, no save bytes touched |
 | Mod Organizer 2 / modded saves (§4h) | ✅ auto-detects the MO2 `mods\` folder from an MO2 save path; a 43-plugin Viva New Vegas save resolves 43/43; large fragmented inventories reunited (a dropped 1,414-count stack recovered) |
 | Pip-Boy item category / tab (§4h) | ✅ from the base form's record type (read from the masters, not the save): `RecordType`/`Category`/`PipBoyTab`; verified in-game (WEAP/ARMO/AMMO; ALCH+BOOK→Aid; KEYM→Misc/"Keyring"; NOTE→Data) |
 | Caps decode + edit (§6.4) | ✅ caps are an inventory stack (FormID `0x0000000F`); `Caps`/`TrySetCaps` wrap the inventory path; CLI `caps`/`setcaps` + GUI Edit field; same-length edit round-trips |
@@ -107,7 +108,7 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 | Game-time-stamp churn suppression (§4k.1 #7) | ✅ `idiff … clean` auto-hides the recurring per-reference game-time/havok churn (value-frequency + adjacency clustering), collapsing the notes diff 3,314 → 11 and surfacing the inserted read marker; characterised as per-`REFR` time/havok float updates |
 | WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory + caps + karma/XP edit + full notes read/unread + media type + **Perks** §4n + **Reputation** §4o + **Globals** §4c (editable) tabs) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion, `idiff … clean` hides game-time churn (§4k.1 #7) |
-| Tests | ✅ 2,700 xUnit, all green (count grows with the discovered real-save corpus) |
+| Tests | ✅ 2,914 xUnit, all green (count grows with the discovered real-save corpus) |
 | Per-stack `0x0D` extra-data decode (§4i) | ✅ the last unsized per-stack type, sized by corpus alignment: `[0D][7C][ref:3][7C][n:u8][7C]` + `n/4` `[u32][f64]` pairs + two fixed fields = `12 + 14·(n/4)` (lengths 12/26/54/68/110 across all 607 saves). `VariablePropertyLength`; over-read strictly ↓ (vanilla 2→0, base 8→4, ext 318→314, **0 under-reads**) + recovers condition/equipped that the old resync dropped after a `0x0D`. ≤512 B resync now a never-hit safety net |
 | Deterministic inventory decoder + condition edit (§4i) | ✅ window removed; condition (`0x25`) editable + equipped/`0x21` surfaced in CLI + GUI; condition edit round-trips |
 | Deterministic inventory list *start* (§4i) | ✅ **deterministic on all 607 real saves** (vanilla 30/30, base VNV 98/98, VNV Extended 479/479): MOVE-skip + the typed-entry ExtraDataList walk (variable order + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor** for bit2/bit10 havok-physics records → the **`vsval` stack count** → first item. The §4g scan is now an unused safety net. vsval self-validates (decoded ≥ vsval, **0 under-reads**); verified **display byte-identical** across all 607 except **35 endgame inventories this *fixed* (empty → full)** |
@@ -169,7 +170,11 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    Remaining recall needs either the editor-ref→dead-instance binding (creature kills) or more
    ground-truth oracles; the walls are catalogued in DECISIONS.md. Smaller wins: map the QUST var
    block's SLSD index→source name so the decoded `QuestScriptVars` become usable by `GuardEvaluator`.
-4. **Item condition maximums** (former #11): read the base-form Health so per-item condition shows a cap.
+4. ~~**Item condition maximums** (former #11): read the base-form Health so per-item condition shows a cap.~~
+   ✅ **Done** — the cap is the int32 at offset 4 of the `WEAP`/`ARMO` `DATA` subrecord (`value, health, weight`),
+   read from the masters by `TesPlugin` → `PluginDatabase.ItemHealthMax(formId)` (base-form metadata, same path as
+   `NoteMediaType`). CLI `inventory` renders `cond X / max (%)`, GUI adds a **Max** column. Corpus-verified: every
+   stored condition stays within its base-form max (real-save theory). See §4i.
 5. ~~**Length-changing edits** (former #7): implement offset-fixup so renames / add / remove become safe.~~
    ✅ **Done** — `RebuildWithBodyEdits` (offset-fixup core) + consumers add-reputation (§4o), **grant-perk**
    (§4n, `AddPerk`/`addperk`), **add-inventory-item** (§4g, `AddInventoryItem`/`additem` — grow an existing record

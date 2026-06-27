@@ -65,9 +65,11 @@ public sealed class TesPlugin
     /// for item types it is the basis for the item's Pip-Boy tab (see <see cref="PluginDatabase.PipBoyTab"/>);
     /// <c>QUST</c> is indexed only so quests can be named/identified, not as inventory. <c>NoteType</c> is the
     /// <c>NOTE</c> record's <c>DATA</c> media byte (0=Sound, 1=Text, 2=Image, 3=Voice — the holodisk-vs-text
-    /// distinction, ROADMAP §4k.1 #6), or <c>-1</c> for non-notes / notes with no <c>DATA</c>.
+    /// distinction, ROADMAP §4k.1 #6), or <c>-1</c> for non-notes / notes with no <c>DATA</c>. <c>Health</c> is the
+    /// <c>WEAP</c>/<c>ARMO</c> base-form max condition (the <c>DATA</c> health int32, ROADMAP §6 #4), or <c>0</c> for
+    /// record types that don't carry one.
     /// </summary>
-    public IReadOnlyList<(uint LocalFormId, string Name, string Type, int NoteType)> Forms { get; }
+    public IReadOnlyList<(uint LocalFormId, string Name, string Type, int NoteType, int Health)> Forms { get; }
 
     /// <summary>The <c>QUST</c> records' decoded stage/objective structure, keyed by <b>plugin-local</b>
     /// FormID (re-keyed into save space by <see cref="PluginDatabase"/>) — the masters side of the quest-log
@@ -129,7 +131,7 @@ public sealed class TesPlugin
     private TesPlugin(
         string fileName,
         IReadOnlyList<string> masters,
-        IReadOnlyList<(uint, string, string, int)> forms,
+        IReadOnlyList<(uint, string, string, int, int)> forms,
         IReadOnlyList<QuestDefinition> quests,
         IReadOnlyList<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)> dialogueInfos,
         IReadOnlyList<CounterIncrement> counterIncrements,
@@ -181,7 +183,7 @@ public sealed class TesPlugin
                 masters.Add(ZString(data));
 
         // ---- top-level groups ----
-        var forms = new List<(uint, string, string, int)>();
+        var forms = new List<(uint, string, string, int, int)>();
         var quests = new List<QuestDefinition>();
         var dialogueInfos = new List<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)>();
         // SCPT FormID -> (GameMode block source, declared local-variable names) (ROADMAP §6 #16)
@@ -429,7 +431,7 @@ public sealed class TesPlugin
     /// <summary>Reads the records (and defensively skips any nested groups) inside one top-level item group.</summary>
     private static void ReadRecords(
         Stream fs, long contentSize, bool localized,
-        List<(uint, string, string, int)> forms, List<QuestDefinition> quests,
+        List<(uint, string, string, int, int)> forms, List<QuestDefinition> quests,
         Dictionary<uint, (string GameMode, List<string> Locals)> scripts,
         List<CounterIncrement> counterIncrements,
         List<ExternalQuestEffect> externalQuestEffects,
@@ -495,15 +497,20 @@ public sealed class TesPlugin
 
             string? edid = null, full = null;
             var noteType = -1;
+            var health = 0;
             foreach (var (type, sub) in subs)
             {
                 if (type == "EDID") edid = ZString(sub);
                 else if (type == "FULL" && !localized) full = ZString(sub);
                 else if (type == "DATA" && sig == "NOTE" && sub.Length >= 1) noteType = sub[0]; // 0=Sound 1=Text 2=Image 3=Voice
+                // WEAP/ARMO DATA = int32 value, int32 health, float weight — health (max condition) is the int32 at
+                // offset 4 (ROADMAP §6 #4). Clamp negatives to 0 (treated as "no max").
+                else if (type == "DATA" && (sig == "WEAP" || sig == "ARMO") && sub.Length >= 8)
+                    health = Math.Max(0, BinaryPrimitives.ReadInt32LittleEndian(sub.AsSpan(4, 4)));
             }
             var name = full ?? edid;
             if (!string.IsNullOrEmpty(name))
-                forms.Add((formId, name, sig, noteType)); // sig is the record type (WEAP/ARMO/ALCH/AMMO/MISC/…)
+                forms.Add((formId, name, sig, noteType, health)); // sig is the record type (WEAP/ARMO/ALCH/AMMO/MISC/…)
             if (sig == "QUST")
                 quests.Add(ParseQuest(formId, subs, localized, full, edid));
         }

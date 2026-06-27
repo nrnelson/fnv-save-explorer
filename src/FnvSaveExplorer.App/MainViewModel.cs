@@ -101,6 +101,11 @@ public sealed class InventoryRow : INotifyPropertyChanged
         set { if (!Nullable.Equals(_condition, value)) { _condition = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Condition))); } }
     }
 
+    /// <summary>The base-form max condition (WEAP/ARMO DATA health, ROADMAP §6 #4), or null for items that
+    /// carry no condition cap. Read-only display — the scale the editable <see cref="Condition"/> is measured
+    /// against.</summary>
+    public int? MaxCondition { get; init; }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 }
 
@@ -449,6 +454,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 Equipped = item.Equipped,
                 Condition = item.Condition,
                 OriginalCondition = item.Condition,
+                MaxCondition = db.ItemHealthMax(item.FormId),
             });
         InventoryInfo = DescribeInventory(Inventory.Count, db);
     }

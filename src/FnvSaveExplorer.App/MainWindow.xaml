@@ -139,6 +139,7 @@
                                 <DataGridTextColumn Header="Count" Binding="{Binding Count, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
                                 <DataGridCheckBoxColumn Header="Equipped" Binding="{Binding Equipped}" IsReadOnly="True" Width="70"/>
                                 <DataGridTextColumn Header="Condition" Binding="{Binding Condition, UpdateSourceTrigger=PropertyChanged}" Width="90"/>
+                                <DataGridTextColumn Header="Max" Binding="{Binding MaxCondition}" IsReadOnly="True" Width="70"/>
                             </DataGrid.Columns>
                         </DataGrid>
                         <TextBlock Text="Game Data folder (base game + DLC)" Foreground="Gray"/>

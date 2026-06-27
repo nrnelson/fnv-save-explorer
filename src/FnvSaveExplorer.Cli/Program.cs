@@ -997,7 +997,9 @@ static void Inventory(FalloutSave s, string savePath, string? dataDir)
         var src = s.FriendlySourceForModIndex(item.ModIndex) ?? "?";
         var extra = "";
         if (item.Condition is { } c)
-            extra += $"  cond {c:0.#}";
+            extra += db.ItemHealthMax(item.FormId) is { } max
+                ? $"  cond {c:0.#} / {max} ({c / max:0%})"
+                : $"  cond {c:0.#}";
         if (item.Equipped)
             extra += "  [equipped]";
         if (item.ExtraRefIds.Count > 0)

@@ -217,6 +217,34 @@ public class PlayerInventoryTests
         Assert.All(inv.Items, i => Assert.Null(i.UnknownExtraType));
     }
 
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_item_condition_stays_within_the_base_form_max(string path)
+    {
+        // ROADMAP §6 #4: per-item condition (the stored 0x25 float) is measured against the base form's max
+        // health (WEAP/ARMO DATA health int32, read from the masters). The decode is cross-checked here: a
+        // stored condition must never exceed the resolved max (a fresh weapon sits at ≈max, a worn one below).
+        // If the health offset were wrong (e.g. it read the weapon's value), real conditions would breach it.
+        // Skips when the game's masters aren't present.
+        var save = FalloutSave.Load(path);
+        if (save.Inventory is not { } inv)
+            return;
+        var db = PluginDatabase.ForSave(save, null, GameDataLocator.FindMo2Mods(path));
+        if (db.Count == 0)
+            return;
+
+        foreach (var item in inv.Items)
+        {
+            if (item.Condition is not { } cond || db.RecordType(item.FormId) is not ("WEAP" or "ARMO"))
+                continue;
+            if (db.ItemHealthMax(item.FormId) is not { } max)
+                continue;
+            Assert.True(max > 0, $"resolved max should be positive ({db.Resolve(item.FormId)})");
+            Assert.True(cond <= max + 1f, // +1 tolerance: conditions sit just under (e.g. 99.9/100), never above
+                $"condition {cond} exceeds base-form max {max} for {db.Resolve(item.FormId)} ({Path.GetFileName(path)})");
+        }
+    }
+
     [Fact]
     public void ResolveRefId_honours_the_2bit_type()
     {

@@ -142,6 +142,34 @@ public class PluginDatabaseTests
         Assert.Null(db.NoteMediaType(0x00999999)); // unknown form
     }
 
+    [Fact]
+    public void Item_health_max_is_read_from_the_WEAP_ARMO_DATA_health_int32()
+    {
+        // ROADMAP §6 #4: the max condition is base-form metadata — the int32 at offset 4 of a WEAP/ARMO
+        // DATA subrecord (int32 value, int32 health, float weight). Not stored per-save.
+        using var dir = new TempDataFolder();
+        dir.Write("FalloutNV.esm", EsmBuilder.Plugin([],
+            new TestRecord("WEAP", 0x00100010, Edid: "Rifle", Full: "A Rifle", Subs: [("DATA", WeapArmoData(value: 500, health: 150))]),
+            new TestRecord("ARMO", 0x00100011, Edid: "Armor", Full: "Some Armor", Subs: [("DATA", WeapArmoData(value: 200, health: 250))]),
+            new TestRecord("ALCH", 0x00100012, Edid: "Stim", Full: "Stimpak"))); // aid item: no DATA health
+
+        var db = PluginDatabase.Build(["FalloutNV.esm"], dir.Path);
+
+        Assert.Equal(150, db.ItemHealthMax(0x00100010)); // reads health (offset 4), not value (offset 0)
+        Assert.Equal(250, db.ItemHealthMax(0x00100011));
+        Assert.Null(db.ItemHealthMax(0x00100012)); // aid item carries no condition max
+        Assert.Null(db.ItemHealthMax(0x00999999)); // unknown form
+
+        static byte[] WeapArmoData(int value, int health)
+        {
+            var d = new byte[12]; // int32 value, int32 health, float weight
+            BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(0), value);
+            BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(4), health);
+            BinaryPrimitives.WriteSingleLittleEndian(d.AsSpan(8), 3.5f);
+            return d;
+        }
+    }
+
     [Theory]
     [InlineData("FalloutNV.esm", "Fallout: New Vegas")]      // official table
     [InlineData("GunRunnersArsenal.esm", "Gun Runners' Arsenal")]

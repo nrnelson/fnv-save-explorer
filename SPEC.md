@@ -269,8 +269,12 @@ Property type → payload catalog (**confirmed by a controlled 3-save diff** —
 9mm pistol then repair it with a Weapon Repair Kit):
 - `0x25` **ExtraCondition** — 4-byte LE float = the item's **absolute current health** (NOT a 0–100 %). The repair
   moved exactly this float `52.5 → 67.5`; it appears only on degradable gear. Values differ per item (real save:
-  9mm Pistol 45, SMG 205, Metal Armor 497.2, Grenade Rifle 99.9); the **max is the base-form Health** stat, not
-  yet decoded — see §6 #11. **Editable** as a same-length splice (`TrySetItemCondition`).
+  9mm Pistol 45, SMG 205, Metal Armor 497.2, Grenade Rifle 99.9); the **max** is the base-form Health — the int32 at
+  **offset 4 of the `WEAP`/`ARMO` `DATA` subrecord** (`int32 value, int32 health, float weight`), read from the
+  masters by `TesPlugin` and exposed as `PluginDatabase.ItemHealthMax(formId)` (ROADMAP §6 #4, §4h base-form metadata
+  like `NoteMediaType`). Corpus-verified: every stored condition sits within its base-form max (e.g. 9mm Pistol
+  60/150, Varmint Rifle 34.9/120, fresh weapons ≈max). CLI `inventory` shows `cond X / max (%)`; GUI Max column.
+  **Editable** as a same-length splice (`TrySetItemCondition`).
 - `0x16` **ExtraEquipped** — 0-byte flag; its presence means the stack is equipped/worn. It *appeared* on the
   pistol when equipped (Save 31→32), and is present on the always-worn Pip-Boy / worn armor.
 - `0x21` — a 3-byte BE refID. On a weapon this is an attached **weapon mod**; the type is reused for other
