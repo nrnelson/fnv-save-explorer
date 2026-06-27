@@ -2214,6 +2214,10 @@ static string? FindPluginFile(string plugin, string? dataFolder, string? mo2Mods
 static void CfWalk(FalloutSave s, string savePath, int? iref = null, int? type = null, int max = 3)
 {
     var db = PluginDatabase.ForSave(s, null, GameDataLocator.FindMo2Mods(savePath));
+    // Resolve a decoded 3-byte refID to "name" / "0xFORMID" so ref-list fields read meaningfully.
+    Func<int, string?>? resolveRef = db.Count > 0
+        ? r => { var fid = s.ResolveRefId(r); return db.Resolve(fid) ?? $"0x{fid:X8}"; }
+        : null;
     var shown = 0;
     foreach (var cf in s.EnumerateChangeForms())
     {
@@ -2227,7 +2231,7 @@ static void CfWalk(FalloutSave s, string savePath, int? iref = null, int? type =
         Console.WriteLine($"  type 0x{cf.TypeByte:X2} (formType 0x{cf.FormType:X2} {ChangeFormPayload.FormTypeName(cf.FormType)})  " +
                           $"version 0x{cf.Version:X2}  changeFlags 0x{cf.ChangeFlags:X8}  len {cf.DataLength}");
         var data = s.ReadAt(cf.DataOffset, cf.DataLength);
-        foreach (var line in ChangeFormPayload.Walk(cf.FormType, cf.ChangeFlags, data))
+        foreach (var line in ChangeFormPayload.Walk(cf.FormType, cf.ChangeFlags, data, resolveRef))
             Console.WriteLine("    " + line);
         Console.WriteLine();
         if (iref is not null) break;

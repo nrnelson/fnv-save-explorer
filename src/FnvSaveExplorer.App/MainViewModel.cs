@@ -485,9 +485,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// summary plus the locator fields the field-tree render needs. Names resolve from the masters when available.
     /// Held as a plain list (the corpus reaches tens of thousands of records) and shown through the filtered
     /// <see cref="ChangeForms"/> set bound to a virtualized grid.</summary>
+    private Func<int, string?>? _changeFormRefResolver;
+
     private void PopulateChangeForms(FalloutSave save, PluginDatabase db)
     {
         var hasNames = db.Count > 0;
+        // Resolve a decoded 3-byte refID to "name" / "0xFORMID" for the field-tree ref fields (captured for the
+        // on-selection walk render). Null when no masters are loaded, so refs stay raw hex.
+        _changeFormRefResolver = hasNames
+            ? r => { var fid = save.ResolveRefId(r); return db.Resolve(fid) ?? $"0x{fid:X8}"; }
+            : null;
         var rows = new List<ChangeFormRow>();
         foreach (var cf in save.EnumerateChangeForms())
         {
@@ -537,7 +544,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             $"type {row.TypeText}  changeFlags {row.FlagsHex}  len {row.DataLength}",
             "",
         };
-        lines.AddRange(ChangeFormPayload.Walk(row.FormType, row.ChangeFlags, data).Select(l => "    " + l));
+        lines.AddRange(ChangeFormPayload.Walk(row.FormType, row.ChangeFlags, data, _changeFormRefResolver).Select(l => "    " + l));
         ChangeFormWalk = string.Join("\n", lines);
     }
 

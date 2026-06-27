@@ -132,6 +132,35 @@ public class ChangeFormPayloadTests
     }
 
     [Fact]
+    public void Type25_ref_list_resolves_names_when_a_resolver_is_supplied()
+    {
+        // §4l: [u32 count][7C] then count × [ref:3 BE][7C]; len = 5 + 4·count. One ref = 0x000005.
+        var d = new byte[] { 0x01, 0, 0, 0, 0x7C, 0x00, 0x00, 0x05, 0x7C };
+
+        // Without a resolver: raw hex only.
+        var bare = ChangeFormPayload.Walk(0x25, 0x80000000, d).ToList();
+        Assert.Contains(bare, l => l.Contains("ref[0] = 00 00 05"));
+        Assert.DoesNotContain(bare, l => l.Contains("->"));
+
+        // With a resolver: the 3-byte BE refID (5) resolves and is appended.
+        var named = ChangeFormPayload.Walk(0x25, 0x80000000, d, r => r == 5 ? "Some Form" : null).ToList();
+        Assert.Contains(named, l => l.Contains("ref[0] = 00 00 05 -> Some Form"));
+    }
+
+    [Fact]
+    public void Type0D_single_ref_resolves_when_a_resolver_is_supplied()
+    {
+        // §4l: [ref:3 BE][7C] (len 4). 0x000010 -> refId 16.
+        var d = new byte[] { 0x00, 0x00, 0x10, 0x7C };
+        var named = ChangeFormPayload.Walk(0x0D, 0x00000000, d, r => r == 16 ? "0x00000014" : null).ToList();
+        Assert.Contains(named, l => l.Contains("ref = 00 00 10 -> 0x00000014"));
+        // An unresolvable ref leaves the raw hex untouched.
+        var unresolved = ChangeFormPayload.Walk(0x0D, 0x00000000, d, _ => null).ToList();
+        Assert.Contains(unresolved, l => l.Contains("ref = 00 00 10"));
+        Assert.DoesNotContain(unresolved, l => l.Contains("->"));
+    }
+
+    [Fact]
     public void Unknown_type_is_a_single_gap()
     {
         var lines = Walk(0x55, 0x12345678, [1, 2, 3, 4]);

@@ -22,8 +22,10 @@ public static class ChangeFormPayload
     };
 
     // Emits the field-tree lines for one change-form payload. The per-type emitters mirror the sized structures
-    // in SPEC §4l; anything not yet pinned is one honest `unknown[n]` over the whole payload.
-    public static IEnumerable<string> Walk(int formType, uint flags, byte[] d)
+    // in SPEC §4l; anything not yet pinned is one honest `unknown[n]` over the whole payload. When a
+    // <paramref name="resolveRef"/> is supplied (a 3-byte BE refID -> display name), the decoded refID fields
+    // (0x0D/0x22/0x25) show the resolved name alongside the raw bytes; without it they stay raw hex.
+    public static IEnumerable<string> Walk(int formType, uint flags, byte[] d, Func<int, string?>? resolveRef = null)
     {
         if (d.Length == 0)
         {
@@ -82,7 +84,7 @@ public static class ChangeFormPayload
                 for (var e = 0; e < (int)c25; e++)
                 {
                     var o = 5 + e * 4;
-                    yield return Field(o, $"ref[{e}]", Hex(d, o, 3));   // 3-byte BE refID; resolve via §4f if needed
+                    yield return Field(o, $"ref[{e}]", RefStr(d, o, resolveRef));   // 3-byte BE refID
                 }
                 break;
             // 0x22 — count-prefixed list: [n:u8][7C] then n/4 × [ref:3 BE][7C][u32][7C][u32][7C] (§4l, len = 2+14·n/4).
@@ -93,7 +95,7 @@ public static class ChangeFormPayload
                 {
                     var o = 2 + e * 14;
                     yield return Field(o, $"entry[{e}]",
-                        $"ref={Hex(d, o, 3)} u32={U32(d, o + 4)} u32={U32(d, o + 9)}");
+                        $"ref={RefStr(d, o, resolveRef)} u32={U32(d, o + 4)} u32={U32(d, o + 9)}");
                 }
                 break;
 
@@ -190,7 +192,7 @@ public static class ChangeFormPayload
                 yield return Field(0, "u32", U32(d, 0).ToString());
                 break;
             case 0x0D when d.Length == 4 && d[3] == 0x7C:
-                yield return Field(0, "ref", Hex(d, 0, 3));   // 3-byte BE refID
+                yield return Field(0, "ref", RefStr(d, 0, resolveRef));   // 3-byte BE refID
                 break;
 
             default:
@@ -201,6 +203,17 @@ public static class ChangeFormPayload
 
     static string Hex(byte[] b, int off, int len) =>
         string.Join(' ', b.Skip(off).Take(len).Select(x => x.ToString("X2")));
+
+    // A 3-byte big-endian refID field: raw hex, plus the resolved display name when a resolver is supplied
+    // and recognises it (the refID's 2-bit type is honoured by the caller's resolver, e.g. FalloutSave.ResolveRefId).
+    static string RefStr(byte[] b, int off, Func<int, string?>? resolve)
+    {
+        var hex = Hex(b, off, 3);
+        if (resolve is null)
+            return hex;
+        var refId = (b[off] << 16) | (b[off + 1] << 8) | b[off + 2];
+        return resolve(refId) is { } name ? $"{hex} -> {name}" : hex;
+    }
 
     static uint U32(byte[] b, int o) => (uint)(b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24));
 
