@@ -106,7 +106,7 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 | Full Pip-Boy notes — read **and** unread (§4k.1 #4) | ✅ `FalloutSave.PipBoyNotes` scans the player inventory change form's note ref-list for refs resolving to `NOTE` records (masters test injected by the caller) ∪ the read markers; flags each read/unread. Cracked by the Saves 38→39→40 controlled triple (additem a note unread → read it). CLI `notes` + GUI Notes tab show the full list with status; Save 492 = 197 notes (171 read + 26 unread, incl. the bold "They Didn't Shoot The Deputy"), no false positives. Read-only (toggling is length-changing, §6.7); real-save + synthetic tests |
 | Note metadata — holodisk-vs-text + base-form attributes (§4k.1 #6) | ✅ proven nothing else is stored per-save (the controlled triple wrote only refs + markers); `TesPlugin` reads the `NOTE` `DATA` media byte, `PluginDatabase.NoteMediaType` → Text/Voice/Sound/Image, surfaced in CLI `notes` + GUI Type column (Save 492: text journals → Text, "Justice Bloc HQ Security Tapes" → Voice); unit-tested |
 | Game-time-stamp churn suppression (§4k.1 #7) | ✅ `idiff … clean` auto-hides the recurring per-reference game-time/havok churn (value-frequency + adjacency clustering), collapsing the notes diff 3,314 → 11 and surfacing the inserted read marker; characterised as per-`REFR` time/havok float updates |
-| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory + caps + karma/XP edit + full notes read/unread + media type + **Perks** §4n + **Reputation** §4o + **Globals** §4c (editable) tabs) | ✅ launches + builds |
+| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory + caps + karma/XP edit + full notes read/unread + media type + **Perks** §4n + **Reputation** §4o + **Globals** §4c (editable) + **Change Forms** full-walk viewer §6 #1b/#6 tabs) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion, `idiff … clean` hides game-time churn (§4k.1 #7) |
 | Tests | ✅ 2,914 xUnit, all green (count grows with the discovered real-save corpus) |
 | Per-stack `0x0D` extra-data decode (§4i) | ✅ the last unsized per-stack type, sized by corpus alignment: `[0D][7C][ref:3][7C][n:u8][7C]` + `n/4` `[u32][f64]` pairs + two fixed fields = `12 + 14·(n/4)` (lengths 12/26/54/68/110 across all 607 saves). `VariablePropertyLength`; over-read strictly ↓ (vanilla 2→0, base 8→4, ext 318→314, **0 under-reads**) + recovers condition/equipped that the old resync dropped after a `0x0D`. ≤512 B resync now a never-hit safety net |
@@ -187,8 +187,11 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    slot — the perk slots live in an undecoded trailing actor-data region (after the inventory stacks) with no stable
    per-character anchor, so picking the wrong slot would corrupt the save. Unblocking it needs decoding that trailing
    region's grammar; until then `AddPerk` declines the zero-perk case rather than ship a guess.
-6. **GUI/UX** (former #9): a raw-hex / full-walk field-tree viewer tab (surfacing deliverable 1b),
-   screenshot export, backup management.
+6. **GUI/UX** (former #9): ◑ *the full-walk viewer is done* — a **Change Forms (R&D)** tab surfaces deliverable
+   1b: a virtualized list of every change-form record (offset / iref / FormID / resolved name / type / len) with a
+   substring filter, and a master-detail field tree (`ChangeFormPayload.Walk`) for the selected record showing the
+   labeled fields + explicit `unknown[n]` gaps. Read-only (`MainViewModel.PopulateChangeForms`/`UpdateChangeFormWalk`).
+   **Remaining:** screenshot export, backup management.
 
 ## 7. The controlled-diff methodology (how to crack §6.4 and the like)
 

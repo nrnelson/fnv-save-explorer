@@ -196,6 +196,29 @@ public sealed class QuestRow
     public IReadOnlyList<string> Lines { get; init; } = [];
 }
 
+/// <summary>One change-form record in the read-only full-walk view (ROADMAP §6 #1b / §6 #6). Carries the
+/// summary columns plus the locator fields (<see cref="FormType"/>/<see cref="ChangeFlags"/>/
+/// <see cref="DataOffset"/>/<see cref="DataLength"/>) the view model needs to render the labeled field tree
+/// on demand via <see cref="ChangeFormPayload.Walk"/>.</summary>
+public sealed class ChangeFormRow
+{
+    public int Iref { get; init; }
+    public uint FormId { get; init; }
+    public string FormIdHex => $"0x{FormId:X8}";
+    public string OffsetHex { get; init; } = "";
+    public string Name { get; init; } = "";
+    public int FormType { get; init; }
+    public byte TypeByte { get; init; }
+    public string TypeText => $"0x{TypeByte:X2} ({ChangeFormPayload.FormTypeName(FormType)})";
+    public uint ChangeFlags { get; init; }
+    public string FlagsHex => $"0x{ChangeFlags:X8}";
+    public int DataOffset { get; init; }
+    public int DataLength { get; init; }
+
+    /// <summary>Lowercased haystack for the filter box: FormID, name, offset, type byte and iref.</summary>
+    public string FilterKey { get; init; } = "";
+}
+
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private FalloutSave? _save;
@@ -212,6 +235,36 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<GlobalRow> Globals { get; } = [];
     public ObservableCollection<QuestRow> Quests { get; } = [];
     public ObservableCollection<MiscStatRow> MiscStats { get; } = [];
+
+    // ---- Change Forms full-walk view (ROADMAP §6 #1b / §6 #6) -------------
+    // The full record list can be tens of thousands of rows, so it is held as a plain list and exposed to the
+    // (virtualized) grid as a single set property — never added one-by-one through an ObservableCollection.
+    private IReadOnlyList<ChangeFormRow> _allChangeForms = [];
+
+    private IReadOnlyList<ChangeFormRow> _changeForms = [];
+    public IReadOnlyList<ChangeFormRow> ChangeForms { get => _changeForms; private set => Set(ref _changeForms, value); }
+
+    private string _changeFormsInfo = "";
+    public string ChangeFormsInfo { get => _changeFormsInfo; private set => Set(ref _changeFormsInfo, value); }
+
+    private string _changeFormFilter = "";
+    /// <summary>Filter box (FormID / name / type / offset / iref substring). Re-derives the shown list.</summary>
+    public string ChangeFormFilter
+    {
+        get => _changeFormFilter;
+        set { Set(ref _changeFormFilter, value); ApplyChangeFormFilter(); }
+    }
+
+    private ChangeFormRow? _selectedChangeForm;
+    public ChangeFormRow? SelectedChangeForm
+    {
+        get => _selectedChangeForm;
+        set { Set(ref _selectedChangeForm, value); UpdateChangeFormWalk(); }
+    }
+
+    private string _changeFormWalk = "";
+    /// <summary>The selected record's labeled field tree (the §6 #1b "full walk"), rendered on selection.</summary>
+    public string ChangeFormWalk { get => _changeFormWalk; private set => Set(ref _changeFormWalk, value); }
 
     private static readonly string[] SpecialNames =
         ["Strength", "Perception", "Endurance", "Charisma", "Intelligence", "Agility", "Luck"];
@@ -377,6 +430,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             PopulateReputation(save, invDb);
             PopulateGlobals(save, invDb);
             PopulateQuests(save, invDb);
+            PopulateChangeForms(save, invDb);
 
             MiscStats.Clear();
             if (save.MiscStats is { } ms)
@@ -424,6 +478,67 @@ public sealed class MainViewModel : INotifyPropertyChanged
         PopulateReputation(_save, db);
         PopulateGlobals(_save, db);
         PopulateQuests(_save, db);
+        PopulateChangeForms(_save, db);
+    }
+
+    /// <summary>Builds the read-only full-walk record list (ROADMAP §6 #1b / §6 #6): every change-form record's
+    /// summary plus the locator fields the field-tree render needs. Names resolve from the masters when available.
+    /// Held as a plain list (the corpus reaches tens of thousands of records) and shown through the filtered
+    /// <see cref="ChangeForms"/> set bound to a virtualized grid.</summary>
+    private void PopulateChangeForms(FalloutSave save, PluginDatabase db)
+    {
+        var hasNames = db.Count > 0;
+        var rows = new List<ChangeFormRow>();
+        foreach (var cf in save.EnumerateChangeForms())
+        {
+            var name = hasNames ? db.Resolve(cf.FormId) ?? "" : "";
+            rows.Add(new ChangeFormRow
+            {
+                Iref = cf.Iref,
+                FormId = cf.FormId,
+                OffsetHex = $"0x{cf.Offset:X}",
+                Name = name,
+                FormType = cf.FormType,
+                TypeByte = cf.TypeByte,
+                ChangeFlags = cf.ChangeFlags,
+                DataOffset = cf.DataOffset,
+                DataLength = cf.DataLength,
+                FilterKey = $"0x{cf.FormId:x8} {name} 0x{cf.Offset:x} 0x{cf.TypeByte:x2} {cf.Iref}".ToLowerInvariant(),
+            });
+        }
+        _allChangeForms = rows;
+        ChangeFormsInfo = $"{rows.Count:N0} change-form records — the full body decode (ROADMAP §6 #1b). " +
+            "Select a record to see its labeled field tree; regions not yet decoded show as explicit unknown[n] gaps." +
+            (hasNames ? "" : " (names need the game Data folder — set it on the Inventory tab.)");
+        ApplyChangeFormFilter();
+    }
+
+    /// <summary>Re-derives the shown <see cref="ChangeForms"/> from the filter box (substring over FormID / name /
+    /// type / offset / iref). An empty filter shows every record.</summary>
+    private void ApplyChangeFormFilter()
+    {
+        var q = _changeFormFilter.Trim().ToLowerInvariant();
+        ChangeForms = q.Length == 0 ? _allChangeForms : _allChangeForms.Where(r => r.FilterKey.Contains(q)).ToList();
+    }
+
+    /// <summary>Renders the selected record's labeled field tree via <see cref="ChangeFormPayload.Walk"/> — the
+    /// §6 #1b consumer surface. Pure read of the retained bytes; nothing is staged or modified.</summary>
+    private void UpdateChangeFormWalk()
+    {
+        if (_save is null || _selectedChangeForm is not { } row)
+        {
+            ChangeFormWalk = "";
+            return;
+        }
+        var data = _save.ReadAt(row.DataOffset, row.DataLength);
+        var lines = new List<string>
+        {
+            $"change form @{row.OffsetHex}  iref {row.Iref} -> {row.FormIdHex}{(row.Name.Length > 0 ? $"  {row.Name}" : "")}",
+            $"type {row.TypeText}  changeFlags {row.FlagsHex}  len {row.DataLength}",
+            "",
+        };
+        lines.AddRange(ChangeFormPayload.Walk(row.FormType, row.ChangeFlags, data).Select(l => "    " + l));
+        ChangeFormWalk = string.Join("\n", lines);
     }
 
     /// <summary>
