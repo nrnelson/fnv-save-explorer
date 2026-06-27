@@ -98,13 +98,24 @@ public sealed class InventoryRow : INotifyPropertyChanged
     public float? Condition
     {
         get => _condition;
-        set { if (!Nullable.Equals(_condition, value)) { _condition = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Condition))); } }
+        set
+        {
+            if (Nullable.Equals(_condition, value)) return;
+            _condition = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Condition)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConditionPercent)));
+        }
     }
 
     /// <summary>The base-form max condition (WEAP/ARMO DATA health, ROADMAP §6 #4), or null for items that
     /// carry no condition cap. Read-only display — the scale the editable <see cref="Condition"/> is measured
     /// against.</summary>
     public int? MaxCondition { get; init; }
+
+    /// <summary>Condition as a percentage of the base-form max (e.g. "40%"), or blank when either value is
+    /// absent. Read-only; recomputes when <see cref="Condition"/> is edited.</summary>
+    public string ConditionPercent =>
+        Condition is { } c && MaxCondition is { } max && max > 0 ? $"{c / max:0%}" : "";
 
     public event PropertyChangedEventHandler? PropertyChanged;
 }
