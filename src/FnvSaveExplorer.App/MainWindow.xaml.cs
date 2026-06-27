@@ -84,4 +84,18 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) == true)
             _vm.SaveAs(dialog.FileName);
     }
+
+    private void OnSaveScreenshotClick(object sender, RoutedEventArgs e)
+    {
+        var suggested = _vm.SuggestedScreenshotPath;
+        var dialog = new SaveFileDialog
+        {
+            Title = "Export save screenshot",
+            Filter = "PNG image (*.png)|*.png|All files (*.*)|*.*",
+            InitialDirectory = suggested is not null ? Path.GetDirectoryName(suggested) : DefaultSaveDirectory,
+            FileName = suggested is not null ? Path.GetFileName(suggested) : "screenshot.png",
+        };
+        if (dialog.ShowDialog(this) == true)
+            _vm.ExportScreenshot(dialog.FileName);
+    }
 }

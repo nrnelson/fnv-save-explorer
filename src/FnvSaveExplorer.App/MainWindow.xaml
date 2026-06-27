@@ -11,6 +11,9 @@
             <Button Content="Open…" Padding="10,2" Click="OnOpenClick"/>
             <Button Content="Save As…" Padding="10,2" Margin="4,0,0,0"
                     IsEnabled="{Binding HasSave}" Click="OnSaveAsClick"/>
+            <Separator/>
+            <Button Content="Save screenshot…" Padding="10,2"
+                    IsEnabled="{Binding HasSave}" Click="OnSaveScreenshotClick"/>
         </ToolBar>
 
         <StatusBar DockPanel.Dock="Bottom">

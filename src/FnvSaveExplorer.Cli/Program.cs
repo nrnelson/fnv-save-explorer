@@ -8,6 +8,8 @@ if (args.Length < 2)
 
         Usage:
           fnvsave dump  <save.fos>            Show header, screenshot info, and plugins
+          fnvsave screenshot <save.fos> [out.bmp]   Export the embedded save thumbnail to a 24-bit BMP
+                                              (defaults to <save>.bmp next to the input)
           fnvsave flt   <save.fos> [count]    Dump raw File Location Table uint32s (R&D)
           fnvsave check <save.fos>            Verify round-trip byte-identity
           fnvsave setlevel <in.fos> <out.fos> <level>   Safe edit demo (writes a new file)
@@ -130,6 +132,8 @@ try
         case "dump":
             Dump(FalloutSave.Load(path));
             break;
+        case "screenshot":
+            return Screenshot(path, args.Length > 2 ? args[2] : null);
         case "flt":
             Flt(FalloutSave.Load(path), args.Length > 2 ? int.Parse(args[2]) : 28);
             break;
@@ -434,6 +438,15 @@ static void Dump(FalloutSave s)
     foreach (var p in s.Plugins)
         Console.WriteLine($"    {p}");
     Console.WriteLine($"Body starts at  : 0x{s.BodyOffset:X}  ({s.FileLength - s.BodyOffset:N0} bytes, undecoded)");
+}
+
+static int Screenshot(string path, string? outPath)
+{
+    var s = FalloutSave.Load(path);
+    var dest = outPath ?? Path.ChangeExtension(path, ".bmp");
+    File.WriteAllBytes(dest, s.Screenshot.ToBmp());
+    Console.WriteLine($"Wrote {s.Screenshot.Width} x {s.Screenshot.Height} thumbnail to {dest}.");
+    return 0;
 }
 
 static void Flt(FalloutSave s, int count)

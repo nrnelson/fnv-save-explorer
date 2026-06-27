@@ -842,6 +842,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public string? SuggestedSavePath => _loadedPath;
 
+    /// <summary>A suggested screenshot export filename ("&lt;save&gt;.png" beside the loaded save), or null.</summary>
+    public string? SuggestedScreenshotPath =>
+        _loadedPath is null ? null : Path.ChangeExtension(_loadedPath, ".png");
+
+    /// <summary>Exports the decoded save thumbnail to a PNG (ROADMAP §6 #6). The image is already a frozen
+    /// <see cref="BitmapSource"/>; this just runs it through WPF's PNG encoder. Read-only.</summary>
+    public void ExportScreenshot(string path)
+    {
+        if (_screenshot is not BitmapSource bmp)
+            return;
+        try
+        {
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(bmp));
+            using var fs = File.Create(path);
+            encoder.Save(fs);
+            Status = $"Screenshot exported to {Path.GetFileName(path)}.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Screenshot export failed: {ex.Message}";
+        }
+    }
+
     private static ImageSource BuildScreenshot(SaveScreenshot shot)
     {
         var bgra = shot.ToBgra32();
