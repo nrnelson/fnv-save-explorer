@@ -227,7 +227,7 @@ public sealed class PluginDatabase
                     objectives.Add(new QuestObjectiveDef(o.Index, o.Text, targets));
                 }
                 quests[questFormId] = new QuestDefinition(
-                    questFormId, q.Stages, objectives, q.DataFlags, q.Name, q.Edid, q.ScriptFormId, q.GameModeScript, q.LocalVars);
+                    questFormId, q.Stages, objectives, q.DataFlags, q.Name, q.Edid, q.ScriptFormId, q.GameModeScript, q.LocalVars, q.LocalVarNames);
             }
 
             // Dialogue INFO result-script effects target quests by editor id; collect the StartQuest/SetStage
@@ -344,6 +344,14 @@ public sealed class PluginDatabase
 
     /// <summary>All known quest definitions, keyed by save FormID.</summary>
     public IReadOnlyDictionary<uint, QuestDefinition> Quests => _quests;
+
+    /// <summary>The source name of a quest's script local variable at a given <c>SLSD</c> slot index — the
+    /// table the persisted <see cref="QuestScriptVars"/> block is keyed by (ROADMAP §6 #3) — or <c>null</c> if
+    /// the quest, its script, or that slot isn't known. Read from the masters' <c>SCPT</c> <c>SLSD</c>/<c>SCVR</c>
+    /// table (base-form metadata; the save stores only the slot index + value).</summary>
+    public string? QuestScriptVarName(uint questFormId, int index) =>
+        _quests.TryGetValue(questFormId, out var q) && q.LocalVarNames is { } m && m.TryGetValue(index, out var n)
+            ? n : null;
 
     /// <summary>The media type of a <c>NOTE</c> form — <c>Text</c> / <c>Voice</c> / <c>Sound</c> / <c>Image</c>
     /// (the holodisk-vs-text distinction) — read from the base form's <c>DATA</c> byte, or <c>null</c> if the

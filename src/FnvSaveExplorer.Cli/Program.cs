@@ -509,7 +509,10 @@ static void QuestVars(FalloutSave s, string savePath, string? questHex)
         var name = db.Resolve(formId);
         Console.WriteLine($"0x{formId:X8}  {name ?? "(unknown)"}  ({vs.Count} vars)");
         foreach (var v in vs.OrderBy(v => v.Index))
-            Console.WriteLine($"    [{v.Index,3}] = {v.Value:g}");
+        {
+            var varName = db.QuestScriptVarName(formId, v.Index);   // SLSD/SCVR name from the masters (§6 #3)
+            Console.WriteLine($"    [{v.Index,3}] {varName ?? "",-24} = {v.Value:g}");
+        }
     }
 }
 

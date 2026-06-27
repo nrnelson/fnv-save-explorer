@@ -188,6 +188,9 @@ public sealed class TesPlugin
         var dialogueInfos = new List<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)>();
         // SCPT FormID -> (GameMode block source, declared local-variable names) (ROADMAP §6 #16)
         var scripts = new Dictionary<uint, (string GameMode, List<string> Locals)>();
+        // SCPT FormID -> (SLSD slot index -> SCVR variable name), the binary var table — lets the persisted
+        // QuestScriptVars block (indexed by SLSD slot) be named (ROADMAP §6 #3).
+        var scriptVarNames = new Dictionary<uint, IReadOnlyDictionary<int, string>>();
         var counterIncrements = new List<CounterIncrement>(); // qualified `set Quest.counter to counter ± N` (Stage 1)
         var externalQuestEffects = new List<ExternalQuestEffect>(); // completing effects from any SCPT (Stage 1)
         var actorScripts = new Dictionary<uint, uint>(); // base NPC_/CREA FormID -> SCRI script (Stage 2)
@@ -212,7 +215,7 @@ public sealed class TesPlugin
 
             var labelType = Encoding.ASCII.GetString(label);
             if (groupType == 0 && (NamedTypes.Contains(labelType) || labelType == "SCPT"))
-                ReadRecords(fs, contentSize, localized, forms, quests, scripts, counterIncrements, externalQuestEffects, completionEnables);
+                ReadRecords(fs, contentSize, localized, forms, quests, scripts, scriptVarNames, counterIncrements, externalQuestEffects, completionEnables);
             else if (groupType == 0 && labelType == "DIAL" && readDialogue)
                 ReadInfoEffects(fs, contentSize, dialogueInfos); // descend DIAL -> Topic Children -> INFO (Phase B)
             else if (groupType == 0 && labelType is "NPC_" or "CREA" && readActors)
@@ -224,11 +227,18 @@ public sealed class TesPlugin
         }
 
         // Link each quest to its SCPT script's GameMode block + local-variable names (the startup code; ROADMAP
-        // §6 #16). The QUST and its SCPT live in the same plugin, so this is a plain plugin-local lookup.
-        if (scripts.Count > 0)
-            for (var i = 0; i < quests.Count; i++)
-                if (quests[i].ScriptFormId != 0 && scripts.TryGetValue(quests[i].ScriptFormId, out var s))
-                    quests[i] = quests[i] with { GameModeScript = s.GameMode, LocalVars = s.Locals };
+        // §6 #16) and the binary SLSD/SCVR var table (slot index -> name; ROADMAP §6 #3). The QUST and its SCPT
+        // live in the same plugin, so these are plain plugin-local lookups.
+        for (var i = 0; i < quests.Count; i++)
+        {
+            var sfid = quests[i].ScriptFormId;
+            if (sfid == 0)
+                continue;
+            if (scripts.TryGetValue(sfid, out var s))
+                quests[i] = quests[i] with { GameModeScript = s.GameMode, LocalVars = s.Locals };
+            if (scriptVarNames.TryGetValue(sfid, out var vn))
+                quests[i] = quests[i] with { LocalVarNames = vn };
+        }
 
         return new TesPlugin(fileName, masters, forms, quests, dialogueInfos, counterIncrements, externalQuestEffects,
             actorScripts.Select(kv => (kv.Key, kv.Value)).ToList(),
@@ -433,6 +443,7 @@ public sealed class TesPlugin
         Stream fs, long contentSize, bool localized,
         List<(uint, string, string, int, int)> forms, List<QuestDefinition> quests,
         Dictionary<uint, (string GameMode, List<string> Locals)> scripts,
+        Dictionary<uint, IReadOnlyDictionary<int, string>> scriptVarNames,
         List<CounterIncrement> counterIncrements,
         List<ExternalQuestEffect> externalQuestEffects,
         List<(string QuestEdid, string RefEdid)> completionEnables)
@@ -492,6 +503,11 @@ public sealed class TesPlugin
                                 foreach (var q in completes)
                                     completionEnables.Add((q, refEdid));
                     }
+                // Binary var table: an ordered run of SLSD (slot index in its leading u32) each followed by its
+                // SCVR (the variable name). Pairs the persisted QuestScriptVars (keyed by slot) to source names.
+                var varNames = ReadScriptVarNames(subs);
+                if (varNames.Count > 0)
+                    scriptVarNames[formId] = varNames;
                 continue;
             }
 
@@ -790,6 +806,29 @@ public sealed class TesPlugin
         return locals;
     }
 
+    /// <summary>Reads a <c>SCPT</c>'s binary local-variable table — the ordered <c>SLSD</c>(slot index in its
+    /// leading u32)/<c>SCVR</c>(zstring name) pairs — into a slot-index → name map (ROADMAP §6 #3). This is the
+    /// table the persisted <see cref="QuestScriptVars"/> block is keyed by (FNV stores each script local by its
+    /// SLSD slot, not its name), so it's what turns an indexed var dump into named vars. Defensive: a stray
+    /// <c>SCVR</c> with no preceding <c>SLSD</c>, or a short <c>SLSD</c>, is skipped.</summary>
+    private static IReadOnlyDictionary<int, string> ReadScriptVarNames(List<(string Type, byte[] Data)> subs)
+    {
+        var map = new Dictionary<int, string>();
+        int? pendingIndex = null;
+        foreach (var (type, sub) in subs)
+        {
+            if (type == "SLSD" && sub.Length >= 4)
+                pendingIndex = (int)BinaryPrimitives.ReadUInt32LittleEndian(sub.AsSpan(0, 4));
+            else if (type == "SCVR" && pendingIndex is { } idx)
+            {
+                if (ZString(sub) is { Length: > 0 } name)
+                    map[idx] = name;
+                pendingIndex = null;
+            }
+        }
+        return map;
+    }
+
     /// <summary>R&amp;D (ROADMAP §6 #16): dump the raw subrecords of one <c>QUST</c> record from a plugin file,
     /// matched by <b>plugin-local</b> FormID. Returns each subrecord's signature, length, and (for text fields)
     /// decoded text — used to discover whether FNV masters retain stage result-script <b>source text</b>
@@ -976,7 +1015,8 @@ public enum QuestFunction { GetQuestRunning = 56, GetStage = 58, GetStageDone = 
 public sealed record QuestDefinition(
     uint FormId, IReadOnlyList<QuestStageDef> Stages, IReadOnlyList<QuestObjectiveDef> Objectives,
     byte DataFlags = 0, string? Name = null, string? Edid = null,
-    uint ScriptFormId = 0, string? GameModeScript = null, IReadOnlyList<string>? LocalVars = null)
+    uint ScriptFormId = 0, string? GameModeScript = null, IReadOnlyList<string>? LocalVars = null,
+    IReadOnlyDictionary<int, string>? LocalVarNames = null)
 {
     /// <summary>The quest's <c>DATA</c> "Start Game Enabled" flag (bit0): the engine starts these at game load,
     /// so a Start-Game-Enabled quest with a displayed objective shows in the Pip-Boy with no save delta.</summary>

@@ -170,6 +170,30 @@ public class PluginDatabaseTests
         }
     }
 
+    [Fact]
+    public void Quest_script_var_names_are_read_from_the_SCPT_SLSD_SCVR_table()
+    {
+        // ROADMAP §6 #3: the persisted QuestScriptVars block is keyed by SLSD slot index; the source name lives in
+        // the masters' SCPT SLSD(index)/SCVR(name) pairs. A QUST links to its SCPT via SCRI.
+        using var dir = new TempDataFolder();
+        byte[] Slsd(uint index) { var d = new byte[24]; BinaryPrimitives.WriteUInt32LittleEndian(d, index); return d; }
+        byte[] Scvr(string name) => Encoding.ASCII.GetBytes(name + "\0");
+        byte[] U32le(uint v) { var d = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(d, v); return d; }
+
+        dir.Write("FalloutNV.esm", EsmBuilder.Plugin([],
+            new TestRecord("SCPT", 0x00050001, Edid: "TestQuestScript", Full: null,
+                Subs: [("SLSD", Slsd(2)), ("SCVR", Scvr("DoOnceFlag")), ("SLSD", Slsd(3)), ("SCVR", Scvr("TimerVar"))]),
+            new TestRecord("QUST", 0x00050010, Edid: "TestQuest", Full: "Test Quest",
+                Subs: [("DATA", [0x01]), ("SCRI", U32le(0x00050001))])));
+
+        var db = PluginDatabase.Build(["FalloutNV.esm"], dir.Path);
+
+        Assert.Equal("DoOnceFlag", db.QuestScriptVarName(0x00050010, 2));
+        Assert.Equal("TimerVar", db.QuestScriptVarName(0x00050010, 3));
+        Assert.Null(db.QuestScriptVarName(0x00050010, 9));   // unknown slot
+        Assert.Null(db.QuestScriptVarName(0x00059999, 2));   // unknown quest
+    }
+
     [Theory]
     [InlineData("FalloutNV.esm", "Fallout: New Vegas")]      // official table
     [InlineData("GunRunnersArsenal.esm", "Gun Runners' Arsenal")]
