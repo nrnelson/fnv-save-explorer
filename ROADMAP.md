@@ -47,7 +47,7 @@ quicksave). The test theory auto-discovers them (and a local `samples/`) and ski
 CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setstat`, `formids`,
 `findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `inventory`, `setcount`,
 `setcondition`, `names`, `notes`, `perks`, `reputation`, `setreputation`, `player`, `setlevel`, `caps`, `setcaps`, `karma`, `xp`, `setkarma`, `setxp`, `gdwalk`, `setglobal`, `diff`, plus
-R&D helpers `walk`, `survey`, `cfwalk`, `gddump`, `gdscan`, `recid`, `findname`, `refdump`, `edlscan`, `invsig`, `notescan`, `resolve`, `idiff`, `fdiff`, `find`, `irefscan`.
+R&D helpers `walk`, `survey`, `cfwalk`, `gddump`, `gdscan`, `gdtypescan`, `recid`, `findname`, `refdump`, `edlscan`, `invsig`, `notescan`, `resolve`, `idiff`, `fdiff`, `find`, `irefscan`.
 Run with no args to list them. (`edlscan <dir>` aggregates the modded ExtraDataList grammar + a deterministic-path
 tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory signature for byte-identical-decode checks — §4i;
 `notescan <dir>` aggregates the read-note markers — flag-value + `0x1F`→NOTE + inventory-reference tallies — §4k.1.)
@@ -153,13 +153,18 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`, the new `0x07`/`0x09`/`0x0A` fields),
    decode the remaining `0x00`/`0x0A` delimited script/actor variants, and fold the QUST stage/objective decode
    (§6 #3) into the walk. See the controlled-diff shopping list below.
-2. **GlobalData full type coverage.** ◑ *Partly done* — type **3 Global Variables** is now fully decoded +
+2. **GlobalData full type coverage.** ◑ *Mostly done* — type **3 Global Variables** is fully decoded +
    editable (§4c, `GlobalDataDecoder`; deterministic on all 607 saves), type **0** Misc Stats and type **2**
-   registry structure were already decoded, and types **1/4/6** are rendered as structural `0x7C` token trees
-   (boundaries + primitive kinds + resolved refIDs) by `gdwalk`. **Remaining:** semantically name the type-1/4/6
-   fields (needs §7 controlled diffs), decode types **5/7–11** (still `unknown[n]`), and pin the type-2 registry
-   status codes — only `1`=death is confirmed; `gdscan`'s histogram shows `2–7` plus rare `9`/`11`, all
-   semantics-unknown (need a controlled diff, "label, don't guess").
+   registry structure were already decoded, and **every other table-1 type now has visible structure** (new
+   corpus-alignment pass, §4c). **Type 11** = a constant 4-byte `[ref:3 BE][7C]` single reference (shape 692/692,
+   `DecodeSingleRef`); **type 7** ("Audio") = a `[u8 count][7C]` list, empty on 689/692 (`TryDecodeAudio`); both
+   shape-validated by `gdscan`. Types **1/4/5/6/8/9/10** render as structural `0x7C` token trees (boundaries +
+   primitive kinds + resolved refIDs + ASCII strings) by `gdwalk` — notably **type 10** holds radio music-track
+   paths and **type 9** holds 12-byte position runs + item refs. New diagnostic: `gdtypescan <dir>` (per-type
+   length/delimiter/leading-byte/vsval-stride survey across a corpus). **Remaining (all SEMANTICS, need §7
+   controlled diffs):** name the type-1/4/5/6/8/9/10 fields and type 7's rare entry grammar; pin the type-2 registry
+   status codes — only `1`=death is confirmed; `gdscan`'s histogram shows `2–7` plus rare `9`/`11`, semantics-unknown.
+   The separate `GlobalData3` type-1000 record (its own FLT section) is still undecoded — adjacent future work.
 3. **Quest / Pip-Boy interpreter** (former #16) — now a *consumer* of the decode, not bespoke probes.
    Remaining recall needs either the editor-ref→dead-instance binding (creature kills) or more
    ground-truth oracles; the walls are catalogued in DECISIONS.md. Smaller wins: map the QUST var

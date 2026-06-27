@@ -127,10 +127,73 @@ public class GlobalDataTests
         Assert.Contains(lines, l => l.Contains("count = 1"));
         Assert.Contains(lines, l => l.Contains("NVDLC04Act2XP") && l.Contains("0.4"));
 
-        // An undecoded type (e.g. 7) is one honest unknown[n] gap, never silently skipped.
-        var gap = GlobalDataDecoder.Walk(7, [0x00, 0x7C]).ToList();
+        // A type with no decoder (e.g. 99 — outside the table-1 0-11 range) is one honest unknown[n] gap,
+        // never silently skipped.
+        var gap = GlobalDataDecoder.Walk(99, [0x00, 0x7C]).ToList();
         Assert.Single(gap);
         Assert.Contains("unknown[2]", gap[0]);
+    }
+
+    [Fact]
+    public void DecodeSingleRef_type11_reads_the_3byte_ref_and_consumes_all_4_bytes()
+    {
+        // Type 11 (§4c): [refID:3 BE][7C] — a constant 4-byte single reference.
+        var refId = GlobalDataDecoder.DecodeSingleRef([0x00, 0x01, 0xC7, 0x7C], out var consumed);
+        Assert.Equal(0x0001C7, refId);
+        Assert.Equal(4, consumed);
+
+        // Without the trailing delimiter the shape doesn't hold -> null (caller renders an unknown gap).
+        Assert.Null(GlobalDataDecoder.DecodeSingleRef([0x00, 0x01, 0xC7, 0x00], out _));
+
+        // Walk resolves + names the ref.
+        var lines = GlobalDataDecoder.Walk(11, [0x00, 0x01, 0xC7, 0x7C], _ => 0x00000007, _ => "PlayerBase").ToList();
+        Assert.Contains(lines, l => l.Contains("ref") && l.Contains("PlayerBase"));
+    }
+
+    [Fact]
+    public void TryDecodeAudio_type7_reads_the_count_prefix_and_sizes_the_empty_list()
+    {
+        // Type 7 (§4c): [u8 count][7C] + count entries. The empty list (`00 7C`) is the form on 689/692 saves.
+        Assert.True(GlobalDataDecoder.TryDecodeAudio([0x00, 0x7C], out var count, out var consumed));
+        Assert.Equal(0, count);
+        Assert.Equal(2, consumed);                 // empty list = exactly the 2-byte prefix
+
+        // A non-empty body keeps the whole payload (entry grammar left to the structural token walk).
+        Assert.True(GlobalDataDecoder.TryDecodeAudio([0x04, 0x7C, 0x01, 0x02], out var c2, out var consumed2));
+        Assert.Equal(4, c2);
+        Assert.Equal(4, consumed2);
+
+        // Not the count-prefixed shape (no delimiter after the count) -> false.
+        Assert.False(GlobalDataDecoder.TryDecodeAudio([0x00, 0x00], out _, out _));
+    }
+
+    [Fact]
+    public void Walk_renders_printable_ascii_tokens_as_strings()
+    {
+        // Type 10 holds music-track paths; the token walk must surface them readably rather than as hex.
+        var path = "data\\sound\\songs"u8.ToArray();
+        var d = new List<byte> { 0x00, 0x7C };
+        d.AddRange(path); d.Add(0x7C);
+        var lines = GlobalDataDecoder.Walk(10, [.. d]).ToList();
+        Assert.Contains(lines, l => l.Contains("\"data\\sound\\songs\""));
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_type7_and_type11_shapes_hold(string path)
+    {
+        var save = FalloutSave.Load(path);
+
+        // Type 11: the [ref:3][7C] shape holds and consumes the whole 4-byte payload on every real save.
+        var g11 = save.GlobalDataTable1.FirstOrDefault(g => g.Type == 11);
+        Assert.NotNull(g11);
+        Assert.NotNull(GlobalDataDecoder.DecodeSingleRef(g11!.Data, out var c11));
+        Assert.Equal(g11.Data.Length, c11);
+
+        // Type 7: the count-prefixed Audio shape holds on every real save.
+        var g7 = save.GlobalDataTable1.FirstOrDefault(g => g.Type == 7);
+        Assert.NotNull(g7);
+        Assert.True(GlobalDataDecoder.TryDecodeAudio(g7!.Data, out _, out _));
     }
 
     [Theory]

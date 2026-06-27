@@ -15,11 +15,13 @@ if (args.Length < 2)
           fnvsave hex   <save.fos> <offset> [len]   Hex-dump bytes at an absolute offset (0x.. ok)
           fnvsave globals <save.fos>          List global data table 1 records (types 0-11)
           fnvsave gdwalk <save.fos> <type> [dataDir]   Field-tree decode of a GlobalData record (§4c): type 3 =
-                                              Global Variables (named GLOB + value); 0/2 structural; 1/4/6 token tree
+                                              Global Variables (named GLOB + value); 0/2 + 7/11 decoded; 1/4/5/6/8/9/10 token tree
           fnvsave setglobal <in.fos> <out.fos> <name|formId> <value> [dataDir]   Edit a global variable's value
                                               (§4c; same-length float splice; name = GLOB editor id substring)
           fnvsave gdscan <dir>                Walk every .fos in a folder and self-validate the GlobalData decoders
-                                              (type-3 byte accounting + the type-2 status-code histogram, §4c)
+                                              (type-3 byte accounting + type-7/11 shape + the type-2 status histogram, §4c)
+          fnvsave gdtypescan <dir> [type]     Corpus-alignment survey of the GlobalData table-1 types (§6 #2):
+                                              per-type length/0x7C-delimiter/leading-byte/vsval-stride distribution
           fnvsave stats <save.fos>            Show decoded Misc Stats counters
           fnvsave formids <save.fos> [n]      Show the FormID array (iref -> FormID)
           fnvsave findplayer <save.fos>       Locate the player change forms via the FormID array
@@ -98,7 +100,7 @@ var command = args[0];
 var path = args[1];
 
 // Most commands take a save file; `edlscan`/`invsig`/`notescan` take a folder of saves.
-if (command is "edlscan" or "invsig" or "notescan" or "gdscan" or "q7corpus")
+if (command is "edlscan" or "invsig" or "notescan" or "gdscan" or "gdtypescan" or "q7corpus")
 {
     if (!Directory.Exists(path))
     {
@@ -157,6 +159,11 @@ try
             return SetGlobal(path, args[2], args[3], float.Parse(args[4]), args.Length > 5 ? args[5] : null);
         case "gdscan":
             GdScan(path);
+            break;
+        case "gdtypescan":
+            // ROADMAP §6 #2: corpus-alignment diagnostic for the undecoded GlobalData table-1 types.
+            //   gdtypescan <dir> [type]   aggregate structure of types 5/7-11 (or just <type>) across a save folder
+            GdTypeScan(path, args.Length > 2 ? (int)ParseOffset(args[2]) : (int?)null);
             break;
         case "deaths":
             Deaths(FalloutSave.Load(path), path,
@@ -699,6 +706,7 @@ static void GdScan(string dir)
     var statusHist = new SortedDictionary<int, long>();
     int saves = 0, t3Saves = 0, t3Clean = 0, t3UnderReads = 0;
     long t3Vars = 0;
+    int t7Saves = 0, t7Shape = 0, t7Empty = 0, t11Saves = 0, t11Shape = 0;
     foreach (var file in files)
     {
         FalloutSave s;
@@ -713,15 +721,65 @@ static void GdScan(string dir)
             if (consumed == g3.Data.Length) t3Clean++;
             if (consumed < g3.Data.Length) t3UnderReads++;   // decoded fewer bytes than the payload (the failure mode)
         }
+        // ROADMAP §6 #2 — structural-shape validation for the newly decoded table-1 types.
+        var g7 = s.GlobalDataTable1.FirstOrDefault(x => x.Type == 7);
+        if (g7 is not null)
+        {
+            t7Saves++;
+            if (GlobalDataDecoder.TryDecodeAudio(g7.Data, out var c7, out _)) { t7Shape++; if (c7 == 0) t7Empty++; }
+        }
+        var g11 = s.GlobalDataTable1.FirstOrDefault(x => x.Type == 11);
+        if (g11 is not null)
+        {
+            t11Saves++;
+            if (GlobalDataDecoder.DecodeSingleRef(g11.Data, out _) is not null) t11Shape++;
+        }
         foreach (var r in s.StateChangedRefs())
             statusHist[r.Status] = statusHist.GetValueOrDefault(r.Status) + 1;
     }
     Console.WriteLine($"gdscan: {saves} saves in {dir}");
     Console.WriteLine($"  type 3 (Global Variables): {t3Saves} saves, {t3Vars:N0} variables; " +
                       $"clean byte-accounting {t3Clean}/{t3Saves}, under-reads {t3UnderReads}");
+    Console.WriteLine($"  type 7 (Audio list): {t7Saves} saves, count-prefixed shape {t7Shape}/{t7Saves}, empty {t7Empty}/{t7Saves}");
+    Console.WriteLine($"  type 11 (single ref): {t11Saves} saves, [ref:3][7C] shape {t11Shape}/{t11Saves}");
     Console.WriteLine("  type 2 (state-changed registry) status-code histogram:");
     foreach (var (code, n) in statusHist)
         Console.WriteLine($"    status {code,2}: {n,8:N0}{(code == 1 ? "   (death — pinned, §4c)" : "   (unknown — needs a controlled diff)")}");
+}
+
+static void GdTypeScan(string dir, int? onlyType)
+{
+    // ROADMAP §6 #2 — corpus-alignment diagnostic for the undecoded GlobalData table-1 types (5, 7-11).
+    // For each target type, aggregate across every save: how many carry it, the payload-length distribution
+    // (constant -> fixed struct; variable -> list/token tree), the 0x7C delimiter count (the token/list tell),
+    // the leading-byte signature, and a vsval-count + fixed-stride probe (the type-3 shape: len = vlen+1+k*count).
+    int[] targets = onlyType is int t ? [t] : [1, 4, 5, 6, 7, 8, 9, 10, 11];
+    var files = Directory.EnumerateFiles(dir, "*.fos", SearchOption.AllDirectories).OrderBy(f => f).ToList();
+
+    var agg = targets.ToDictionary(x => x, _ => new GdTypeAgg());
+    var saves = 0;
+    foreach (var file in files)
+    {
+        FalloutSave s;
+        try { s = FalloutSave.Load(file); } catch { continue; }
+        saves++;
+        foreach (var ty in targets)
+        {
+            var rec = s.GlobalDataTable1.FirstOrDefault(x => x.Type == ty);
+            if (rec is null) continue;
+            agg[ty].Add(rec.Data);
+        }
+    }
+
+    Console.WriteLine($"gdtypescan: {saves} saves in {dir}");
+    foreach (var ty in targets)
+    {
+        var a = agg[ty];
+        Console.WriteLine();
+        Console.WriteLine($"== GlobalData type {ty} == present in {a.Present}/{saves} saves");
+        if (a.Present == 0) continue;
+        a.Report();
+    }
 }
 
 static void Stats(FalloutSave s)
@@ -2946,4 +3004,77 @@ static int SetLevel(string inPath, string outPath, uint level)
         ? "OK: edit applied, file size unchanged, still parses."
         : "FAIL: edit did not verify.");
     return reloaded.PlayerLevel == level && before.Length == after.Length ? 0 : 4;
+}
+
+// ROADMAP §6 #2 — per-type corpus aggregate for the GlobalData table-1 structure diagnostic (`gdtypescan`).
+sealed class GdTypeAgg
+{
+    public int Present;
+    private readonly SortedSet<int> _lengths = new();
+    private int _minLen = int.MaxValue, _maxLen;
+    private long _delimMin = long.MaxValue, _delimMax;
+    private readonly Dictionary<string, int> _lead = new();          // first-8-bytes signature -> count
+    private readonly SortedDictionary<int, int> _strideHits = new();  // k where len == vlen+1+k*count fits cleanly
+    private long _vsvalCountSum;
+    private int _vsvalSamples;
+    private byte[]? _example;
+    private int _exampleLen = -1;
+
+    public void Add(byte[] d)
+    {
+        Present++;
+        _lengths.Add(d.Length);
+        _minLen = Math.Min(_minLen, d.Length);
+        _maxLen = Math.Max(_maxLen, d.Length);
+        var delim = d.Count(b => b == 0x7C);
+        _delimMin = Math.Min(_delimMin, delim);
+        _delimMax = Math.Max(_delimMax, delim);
+
+        var lead = string.Join(' ', d.Take(8).Select(x => x.ToString("X2")));
+        _lead[lead] = _lead.GetValueOrDefault(lead) + 1;
+
+        // vsval-count + fixed-stride probe (the type-3 grammar: [vsval count][7C] then count*[k bytes]).
+        if (d.Length > 0)
+        {
+            var count = FnvSaveExplorer.Core.ReferenceChangeForm.ReadVsval(d, 0, out var vlen);
+            if (count > 0 && count < 1_000_000)
+            {
+                _vsvalCountSum += count; _vsvalSamples++;
+                var body = d.Length - vlen - (vlen < d.Length && d[vlen] == 0x7C ? 1 : 0);
+                if (body > 0 && body % count == 0)
+                {
+                    var k = (int)(body / count);
+                    if (k is > 0 and <= 64) _strideHits[k] = _strideHits.GetValueOrDefault(k) + 1;
+                }
+            }
+        }
+
+        // Keep the smallest non-trivial example for an eyeball hex dump.
+        if (d.Length >= 4 && (_example is null || d.Length < _exampleLen))
+        {
+            _example = d; _exampleLen = d.Length;
+        }
+    }
+
+    public void Report()
+    {
+        var constant = _lengths.Count == 1;
+        Console.WriteLine($"   length: {(constant ? $"CONSTANT {_minLen}" : $"variable {_minLen}..{_maxLen}, {_lengths.Count} distinct")}");
+        if (!constant && _lengths.Count <= 12)
+            Console.WriteLine($"     lengths: {string.Join(", ", _lengths)}");
+        Console.WriteLine($"   0x7C delimiters: {(_delimMin == _delimMax ? _delimMin.ToString() : $"{_delimMin}..{_delimMax}")}");
+        if (_vsvalSamples > 0)
+            Console.WriteLine($"   vsval[0] count: avg {_vsvalCountSum / (double)_vsvalSamples:N1} over {_vsvalSamples} saves");
+        if (_strideHits.Count > 0)
+            Console.WriteLine($"   stride fit (len==vlen+1+k*count): {string.Join(", ", _strideHits.Select(kv => $"k={kv.Key}:{kv.Value}x"))}");
+        Console.WriteLine("   top leading 8-byte signatures:");
+        foreach (var (sig, n) in _lead.OrderByDescending(kv => kv.Value).Take(5))
+            Console.WriteLine($"     {n,5}x  {sig}");
+        if (_example is not null)
+        {
+            var take = Math.Min(_example.Length, 64);
+            Console.WriteLine($"   smallest example ({_exampleLen} B), first {take}:");
+            Console.WriteLine("     " + string.Join(' ', _example.Take(take).Select(x => x.ToString("X2"))));
+        }
+    }
 }

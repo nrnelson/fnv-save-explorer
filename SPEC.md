@@ -66,10 +66,13 @@ the body copy lives in the player-actor change form, `[u16 len][7C][name][7C]`, 
 Table 1 holds 12 records, types 0–11: `0`=Misc Stats, `1`=Player Location, `2`=TES, `3`=Global
 Variables (large), `4`=Created Objects, `6`=Weather, … (5, 7–11 unlabeled). **Candidate labels (UESP Skyrim
 spec, §8a — verify; FNV's set differs from Skyrim's):** `5`=Effects, `7`=Audio, `8`=SkyCells; 9–11 are
-FNV-specific (Skyrim moves higher categories into a separate table).
+FNV-specific (Skyrim moves higher categories into a separate table). Corpus alignment over all 692 saves
+(`gdtypescan <dir>`) confirms the *structure* of every type; semantic field names still need §7 controlled
+diffs. Note FNV's music/radio state lands in **type 10** (track paths), not the Skyrim "Audio" slot — so the
+UESP labels are hints, not gospel.
 
-**Decode-coverage map** (`Core/GlobalDataDecoder.cs`; rendered by the CLI `gdwalk <save> <type>`, self-validated
-across all 607 saves by `gdscan <dir>`):
+**Decode-coverage map** (`Core/GlobalDataDecoder.cs`; rendered by the CLI `gdwalk <save> <type>`; structure
+surveyed by `gdtypescan <dir>` and the shapes self-validated across all 692 saves by `gdscan <dir>`):
 
 | Type | Label | Status | Layout |
 |---|---|---|---|
@@ -78,8 +81,13 @@ across all 607 saves by `gdscan <dir>`):
 | 2 | TES (state-changed ref registry) | ✅ decoded; codes ◑ | `[vsval count][7C]` + count×`[ref:3 BE][7C][u16 status][7C]` + tail; status `1`=death pinned, `2–7`/`9`/`11` unknown |
 | 3 | **Global Variables** | ✅ **decoded + editable** | `[vsval count][7C]` + count×`[ref:3 BE][7C][value:f32 LE][7C]` (9 B/entry); see below |
 | 4 | Created Objects | ◑ structural | `0x7C` token tree; fields not yet named |
+| 5 | (Effects?) | ◑ structural | `[u32 count][7C]` + `0x7C` token tree (count + delimited floats); fields not yet named |
 | 6 | Weather | ◑ structural | `0x7C` token tree (weather refID + transition floats); fields not yet named |
-| 5, 7–11 | (unlabeled) | ✗ `unknown[n]` | not yet decoded — left as one honest gap |
+| 7 | (Audio?) | ✅ shape decoded | `[u8 count][7C]` + count entries; **empty on 689/692 saves** (`00 7C`), so the entry grammar is rendered as a token tree on the 3 modded saves that carry one |
+| 8 | (SkyCells?) | ◑ structural | **constant 71 B** `0x7C` token struct (leading 3-byte refIDs + floats); fields not yet named |
+| 9 | (FNV-specific) | ◑ structural | `0x7C` token tree (12-byte 3-float position runs + resolvable refIDs, e.g. carried items); fields not yet named |
+| 10 | (FNV-specific: radio/music) | ◑ structural | `0x7C` token tree; **observed to hold music-track paths** (e.g. `data\sound\songs\radionv\…mp3`) + refIDs; fields not yet named |
+| 11 | (FNV-specific) | ✅ decoded | **constant 4 B** `[ref:3 BE][7C]` — a single reference, stable per load order (vanilla/base `0x0000DB`, Extended `0x0001C7`); resolved but meaning unconfirmed |
 
 **Misc Stats (type 0):** `u32 count, 0x7C, then count x (u32 value, 0x7C)` — Pip-Boy counters
 (quests/kills/locations…). Positional (no names stored). Decoded + editable.
@@ -93,6 +101,16 @@ on every save, **0 under-reads**, ~250k variables decoded). A value is a safe sa
 (`FalloutSave.TrySetGlobalVariable`, CLI `setglobal`, GUI Globals tab; round-trip byte-identical). The status
 codes in the type-2 registry beyond `1`=death stay unlabelled — `gdscan`'s histogram counts each code but their
 semantics need a controlled diff (§7), per "label, don't guess".
+
+**Types 5 / 7–11 (corpus-alignment pass, autonomous — §6 #2):** all six split cleanly on `0x7C`, so none remains a
+blind `unknown[n]`; each is now a labeled structural token tree (boundaries + primitive kind + resolved refIDs),
+with two promoted to named decodes. **Type 11** is a constant 4-byte `[ref:3 BE][7C]` single reference — shape
+holds 692/692, value stable per load order — `DecodeSingleRef`. **Type 7** (UESP "Audio") is a `[u8 count][7C]`
+count-prefixed list, empty (`00 7C`) on 689/692 (only 3 VNV-Extended saves carry a non-empty body) — `TryDecodeAudio`;
+both validated by `gdscan`. The token walk now also renders all-printable-ASCII tokens as quoted strings, which
+surfaces **type 10's music-track paths** (`data\sound\songs\radionv\…mp3`) and shows **type 8** as a fixed 71-byte
+struct of leading refIDs + floats and **type 9** as 12-byte 3-float position runs interleaved with resolvable refIDs.
+Naming the individual fields of 5/8/9/10 (and type 7's rare entry grammar) still needs §7 controlled diffs.
 
 ### 4d. FormID array & change forms
 - FormID array: `u32 count` then `count` x `u32` (full FormIDs; high byte = mod index).
