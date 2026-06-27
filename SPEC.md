@@ -68,8 +68,31 @@ Variables (large), `4`=Created Objects, `6`=Weather, … (5, 7–11 unlabeled). 
 spec, §8a — verify; FNV's set differs from Skyrim's):** `5`=Effects, `7`=Audio, `8`=SkyCells; 9–11 are
 FNV-specific (Skyrim moves higher categories into a separate table).
 
+**Decode-coverage map** (`Core/GlobalDataDecoder.cs`; rendered by the CLI `gdwalk <save> <type>`, self-validated
+across all 607 saves by `gdscan <dir>`):
+
+| Type | Label | Status | Layout |
+|---|---|---|---|
+| 0 | Misc Stats | ✅ decoded + editable | `[u32 count][7C]` + count×`[u32 value][7C]` (positional, §6.8) |
+| 1 | Player Location | ◑ structural | `0x7C` token tree (refIDs + a 12-byte 3-float position run); fields not yet named |
+| 2 | TES (state-changed ref registry) | ✅ decoded; codes ◑ | `[vsval count][7C]` + count×`[ref:3 BE][7C][u16 status][7C]` + tail; status `1`=death pinned, `2–7`/`9`/`11` unknown |
+| 3 | **Global Variables** | ✅ **decoded + editable** | `[vsval count][7C]` + count×`[ref:3 BE][7C][value:f32 LE][7C]` (9 B/entry); see below |
+| 4 | Created Objects | ◑ structural | `0x7C` token tree; fields not yet named |
+| 6 | Weather | ◑ structural | `0x7C` token tree (weather refID + transition floats); fields not yet named |
+| 5, 7–11 | (unlabeled) | ✗ `unknown[n]` | not yet decoded — left as one honest gap |
+
 **Misc Stats (type 0):** `u32 count, 0x7C, then count x (u32 value, 0x7C)` — Pip-Boy counters
 (quests/kills/locations…). Positional (no names stored). Decoded + editable.
+
+**Global Variables (type 3):** `[vsval count][7C]` then `count × ([refID:3 BE][7C][value:f32 LE][7C])` — 9 bytes
+per entry, so `payload = vlen + 1 + 9·count` (e.g. vanilla 1803 = 2+1+9·200). Each refID resolves to a `GLOB`
+record; its **editor id** is the variable name (e.g. `GameDaysPassed`, `NVDLC04Act2XP`) — now indexed by
+`TesPlugin` (`GLOB` added to `NamedTypes`). **Self-validating + editable:** the decoder consumes the whole payload
+on **all 607 real saves** (vanilla 30/30, base VNV 98/98, VNV Extended 479/479 — `gdscan`: clean byte-accounting
+on every save, **0 under-reads**, ~250k variables decoded). A value is a safe same-length float splice
+(`FalloutSave.TrySetGlobalVariable`, CLI `setglobal`, GUI Globals tab; round-trip byte-identical). The status
+codes in the type-2 registry beyond `1`=death stay unlabelled — `gdscan`'s histogram counts each code but their
+semantics need a controlled diff (§7), per "label, don't guess".
 
 ### 4d. FormID array & change forms
 - FormID array: `u32 count` then `count` x `u32` (full FormIDs; high byte = mod index).

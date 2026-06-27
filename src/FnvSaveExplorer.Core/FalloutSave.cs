@@ -265,6 +265,28 @@ public sealed class FalloutSave
         return result;
     }
 
+    /// <summary>The decoded GlobalData <b>type-3 Global Variables</b> (ROADMAP §4c): each <c>GLOB</c> reference and
+    /// its current float value, with the value's absolute file offset (the edit point). Empty when there is no
+    /// type-3 record. Resolve a <see cref="GlobalVariable.FormId"/> to a name (e.g. <c>GameDaysPassed</c>) via the
+    /// masters; edit a value with <see cref="TrySetGlobalVariable(uint,float)"/>.</summary>
+    public IReadOnlyList<GlobalVariable> GlobalVariables()
+    {
+        var g = GlobalDataTable1.FirstOrDefault(x => x.Type == 3);
+        return g is null ? [] : GlobalDataDecoder.DecodeGlobalVariables(g.Data, g.DataOffset, ResolveRefId, out _);
+    }
+
+    /// <summary>Stages a same-length edit to the value of the global variable whose <c>GLOB</c> resolves to
+    /// <paramref name="formId"/> (safe — a 4-byte float splice shifts nothing). Returns false if no such global is
+    /// present in the type-3 table.</summary>
+    public bool TrySetGlobalVariable(uint formId, float value)
+    {
+        var v = GlobalVariables().FirstOrDefault(x => x.FormId == formId);
+        if (v.ValueOffset == 0)
+            return false;
+        StageSingle(v.ValueOffset, value);
+        return true;
+    }
+
     /// <summary>The references the type-2 registry records as <b>dead</b> (status 1) — the kill signal a counter/
     /// event-gated quest's completion is re-derived from (ROADMAP §6 #16 Stage 2).</summary>
     public IReadOnlySet<uint> DeadReferences() =>

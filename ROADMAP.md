@@ -46,8 +46,8 @@ quicksave). The test theory auto-discovers them (and a local `samples/`) and ski
 
 CLI commands: `dump`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setstat`, `formids`,
 `findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `inventory`, `setcount`,
-`setcondition`, `names`, `notes`, `perks`, `reputation`, `setreputation`, `player`, `setlevel`, `caps`, `setcaps`, `karma`, `xp`, `setkarma`, `setxp`, `diff`, plus
-R&D helpers `walk`, `survey`, `cfwalk`, `recid`, `findname`, `refdump`, `edlscan`, `invsig`, `notescan`, `resolve`, `idiff`, `fdiff`, `find`, `irefscan`.
+`setcondition`, `names`, `notes`, `perks`, `reputation`, `setreputation`, `player`, `setlevel`, `caps`, `setcaps`, `karma`, `xp`, `setkarma`, `setxp`, `gdwalk`, `setglobal`, `diff`, plus
+R&D helpers `walk`, `survey`, `cfwalk`, `gddump`, `gdscan`, `recid`, `findname`, `refdump`, `edlscan`, `invsig`, `notescan`, `resolve`, `idiff`, `fdiff`, `find`, `irefscan`.
 Run with no args to list them. (`edlscan <dir>` aggregates the modded ExtraDataList grammar + a deterministic-path
 tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory signature for byte-identical-decode checks — §4i;
 `notescan <dir>` aggregates the read-note markers — flag-value + `0x1F`→NOTE + inventory-reference tallies — §4k.1.)
@@ -84,6 +84,7 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 | Same-length edits: level, save#, name | ✅ proven (size unchanged, re-parses) |
 | File Location Table decode | ✅ verified across 16 saves |
 | Global data tables (12 records) | ✅ enumerated |
+| GlobalData type-3 **Global Variables** decode + edit (§4c) | ✅ `[vsval count][7C]` + count×`[ref:3 BE][7C][f32][7C]`; refID→`GLOB` editor-id name (e.g. `GameDaysPassed`); **deterministic on all 607 saves** (`gdscan`: clean byte-accounting, 0 under-reads, ~250k vars). Editable same-length float splice (`TrySetGlobalVariable`, CLI `setglobal`, GUI Globals tab; round-trip byte-identical). New `gdwalk`/`gdscan` CLI; types 1/4/6 rendered as structural token trees, 5/7–11 as `unknown[n]` |
 | Misc Stats decode + edit | ✅ (e.g. stat 1→999 = 2-byte diff) |
 | Misc Stat index names (§6.8) | ✅ 43 positional counters labelled from the FO3/FNV engine misc-stat array (`MiscStatNames`); CLI `stats` + GUI Misc Stats tab show names. Verified vs corpus: count = 43, and idx 35 "Total Things Killed" = idx 2 + idx 3 on every save (test-pinned) |
 | FormID array + iref resolution | ✅ locates player change forms in all 16 |
@@ -104,9 +105,9 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 | Full Pip-Boy notes — read **and** unread (§4k.1 #4) | ✅ `FalloutSave.PipBoyNotes` scans the player inventory change form's note ref-list for refs resolving to `NOTE` records (masters test injected by the caller) ∪ the read markers; flags each read/unread. Cracked by the Saves 38→39→40 controlled triple (additem a note unread → read it). CLI `notes` + GUI Notes tab show the full list with status; Save 492 = 197 notes (171 read + 26 unread, incl. the bold "They Didn't Shoot The Deputy"), no false positives. Read-only (toggling is length-changing, §6.7); real-save + synthetic tests |
 | Note metadata — holodisk-vs-text + base-form attributes (§4k.1 #6) | ✅ proven nothing else is stored per-save (the controlled triple wrote only refs + markers); `TesPlugin` reads the `NOTE` `DATA` media byte, `PluginDatabase.NoteMediaType` → Text/Voice/Sound/Image, surfaced in CLI `notes` + GUI Type column (Save 492: text journals → Text, "Justice Bloc HQ Security Tapes" → Voice); unit-tested |
 | Game-time-stamp churn suppression (§4k.1 #7) | ✅ `idiff … clean` auto-hides the recurring per-reference game-time/havok churn (value-frequency + adjacency clustering), collapsing the notes diff 3,314 → 11 and surfacing the inserted read marker; characterised as per-`REFR` time/havok float updates |
-| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory + caps + karma/XP edit + full notes read/unread + media type + **Perks** §4n + **Reputation** §4o tabs) | ✅ launches + builds |
+| WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory + caps + karma/XP edit + full notes read/unread + media type + **Perks** §4n + **Reputation** §4o + **Globals** §4c (editable) tabs) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion, `idiff … clean` hides game-time churn (§4k.1 #7) |
-| Tests | ✅ 725 xUnit, all green |
+| Tests | ✅ 2,700 xUnit, all green (count grows with the discovered real-save corpus) |
 | Per-stack `0x0D` extra-data decode (§4i) | ✅ the last unsized per-stack type, sized by corpus alignment: `[0D][7C][ref:3][7C][n:u8][7C]` + `n/4` `[u32][f64]` pairs + two fixed fields = `12 + 14·(n/4)` (lengths 12/26/54/68/110 across all 607 saves). `VariablePropertyLength`; over-read strictly ↓ (vanilla 2→0, base 8→4, ext 318→314, **0 under-reads**) + recovers condition/equipped that the old resync dropped after a `0x0D`. ≤512 B resync now a never-hit safety net |
 | Deterministic inventory decoder + condition edit (§4i) | ✅ window removed; condition (`0x25`) editable + equipped/`0x21` surfaced in CLI + GUI; condition edit round-trips |
 | Deterministic inventory list *start* (§4i) | ✅ **deterministic on all 607 real saves** (vanilla 30/30, base VNV 98/98, VNV Extended 479/479): MOVE-skip + the typed-entry ExtraDataList walk (variable order + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor** for bit2/bit10 havok-physics records → the **`vsval` stack count** → first item. The §4g scan is now an unused safety net. vsval self-validates (decoded ≥ vsval, **0 under-reads**); verified **display byte-identical** across all 607 except **35 endgame inventories this *fixed* (empty → full)** |
@@ -116,7 +117,8 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 
 **Editable today:** level, save number, name (same-length), Misc Stats, full SPECIAL, stored skill
 modifications (§4e), inventory stack counts (§4g), **item condition/health (§4i)**, **caps (§6.4 — the
-`0x0000000F` stack)**, **karma + XP (§4j)**, **faction reputation fame/infamy (§4o)** — all safe same-length splices.
+`0x0000000F` stack)**, **karma + XP (§4j)**, **faction reputation fame/infamy (§4o)**, **global variables (§4c — the
+type-3 GlobalData table)** — all safe same-length splices.
 **Length-changing edits** are supported via offset-fixup (`RebuildWithBodyEdits`, §4b): **add a faction
 reputation record** (§4o, CLI `addreputation`), **grant a perk/trait** (§4n, CLI `addperk`), **add an
 inventory stack** (§4g, CLI `additem`), and **rename the player** (CLI `rename` — the first edit that splices the
@@ -151,8 +153,13 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`, the new `0x07`/`0x09`/`0x0A` fields),
    decode the remaining `0x00`/`0x0A` delimited script/actor variants, and fold the QUST stage/objective decode
    (§6 #3) into the walk. See the controlled-diff shopping list below.
-2. **GlobalData full type coverage.** Several numbered types are still only partially decoded; finish
-   them, and pin the type-2 registry status codes (only `1` = death is confirmed; 2–7 unknown).
+2. **GlobalData full type coverage.** ◑ *Partly done* — type **3 Global Variables** is now fully decoded +
+   editable (§4c, `GlobalDataDecoder`; deterministic on all 607 saves), type **0** Misc Stats and type **2**
+   registry structure were already decoded, and types **1/4/6** are rendered as structural `0x7C` token trees
+   (boundaries + primitive kinds + resolved refIDs) by `gdwalk`. **Remaining:** semantically name the type-1/4/6
+   fields (needs §7 controlled diffs), decode types **5/7–11** (still `unknown[n]`), and pin the type-2 registry
+   status codes — only `1`=death is confirmed; `gdscan`'s histogram shows `2–7` plus rare `9`/`11`, all
+   semantics-unknown (need a controlled diff, "label, don't guess").
 3. **Quest / Pip-Boy interpreter** (former #16) — now a *consumer* of the decode, not bespoke probes.
    Remaining recall needs either the editor-ref→dead-instance binding (creature kills) or more
    ground-truth oracles; the walls are catalogued in DECISIONS.md. Smaller wins: map the QUST var

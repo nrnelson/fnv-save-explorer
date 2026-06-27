@@ -91,6 +91,71 @@ public class GlobalDataTests
     }
 
     [Fact]
+    public void GlobalVariables_decode_layout_value_and_edit_offsets()
+    {
+        // Type 3 layout (§4c): [vsval count][7C] then count x ([refID:3 BE][7C][value:f32 LE][7C]).
+        var data = new List<byte> { 0x0C, 0x7C };  // vsval 0x0C >> 2 = 3 variables
+        void Entry(int refId, float value)
+        {
+            data.AddRange([(byte)(refId >> 16), (byte)(refId >> 8), (byte)refId]); data.Add(0x7C);
+            var f = new byte[4]; BinaryPrimitives.WriteSingleLittleEndian(f, value); data.AddRange(f); data.Add(0x7C);
+        }
+        Entry(0x000005, 0.4f);
+        Entry(0x000006, 0f);
+        Entry(0x000007, 100f);
+
+        const int dataFileOffset = 2000;
+        var vars = GlobalDataDecoder.DecodeGlobalVariables([.. data], dataFileOffset, r => (uint)(r + 0x04003600), out var consumed);
+
+        Assert.Equal(3, vars.Count);
+        Assert.Equal([0.4f, 0f, 100f], vars.Select(v => v.Value));
+        Assert.Equal(0x04003605u, vars[0].FormId);          // refId resolved through the supplied resolver
+        Assert.Equal(consumed, data.Count);                  // clean byte-accounting — every payload byte consumed
+        // First value sits after count(1) + 7C(1) + refId(3) + 7C(1) = 6; each entry is 9 bytes.
+        Assert.Equal(dataFileOffset + 6, vars[0].ValueOffset);
+        Assert.Equal(dataFileOffset + 15, vars[1].ValueOffset);
+        Assert.Equal(dataFileOffset + 24, vars[2].ValueOffset);
+    }
+
+    [Fact]
+    public void GlobalDataDecoder_Walk_labels_globals_and_marks_undecoded_types_as_gaps()
+    {
+        var t3 = new List<byte> { 0x04, 0x7C };  // 1 variable
+        t3.AddRange([0x00, 0x00, 0x05]); t3.Add(0x7C);
+        var f = new byte[4]; BinaryPrimitives.WriteSingleLittleEndian(f, 0.4f); t3.AddRange(f); t3.Add(0x7C);
+        var lines = GlobalDataDecoder.Walk(3, [.. t3], _ => 0x04003605, _ => "NVDLC04Act2XP").ToList();
+        Assert.Contains(lines, l => l.Contains("count = 1"));
+        Assert.Contains(lines, l => l.Contains("NVDLC04Act2XP") && l.Contains("0.4"));
+
+        // An undecoded type (e.g. 7) is one honest unknown[n] gap, never silently skipped.
+        var gap = GlobalDataDecoder.Walk(7, [0x00, 0x7C]).ToList();
+        Assert.Single(gap);
+        Assert.Contains("unknown[2]", gap[0]);
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_global_variables_decode_cleanly_and_edit_round_trips(string path)
+    {
+        var save = FalloutSave.Load(path);
+        var g3 = save.GlobalDataTable1.FirstOrDefault(g => g.Type == 3);
+        Assert.NotNull(g3);
+
+        // Self-validation: the decoder must consume the WHOLE type-3 payload (no under-reads) on every real save.
+        var vars = GlobalDataDecoder.DecodeGlobalVariables(g3!.Data, g3.DataOffset, save.ResolveRefId, out var consumed);
+        Assert.Equal(g3.Data.Length, consumed);
+        Assert.NotEmpty(vars);
+
+        // A safe (same-length) global-variable edit must not change file size and must re-parse to the new value.
+        var target = vars.First(v => v.FormId != 0);
+        Assert.True(save.TrySetGlobalVariable(target.FormId, 123.5f));
+        var edited = save.ToBytes();
+        Assert.Equal(save.FileLength, edited.Length);
+        var now = FalloutSave.Parse(edited).GlobalVariables().First(v => v.FormId == target.FormId);
+        Assert.Equal(123.5f, now.Value);
+    }
+
+    [Fact]
     public void MiscStatNames_maps_known_indices_and_is_null_out_of_range()
     {
         Assert.Equal(43, MiscStatNames.Count); // FO3/FNV misc-stat array size

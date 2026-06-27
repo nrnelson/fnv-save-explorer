@@ -205,6 +205,21 @@
                     </StackPanel>
                 </TabItem>
 
+                <TabItem Header="Globals">
+                    <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10" Text="{Binding GlobalsInfo}"/>
+                        <DataGrid ItemsSource="{Binding Globals}" AutoGenerateColumns="False"
+                                  CanUserAddRows="False" HeadersVisibility="Column" FontFamily="Consolas"
+                                  Width="560" HorizontalAlignment="Left" MaxHeight="460">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Global (GLOB)" Binding="{Binding Name}" Width="280" IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="120"/>
+                                <DataGridTextColumn Header="FormID" Binding="{Binding Form}" Width="120" IsReadOnly="True"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </StackPanel>
+                </TabItem>
+
                 <TabItem Header="Quests">
                     <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10" Text="{Binding QuestsInfo}"/>

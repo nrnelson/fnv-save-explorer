@@ -14,6 +14,12 @@ if (args.Length < 2)
           fnvsave probe <save.fos> [count]    Classify File Location Table + dump what offsets point to
           fnvsave hex   <save.fos> <offset> [len]   Hex-dump bytes at an absolute offset (0x.. ok)
           fnvsave globals <save.fos>          List global data table 1 records (types 0-11)
+          fnvsave gdwalk <save.fos> <type> [dataDir]   Field-tree decode of a GlobalData record (§4c): type 3 =
+                                              Global Variables (named GLOB + value); 0/2 structural; 1/4/6 token tree
+          fnvsave setglobal <in.fos> <out.fos> <name|formId> <value> [dataDir]   Edit a global variable's value
+                                              (§4c; same-length float splice; name = GLOB editor id substring)
+          fnvsave gdscan <dir>                Walk every .fos in a folder and self-validate the GlobalData decoders
+                                              (type-3 byte accounting + the type-2 status-code histogram, §4c)
           fnvsave stats <save.fos>            Show decoded Misc Stats counters
           fnvsave formids <save.fos> [n]      Show the FormID array (iref -> FormID)
           fnvsave findplayer <save.fos>       Locate the player change forms via the FormID array
@@ -92,7 +98,7 @@ var command = args[0];
 var path = args[1];
 
 // Most commands take a save file; `edlscan`/`invsig`/`notescan` take a folder of saves.
-if (command is "edlscan" or "invsig" or "notescan" or "q7corpus")
+if (command is "edlscan" or "invsig" or "notescan" or "gdscan" or "q7corpus")
 {
     if (!Directory.Exists(path))
     {
@@ -141,6 +147,16 @@ try
             break;
         case "globals":
             Globals(FalloutSave.Load(path));
+            break;
+        case "gdwalk":
+            GlobalDataWalk(FalloutSave.Load(path), path, (int)ParseOffset(args[2]),
+                args.FirstOrDefault(a => !a.StartsWith("--") && a != command && a != path && a != args[2]));
+            break;
+        case "setglobal":
+            // setglobal <in.fos> <out.fos> <name|formId> <value> [dataDir]  (writes a new file)
+            return SetGlobal(path, args[2], args[3], float.Parse(args[4]), args.Length > 5 ? args[5] : null);
+        case "gdscan":
+            GdScan(path);
             break;
         case "deaths":
             Deaths(FalloutSave.Load(path), path,
@@ -598,8 +614,114 @@ static void Globals(FalloutSave s)
     foreach (var g in s.GlobalDataTable1)
     {
         var name = g.Type < typeNames.Length ? typeNames[g.Type] : $"type {g.Type}";
-        Console.WriteLine($"  type {g.Type,2} ({name,-16})  {g.Data.Length,7:N0} bytes  @ 0x{g.Offset:X}");
+        var extra = g.Type switch
+        {
+            0 => s.MiscStats is { } ms ? $"  ({ms.Stats.Count} counters)" : "",
+            3 => $"  ({s.GlobalVariables().Count} variables)",
+            _ => "",
+        };
+        Console.WriteLine($"  type {g.Type,2} ({name,-16})  {g.Data.Length,7:N0} bytes  @ 0x{g.Offset:X}{extra}");
     }
+}
+
+static void GlobalDataWalk(FalloutSave s, string savePath, int type, string? dataDir)
+{
+    // ROADMAP §4c — field-tree decode of a GlobalData record, mirroring `cfwalk`. Names refIDs via the masters
+    // (GLOB editor ids for type 3, e.g. GameDaysPassed) when the database is available.
+    var g = s.GlobalDataTable1.FirstOrDefault(x => x.Type == (uint)type);
+    if (g is null) { Console.WriteLine($"No GlobalData type {type}."); return; }
+    PluginDatabase? db = null;
+    try { db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath)); } catch { /* names optional */ }
+    Console.WriteLine($"GlobalData type {type}: {g.Data.Length:N0} bytes @ 0x{g.DataOffset:X}");
+    foreach (var line in GlobalDataDecoder.Walk((uint)type, g.Data, s.ResolveRefId, fid => db?.Resolve(fid)))
+        Console.WriteLine($"  {line}");
+}
+
+static int SetGlobal(string inPath, string outPath, string target, float value, string? dataDir)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+    var db = PluginDatabase.ForSave(save, dataDir, GameDataLocator.FindMo2Mods(inPath));
+    var vars = save.GlobalVariables();
+
+    // Resolve the target to a present global's FormID: a hex/decimal FormID match, else a GLOB-name substring.
+    uint formId;
+    if (TryParseFormId(target, out var parsed) && vars.Any(v => v.FormId == parsed))
+        formId = parsed;
+    else
+    {
+        // Prefer an exact (case-insensitive) editor-id match; fall back to a substring match.
+        var exact = vars.Where(v => string.Equals(db.Resolve(v.FormId), target, StringComparison.OrdinalIgnoreCase)).ToList();
+        var matches = exact.Count > 0
+            ? exact
+            : vars.Where(v => db.Resolve(v.FormId) is { } n &&
+                              n.Contains(target, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (matches.Count == 0) { Console.WriteLine($"FAIL: no global variable matches \"{target}\"."); return 4; }
+        if (matches.Count > 1)
+        {
+            Console.WriteLine($"FAIL: \"{target}\" is ambiguous — {matches.Count} matches:");
+            foreach (var m in matches.Take(10)) Console.WriteLine($"  0x{m.FormId:X8} {db.Resolve(m.FormId)} = {m.Value}");
+            return 4;
+        }
+        formId = matches[0].FormId;
+    }
+
+    var old = vars.First(v => v.FormId == formId).Value;
+    if (!save.TrySetGlobalVariable(formId, value))
+    {
+        Console.WriteLine($"FAIL: global 0x{formId:X8} not present in the type-3 table.");
+        return 4;
+    }
+    save.Save(outPath, backup: false);
+
+    var after = File.ReadAllBytes(outPath);
+    var now = FalloutSave.Parse(after).GlobalVariables().FirstOrDefault(v => v.FormId == formId).Value;
+    var label = db.Resolve(formId) ?? $"0x{formId:X8}";
+    Console.WriteLine($"Global {label}: {old} -> {now};  size {before.Length:N0} -> {after.Length:N0}");
+    var ok = now == value && before.Length == after.Length;
+    Console.WriteLine(ok ? "OK: global edit applied, size unchanged, re-parses." : "FAIL: did not verify.");
+    return ok ? 0 : 4;
+}
+
+static bool TryParseFormId(string s, out uint value)
+{
+    s = s.Trim();
+    if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        return uint.TryParse(s.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out value);
+    return uint.TryParse(s, out value);
+}
+
+static void GdScan(string dir)
+{
+    // ROADMAP §4c — self-validate the GlobalData decoders across a save corpus: type-3 byte accounting (decoded
+    // bytes == payload, 0 under-reads) and the type-2 status-code histogram (only code 1 = death is pinned).
+    var files = Directory.EnumerateFiles(dir, "*.fos", SearchOption.AllDirectories).OrderBy(f => f).ToList();
+    var statusHist = new SortedDictionary<int, long>();
+    int saves = 0, t3Saves = 0, t3Clean = 0, t3UnderReads = 0;
+    long t3Vars = 0;
+    foreach (var file in files)
+    {
+        FalloutSave s;
+        try { s = FalloutSave.Load(file); } catch { continue; }
+        saves++;
+        var g3 = s.GlobalDataTable1.FirstOrDefault(x => x.Type == 3);
+        if (g3 is not null)
+        {
+            t3Saves++;
+            var vars = GlobalDataDecoder.DecodeGlobalVariables(g3.Data, g3.DataOffset, s.ResolveRefId, out var consumed);
+            t3Vars += vars.Count;
+            if (consumed == g3.Data.Length) t3Clean++;
+            if (consumed < g3.Data.Length) t3UnderReads++;   // decoded fewer bytes than the payload (the failure mode)
+        }
+        foreach (var r in s.StateChangedRefs())
+            statusHist[r.Status] = statusHist.GetValueOrDefault(r.Status) + 1;
+    }
+    Console.WriteLine($"gdscan: {saves} saves in {dir}");
+    Console.WriteLine($"  type 3 (Global Variables): {t3Saves} saves, {t3Vars:N0} variables; " +
+                      $"clean byte-accounting {t3Clean}/{t3Saves}, under-reads {t3UnderReads}");
+    Console.WriteLine("  type 2 (state-changed registry) status-code histogram:");
+    foreach (var (code, n) in statusHist)
+        Console.WriteLine($"    status {code,2}: {n,8:N0}{(code == 1 ? "   (death — pinned, §4c)" : "   (unknown — needs a controlled diff)")}");
 }
 
 static void Stats(FalloutSave s)

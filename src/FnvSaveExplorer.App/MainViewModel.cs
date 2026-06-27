@@ -147,6 +147,28 @@ public sealed class ReputationRow
     public string Form => $"0x{FormId:X8}";
 }
 
+/// <summary>One GlobalData type-3 global variable (ROADMAP §4c): a named <c>GLOB</c> and its editable float
+/// value (a same-length splice). Mirrors <see cref="SkillRow"/> — <see cref="Value"/> is two-way bound.</summary>
+public sealed class GlobalRow : INotifyPropertyChanged
+{
+    public uint FormId { get; init; }
+    public string Form => $"0x{FormId:X8}";
+
+    /// <summary>The GLOB editor id (e.g. <c>GameDaysPassed</c>), or empty when names aren't resolved.</summary>
+    public string Name { get; init; } = "";
+
+    public float OriginalValue { get; init; }
+
+    private float _value;
+    public float Value
+    {
+        get => _value;
+        set { if (_value != value) { _value = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Value))); } }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+}
+
 /// <summary>One quest in the read-only quest-log view (ROADMAP §6 #10). Its decoded stages and objectives
 /// are flattened into <see cref="Lines"/> for the master-detail row, with summary columns alongside.</summary>
 public sealed class QuestRow
@@ -182,6 +204,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<NoteRow> Notes { get; } = [];
     public ObservableCollection<PerkRow> Perks { get; } = [];
     public ObservableCollection<ReputationRow> Reputation { get; } = [];
+    public ObservableCollection<GlobalRow> Globals { get; } = [];
     public ObservableCollection<QuestRow> Quests { get; } = [];
     public ObservableCollection<MiscStatRow> MiscStats { get; } = [];
 
@@ -239,6 +262,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private string _reputationInfo = "";
     public string ReputationInfo { get => _reputationInfo; private set => Set(ref _reputationInfo, value); }
+
+    private string _globalsInfo = "";
+    public string GlobalsInfo { get => _globalsInfo; private set => Set(ref _globalsInfo, value); }
 
     private string _questsInfo = "";
     public string QuestsInfo { get => _questsInfo; private set => Set(ref _questsInfo, value); }
@@ -344,6 +370,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             PopulateNotes(save, invDb);
             PopulatePerks(save, invDb);
             PopulateReputation(save, invDb);
+            PopulateGlobals(save, invDb);
             PopulateQuests(save, invDb);
 
             MiscStats.Clear();
@@ -390,6 +417,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         PopulateNotes(_save, db);
         PopulatePerks(_save, db);
         PopulateReputation(_save, db);
+        PopulateGlobals(_save, db);
         PopulateQuests(_save, db);
     }
 
@@ -506,6 +534,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
             });
         ReputationInfo = $"{Reputation.Count} faction(s) with standing (fame / infamy, 0–100). Editable via the " +
                          "CLI (setreputation); a faction with both 0 shows no standing in the Pip-Boy.";
+    }
+
+    /// <summary>Fills the Globals grid from GlobalData type 3 (ROADMAP §4c). Named (<c>GLOB</c> editor id) rows
+    /// sort first; each value is an editable same-length float splice (edit a value and Apply, then Save As).</summary>
+    private void PopulateGlobals(FalloutSave save, PluginDatabase db)
+    {
+        Globals.Clear();
+        var vars = save.GlobalVariables();
+        foreach (var v in vars
+                     .Select(v => (v, Name: db.Resolve(v.FormId) ?? ""))
+                     .OrderByDescending(x => x.Name.Length > 0)        // named first
+                     .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(x => x.v.FormId))
+            Globals.Add(new GlobalRow
+            {
+                FormId = v.v.FormId,
+                Name = v.Name,
+                OriginalValue = v.v.Value,
+                Value = v.v.Value,
+            });
+        var named = Globals.Count(g => g.Name.Length > 0);
+        GlobalsInfo = vars.Count == 0
+            ? "This save has no Global Variables table (type 3)."
+            : $"{Globals.Count} global variable(s){(db.Count == 0 ? " — set the Data folder on the Edit tab to name them (GLOB editor ids)." : $", {named} named")}. " +
+              "Edit a Value and click Apply, then Save As (same-length float splice).";
     }
 
     /// <summary>Fills the read-only Quests grid with the <b>computed Pip-Boy quest list</b> (ROADMAP §6 #16):
@@ -639,6 +692,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
             else messages.Add("XP must be a number");
         }
+
+        // Global variables (GlobalData type 3, §4c) — stage only the rows whose value changed (a same-length
+        // float splice). Editing by FormID targets the first matching global, so unchanged rows are left alone.
+        foreach (var g in Globals)
+            if (g.Value != g.OriginalValue && !_save.TrySetGlobalVariable(g.FormId, g.Value))
+                messages.Add($"could not apply global 0x{g.FormId:X8}");
 
         Status = messages.Count == 0
             ? "Edits staged. Use \"Save As…\" to write a new .fos."
