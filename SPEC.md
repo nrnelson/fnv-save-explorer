@@ -859,9 +859,10 @@ change form (record FormID `0x06003E44` — the same record that holds inventory
 FormID-`0x14` ACHR). The array is **6 × float32 on a 5-byte stride** (`[f32][7C]`×6). **Value scale:**
 **`-100.0` = crippled, `-58.0` = healed/uncrippled, `0.0` = undamaged** (each crippled limb flipped `-100→-58` exactly
 once in lockstep with its repair — the decisive single-variable signal). **Partial slot identity** (from
-`mw-limbpost`→`mw-limblegfix`→`mw-limbchestfix`, healing one limb at a time): healing the **leg** cleared the slot at
-base **+0x3AF**, the **chest** cleared base **+0x3A0** → **slot 0 = Torso/Chest, slot 3 = a Leg**; the other four
-slots are unmapped (couldn't cripple a single limb in isolation). All values/identities are **Beadley-only** so far.
+`mw-limbpost`→`mw-limblegfix`→`mw-limbchestfix`, plus `beadley-armlegcripple`→`-legfix`→`-armfix`, healing one limb at
+a time): clearing the **chest** emptied base **+0x3A0**, a **leg** base **+0x3AF** (twice, independently), and an
+**arm** base **+0x3AA** → **slot 0 = Torso, slot 2 = Arm, slot 3 = Leg** (stride-5 indices; slots 1/4/5 unmapped —
+slot 1 is likely Head). All values/identities are **Beadley-only** so far.
 
 **The data-relative offset of the array is NOT constant — it tracks the variable havok-blob size**, shown *within
 Beadley's own saves*: base **data+0x3A0** in the `crippled-*`/`chem-*`/`churn*`/`mw-*` moments, but **data+0x3A6** in
