@@ -94,6 +94,8 @@ if (args.Length < 2)
                                               fields that changed by ≈delta (default 50) — finds XP/karma (R&D §7)
           fnvsave idiff <a.fos> <b.fos> [clean]   Insertion-aware change-form diff (aligns by FormID across an
                                               add/remove); 'clean' hides recurring game-time/havok churn (R&D §7)
+          fnvsave regdiff <a.fos> <b.fos> [dataDir]   Diff the GlobalData type-2 registry (state-changed refs):
+                                              new entries / status-code changes / removals, with names (§6 #2)
         """);
     return 1;
 }
@@ -297,6 +299,9 @@ try
             break;
         case "fdiff":
             FDiff(path, args[2], args.Length > 3 ? float.Parse(args[3]) : 50f, args.Length > 4 ? float.Parse(args[4]) : 0.05f);
+            break;
+        case "regdiff":
+            RegDiff(path, args[2], args.Length > 3 ? args[3] : null);
             break;
         case "find":
             Find(FalloutSave.Load(path), args[2]);
@@ -1998,6 +2003,52 @@ static void FDiff(string pathA, string pathB, float delta, float tol)
         else { ia++; ib++; }
     }
     Console.Error.WriteLine($"{hits} float field(s) changed by ≈{delta}.");
+}
+
+// ROADMAP §6 #2: diff the GlobalData type-2 registry (state-changed refs) between two saves — the lens for the
+// controlled diffs that pin its u16 status codes (only 1 = dead is confirmed today). Reports entries that are new
+// in B, whose status changed A->B, or that vanished, resolving each ref's FormID to a name + record type.
+static void RegDiff(string pathA, string pathB, string? dataDir)
+{
+    var sa = FalloutSave.Load(pathA);
+    var sb = FalloutSave.Load(pathB);
+    var db = PluginDatabase.ForSave(sb, dataDir, GameDataLocator.FindMo2Mods(pathB));
+
+    // Key by the resolved save-space FormID when available (stable across the pair); fall back to the raw refID.
+    static Dictionary<long, int> ByKey(IReadOnlyList<(uint FormId, int RefId, int Status)> es)
+    {
+        var d = new Dictionary<long, int>();
+        foreach (var (formId, refId, status) in es)
+            d[formId != 0 ? formId : unchecked((uint)refId) | 0x1_0000_0000L] = status; // tag refId-keyed entries
+        return d;
+    }
+    var a = ByKey(sa.StateChangedRefs());
+    var b = ByKey(sb.StateChangedRefs());
+
+    string Label(long key)
+    {
+        if ((key & 0x1_0000_0000L) != 0)
+            return $"refId 0x{(int)(key & 0xFFFFFF):X6} (unresolved)";
+        var fid = (uint)key;
+        var name = db.Count > 0 ? db.Resolve(fid) : null;
+        var rt = db.Count > 0 ? db.RecordType(fid) : null;
+        return $"0x{fid:X8} {name ?? "?"}{(rt is null ? "" : $" [{rt}]")}";
+    }
+
+    Console.WriteLine($"type-2 registry: A {a.Count} entries, B {b.Count} entries\n");
+    var added = b.Keys.Where(k => !a.ContainsKey(k)).ToList();
+    var changed = b.Keys.Where(k => a.TryGetValue(k, out var s) && s != b[k]).ToList();
+    var removed = a.Keys.Where(k => !b.ContainsKey(k)).ToList();
+
+    Console.WriteLine($"NEW in B ({added.Count}):");
+    foreach (var k in added.OrderBy(k => b[k]))
+        Console.WriteLine($"    status {b[k],3}   {Label(k)}");
+    Console.WriteLine($"\nSTATUS CHANGED ({changed.Count}):");
+    foreach (var k in changed)
+        Console.WriteLine($"    {a[k],3} -> {b[k],-3}   {Label(k)}");
+    Console.WriteLine($"\nREMOVED from B ({removed.Count}):");
+    foreach (var k in removed.OrderBy(k => a[k]))
+        Console.WriteLine($"    status {a[k],3}   {Label(k)}");
 }
 
 static void Walk(FalloutSave s)
