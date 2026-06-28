@@ -115,5 +115,8 @@ public class PlayerStatsTests
         Check("beadley-leftarmcripple", "Left Arm", -100f);
         Check("beadley-armlegcripple", "Right Arm", -100f);
         Check("beadley-armlegcripple", "Left Leg", -100f);
+        // Cross-character controlled confirmation: a Mace Windu left-leg cripple lands on the SAME slot (183)
+        // at the SAME crippled floor (-100), proving the slot map + scale generalize (ROADMAP §4n part B).
+        Check("macewindu-limbcripple-post", "Left Leg", -100f);
     }
 }

@@ -874,10 +874,11 @@ read + round-trip on real saves.
 
 > **Character note (corrected from an earlier draft):** *every* capture above — `crippled-*`, `chem-*`, `churn*`,
 > **and** the `mw-*` files (the `mw-` prefix is a misnomer) — is **Beadley** (verified via `dump`). An earlier draft
-> wrongly labeled them "Nathan"/"Mace Windu". **Cross-character is now verified anyway** from the existing corpus:
-> the slot-180–185 read returns sane condition values on **three** characters — Beadley (the crippled ground-truth),
-> **Nathan** Save 13 (all `0` = healthy), and **Mace Windu** Save 12 (Left Leg `−10.61`, rest `0`). A misdecode onto
-> wrong bytes would surface as a huge/NaN float; it doesn't. (My earlier "offset shifts with the havok blob /
+> wrongly labeled them "Nathan"/"Mace Windu". **Cross-character is CONTROLLED-confirmed:** a Mace Windu cripple/heal
+> triple (`macewindu-limbcripple-pre`/`-post`/`-healed`) crippled the **Left Leg → exactly slot 183 at −100.0** (same
+> slot + same crippled floor as Beadley), and a stimpak lifted it −100→−46 — proving the slot map *and* the value
+> scale generalize across characters. Sane reads on a third character too (Nathan Save 13: all `0`, healthy). A
+> misdecode onto wrong bytes would surface as a huge/NaN float; it doesn't. (My earlier "offset shifts with the havok blob /
 > data+0x3A6 on Save 146" claim was a **measurement error** — I had used the record *header* offset instead of the
 > *data* offset; via `find`'s true data-relative offset the limbs are at slot 180–185 on Save 146 too. The slot is
 > fixed, like karma's.)
