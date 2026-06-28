@@ -73,6 +73,9 @@ if (args.Length < 2)
           fnvsave xp <save.fos>               Show the player's XP      (§4j)
           fnvsave setkarma <in.fos> <out.fos> <value>  Edit the player's karma (writes a new file)
           fnvsave setxp <in.fos> <out.fos> <value>     Edit the player's XP    (writes a new file)
+          fnvsave limbs <save.fos>           Show the player's 6 limb conditions (§4n; 0=full, -100=crippled)
+          fnvsave setlimb <in.fos> <out.fos> "<limb>" <value>   Edit one limb's condition (0=repaired; new file)
+          fnvsave repairlimbs <in.fos> <out.fos>   Repair all limbs to full (condition 0; writes a new file)
           fnvsave diff <a.fos> <b.fos> [body|cf]   Byte-diff two saves (best on controlled pairs); 'body'
                                               hides header/screenshot churn, 'cf' restricts to change forms
                                               and names the containing record for each differing run
@@ -398,6 +401,13 @@ try
             return SetPlayerStat(path, args[2], "Karma", float.Parse(args[3]), (s, v) => s.TrySetKarma(v), s => s.Karma);
         case "setxp":
             return SetPlayerStat(path, args[2], "XP", float.Parse(args[3]), (s, v) => s.TrySetXp(v), s => s.Xp);
+        case "limbs":
+            Limbs(FalloutSave.Load(path));
+            break;
+        case "setlimb":
+            return SetLimb(path, args[2], args[3], float.Parse(args[4]));
+        case "repairlimbs":
+            return RepairLimbs(path, args[2]);
         case "setreputation":
             // setreputation <in.fos> <out.fos> <factionFormId> <fame> <infamy>  (writes a new file)
             return SetReputation(path, args[2], (uint)ParseOffset(args[3]), float.Parse(args[4]), float.Parse(args[5]));
@@ -1571,6 +1581,60 @@ static void PlayerStat(FalloutSave s, string label, Func<FalloutSave, float?> re
         Console.WriteLine($"{label}: {v:0.###}");
     else
         Console.WriteLine($"{label}: (not located — player reference record/slot not found in this save)");
+}
+
+static void Limbs(FalloutSave s)
+{
+    var limbs = s.PlayerLimbConditions();
+    if (limbs.Count == 0)
+    {
+        Console.WriteLine("Limb conditions not located (player reference record / actor-value array not found).");
+        return;
+    }
+    Console.WriteLine("Player limb condition (§4n; 0 = undamaged, -58 = healed/uncrippled, -100 = crippled):");
+    foreach (var l in limbs)
+    {
+        var state = l.Condition <= -100f ? "CRIPPLED" : l.Condition < 0f ? "damaged" : "ok";
+        Console.WriteLine($"  slot {l.Slot}  {l.Name,-10} {l.Condition,8:0.##}  [{state}]");
+    }
+}
+
+static int SetLimb(string inPath, string outPath, string limb, float value)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+    var old = save.PlayerLimbConditions().FirstOrDefault(l => l.Name.Equals(limb, StringComparison.OrdinalIgnoreCase));
+    if (!save.TrySetLimbCondition(limb, value))
+    {
+        Console.WriteLine($"FAIL: limb \"{limb}\" not located (unknown name, or actor-value array not found). " +
+                          $"Names: {string.Join(", ", ReferenceChangeForm.PlayerLimbNames)}");
+        return 4;
+    }
+    save.Save(outPath, backup: false);
+    var after = File.ReadAllBytes(outPath);
+    var now = FalloutSave.Parse(after).PlayerLimbConditions().First(l => l.Name.Equals(limb, StringComparison.OrdinalIgnoreCase));
+    Console.WriteLine($"{now.Name}: {old.Condition:0.##} -> {now.Condition:0.##};  size {before.Length:N0} -> {after.Length:N0}");
+    var ok = now.Condition == value && before.Length == after.Length;
+    Console.WriteLine(ok ? "OK: limb edit applied, size unchanged, re-parses." : "FAIL: did not verify.");
+    return ok ? 0 : 4;
+}
+
+static int RepairLimbs(string inPath, string outPath)
+{
+    var before = File.ReadAllBytes(inPath);
+    var save = FalloutSave.Parse(before);
+    if (!save.TryRepairAllLimbs())
+    {
+        Console.WriteLine("FAIL: limb array not located in this save.");
+        return 4;
+    }
+    save.Save(outPath, backup: false);
+    var after = File.ReadAllBytes(outPath);
+    var now = FalloutSave.Parse(after).PlayerLimbConditions();
+    Console.WriteLine($"Repaired {now.Count} limbs to 0;  size {before.Length:N0} -> {after.Length:N0}");
+    var ok = now.All(l => l.Condition == 0f) && before.Length == after.Length;
+    Console.WriteLine(ok ? "OK: all limbs full, size unchanged, re-parses." : "FAIL: did not verify.");
+    return ok ? 0 : 4;
 }
 
 static int SetReputation(string inPath, string outPath, uint faction, float fame, float infamy)

@@ -1121,6 +1121,51 @@ public sealed class FalloutSave
     /// player reference record / XP slot wasn't located.</summary>
     public bool TrySetXp(float xp) => TrySetStat(ReferenceChangeForm.PlayerXpSlot, xp);
 
+    // ---- Player limb condition (six floats in the same actor-value array, §4n) ---------------------
+
+    /// <summary>One player limb's condition: its <see cref="Name"/> (e.g. "Left Leg"), the array
+    /// <see cref="Slot"/> (180–185), the current <see cref="Condition"/> (0 = undamaged, −58 = healed,
+    /// −100 = crippled), and the float's absolute file <see cref="ValueOffset"/> (the edit point).</summary>
+    public readonly record struct PlayerLimb(int Slot, string Name, float Condition, int ValueOffset);
+
+    /// <summary>The player's six limb conditions (Torso / Left Arm / Right Arm / Left Leg / Right Leg / Head),
+    /// read from slots 180–185 of the player reference record's actor-value array (§4n). Empty when that
+    /// record/array isn't locatable (same graceful decline as karma/XP). Edit a limb with
+    /// <see cref="TrySetLimbCondition"/> (0 = repaired); the value is a condition/damage figure, not 0–100 HP.</summary>
+    public IReadOnlyList<PlayerLimb> PlayerLimbConditions()
+    {
+        var names = ReferenceChangeForm.PlayerLimbNames;
+        var result = new List<PlayerLimb>(names.Length);
+        for (var i = 0; i < names.Length; i++)
+        {
+            if (PlayerStatOffset(ReferenceChangeForm.PlayerLimbBaseSlot + i) is not { } off)
+                return [];   // array not located — decline wholesale (don't return a partial limb set)
+            var v = BinaryPrimitives.ReadSingleLittleEndian(_raw.AsSpan(off, 4));
+            result.Add(new PlayerLimb(ReferenceChangeForm.PlayerLimbBaseSlot + i, names[i], v, off));
+        }
+        return result;
+    }
+
+    /// <summary>Stages a same-length edit to one limb's condition (match <paramref name="limb"/> by name,
+    /// case-insensitive; 0 = fully repaired). Returns false if the name is unknown or the slot isn't located.</summary>
+    public bool TrySetLimbCondition(string limb, float condition)
+    {
+        var idx = Array.FindIndex(ReferenceChangeForm.PlayerLimbNames,
+            n => n.Equals(limb, StringComparison.OrdinalIgnoreCase));
+        return idx >= 0 && TrySetStat(ReferenceChangeForm.PlayerLimbBaseSlot + idx, condition);
+    }
+
+    /// <summary>Repairs all six limbs to undamaged (condition 0) via same-length float splices. Returns false
+    /// if the limb array isn't locatable (no edits staged then).</summary>
+    public bool TryRepairAllLimbs()
+    {
+        if (PlayerLimbConditions().Count == 0)
+            return false;
+        for (var i = 0; i < ReferenceChangeForm.PlayerLimbNames.Length; i++)
+            TrySetStat(ReferenceChangeForm.PlayerLimbBaseSlot + i, 0f);
+        return true;
+    }
+
     /// <summary>The base FormID of bottle caps — the FNV currency. Caps are not a standalone save field;
     /// the engine stores them as an ordinary inventory stack of this form, so they decode and edit through
     /// the inventory path (confirmed: a real save's inventory carries an <c>0x0000000F</c> "Bottle Cap"

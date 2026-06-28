@@ -109,6 +109,21 @@ public static class ReferenceChangeForm
     /// <summary>0-indexed slot of the player's experience points (a float32) — the slot right after karma.</summary>
     public const int PlayerXpSlot = 101;
 
+    // ---- Player limb condition: six floats in the same post-MOVE actor-value array (ROADMAP §4n) ----
+    // Controlled cripple/heal diffs (Beadley `crippled-*`, `beadley-armlegcripple*`, `beadley-leftarmcripple*`)
+    // pinned six contiguous [f32][7C] slots, 180–185, as the per-limb condition. Same fixed-slot mechanism as
+    // karma/XP (PlayerStatSlotOffset), so it locates identically (and declines on the variable havok-physics
+    // records). Value scale: 0 = undamaged, −58 = healed/uncrippled, −100 = crippled (less-negative = less
+    // damage). Slot order below; L/R per the player's in-game Pip-Boy reading (the bytes don't encode side).
+    // Slot 5 (Head) is by elimination — the only body part not directly captured.
+
+    /// <summary>0-indexed slot of the first limb-condition float (Torso); the six limbs are slots 180–185.</summary>
+    public const int PlayerLimbBaseSlot = 180;
+
+    /// <summary>The six limb-condition slots in array order (slots 180–185), Beadley-confirmed (ROADMAP §4n).</summary>
+    public static readonly string[] PlayerLimbNames =
+        ["Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "Head"];
+
     /// <summary>
     /// Absolute file offset of the float32 in the player reference's post-MOVE actor-value array at
     /// 0-indexed <paramref name="slot"/> (e.g. <see cref="PlayerKarmaSlot"/> / <see cref="PlayerXpSlot"/>),

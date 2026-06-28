@@ -46,7 +46,7 @@ quicksave). The test theory auto-discovers them (and a local `samples/`) and ski
 
 CLI commands: `dump`, `screenshot`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setstat`, `formids`,
 `findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `inventory`, `setcount`,
-`setcondition`, `names`, `notes`, `perks`, `reputation`, `setreputation`, `player`, `setlevel`, `caps`, `setcaps`, `karma`, `xp`, `setkarma`, `setxp`, `gdwalk`, `setglobal`, `diff`, plus
+`setcondition`, `names`, `notes`, `perks`, `reputation`, `setreputation`, `player`, `setlevel`, `caps`, `setcaps`, `karma`, `xp`, `setkarma`, `setxp`, `limbs`, `setlimb`, `repairlimbs`, `gdwalk`, `setglobal`, `diff`, plus
 R&D helpers `walk`, `survey`, `cfwalk`, `gddump`, `gdscan`, `gdtypescan`, `recid`, `findname`, `refdump`, `edlscan`, `invsig`, `notescan`, `resolve`, `idiff`, `fdiff`, `regdiff`, `find`, `irefscan`.
 Run with no args to list them. (`edlscan <dir>` aggregates the modded ExtraDataList grammar + a deterministic-path
 tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory signature for byte-identical-decode checks — §4i;
@@ -99,6 +99,7 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 | Pip-Boy item category / tab (§4h) | ✅ from the base form's record type (read from the masters, not the save): `RecordType`/`Category`/`PipBoyTab`; verified in-game (WEAP/ARMO/AMMO; ALCH+BOOK→Aid; KEYM→Misc/"Keyring"; NOTE→Data) |
 | Caps decode + edit (§6.4) | ✅ caps are an inventory stack (FormID `0x0000000F`); `Caps`/`TrySetCaps` wrap the inventory path; CLI `caps`/`setcaps` + GUI Edit field; same-length edit round-trips |
 | Karma + XP decode + edit (§4j) | ✅ two float32 actor-values in the player reference record (slot 100 = karma, slot 101 = XP), cracked via the new `fdiff` float-aware diff on controlled pairs (XP `10→60→110`, karma `0→100→200`) + confirmed on a 2nd character; `Karma`/`Xp` + `TrySetKarma`/`TrySetXp`; CLI `karma`/`xp`/`setkarma`/`setxp` + GUI; same-length float edit round-trips |
+| Player limb condition decode + edit (§4n) | ✅ 6 × float32 at actor-value **slots 180–185** of the PlayerRef+1 record (same fixed-slot mechanism as karma/XP), order `[Torso, LArm, RArm, LLeg, RLeg, Head]`, scale `0` full / `-58` healed / `-100` crippled. Cracked by Beadley cripple/heal controlled diffs; cross-character sane (Beadley/Nathan/Mace Windu). `PlayerLimbConditions`/`TrySetLimbCondition`/`TryRepairAllLimbs`; CLI `limbs`/`setlimb`/`repairlimbs`; same-length splice, round-trips; ground-truth-pinned tests |
 | Faction reputation decode (§4o) | ✅ fame/infamy per faction = a type-`0x2B` change form `[fame:f32][7C][infamy:f32][7C]` (len 10), keyed by the `REPU` record via `array[refID-1]` (the persisted-ref +1 convention). Cracked by a controlled diff (`rep4`: Goodsprings idolized→wiped, fame 100→0, found via whole-file `cmp`). `FalloutSave.Reputations(isRepuForm)` + CLI `reputation`; `REPU` now indexed by `TesPlugin`. Verified vanilla + Extended (NCR 80/2, Caesar's 12/100, …). **Editable** via `TrySetReputation`/`setreputation` (same-length float splice, round-trip tested) and **add-able** for a faction with no record via `AddReputation`/`addreputation` (length-changing — see offset-fixup row). Corrects the earlier §4l `0x2B`=`[u32][7C][u32]` mis-read |
 | Player perks + traits decode (§4n) | ✅ count-prefixed perk list in the player reference change form (iref = PlayerRef+1): `[count*4][7C]` + N×`[perkRef:3 BE][7C][rank][7C]`, perkRef = array index+1 → a `PERK` record (traits are PERKs too). Cracked via gtg-complete→level2-gunsbachelor (Confirmed Bachelor: absent→present, FormID appended to the array). `FalloutSave.PlayerPerks(isPerkForm)` + CLI `perks`; `PERK` now indexed by `TesPlugin`. Verified across saves/characters (no false positives); read-only (adding a perk is length-changing). New tool `findname` |
 | Read notes decode (§4k) | ✅ Pip-Boy *Data → Notes* "viewed" markers — one zero-payload change form per read note (`type 0x1F`, `changeFlags 0x80000000`, `len 0`) on the note's inventory reference (FormID-array index + 1); note = `FormIdArray[refID-1]` → `NOTE`. Cracked by a controlled diff (Saves 491→492: one note read = **+1 change form**, "Recipes - Rose's Wasteland Omelet"); **all 171 markers resolve to NOTE (171/171)**. `ReadNotes`/`PlayerNotes`; CLI `notes` + GUI Notes tab. **Read-only** (the marker is a whole change form → toggling is length-changing, §6.7) |
@@ -108,7 +109,7 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 | Game-time-stamp churn suppression (§4k.1 #7) | ✅ `idiff … clean` auto-hides the recurring per-reference game-time/havok churn (value-frequency + adjacency clustering), collapsing the notes diff 3,314 → 11 and surfacing the inserted read marker; characterised as per-`REFR` time/havok float updates |
 | WPF GUI (metadata, screenshot, plugins, stats, SPECIAL + skills + inventory + caps + karma/XP edit + full notes read/unread + media type + **Perks** §4n + **Reputation** §4o + **Globals** §4c (editable) + **Change Forms** full-walk viewer §6 #1b/#6 tabs; **screenshot PNG export**; inventory **condition %** column) | ✅ launches + builds |
 | `diff` tool (pinpoints same-size changes) | ✅ Strength 5→6 = 1 byte; `cf` mode names the containing change form; `idiff` aligns records across an insertion, `idiff … clean` hides game-time churn (§4k.1 #7) |
-| Tests | ✅ 2,918 xUnit, all green (count grows with the discovered real-save corpus) |
+| Tests | ✅ 4,005 xUnit, all green (count grows with the discovered real-save corpus) |
 | Per-stack `0x0D` extra-data decode (§4i) | ✅ the last unsized per-stack type, sized by corpus alignment: `[0D][7C][ref:3][7C][n:u8][7C]` + `n/4` `[u32][f64]` pairs + two fixed fields = `12 + 14·(n/4)` (lengths 12/26/54/68/110 across all 607 saves). `VariablePropertyLength`; over-read strictly ↓ (vanilla 2→0, base 8→4, ext 318→314, **0 under-reads**) + recovers condition/equipped that the old resync dropped after a `0x0D`. ≤512 B resync now a never-hit safety net |
 | Deterministic inventory decoder + condition edit (§4i) | ✅ window removed; condition (`0x25`) editable + equipped/`0x21` surfaced in CLI + GUI; condition edit round-trips |
 | Deterministic inventory list *start* (§4i) | ✅ **deterministic on all 607 real saves** (vanilla 30/30, base VNV 98/98, VNV Extended 479/479): MOVE-skip + the typed-entry ExtraDataList walk (variable order + modded `0x1D`/`0x75`) + bounded post-entry resync + the **ExtraDataList-header anchor** for bit2/bit10 havok-physics records → the **`vsval` stack count** → first item. The §4g scan is now an unused safety net. vsval self-validates (decoded ≥ vsval, **0 under-reads**); verified **display byte-identical** across all 607 except **35 endgame inventories this *fixed* (empty → full)** |
@@ -119,7 +120,7 @@ tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory s
 **Editable today:** level, save number, name (same-length), Misc Stats, full SPECIAL, stored skill
 modifications (§4e), inventory stack counts (§4g), **item condition/health (§4i)**, **caps (§6.4 — the
 `0x0000000F` stack)**, **karma + XP (§4j)**, **faction reputation fame/infamy (§4o)**, **global variables (§4c — the
-type-3 GlobalData table)** — all safe same-length splices.
+type-3 GlobalData table)**, **limb condition / repair limbs (§4n — actor-value slots 180–185)** — all safe same-length splices.
 **Length-changing edits** are supported via offset-fixup (`RebuildWithBodyEdits`, §4b): **add a faction
 reputation record** (§4o, CLI `addreputation`), **grant a perk/trait** (§4n, CLI `addperk`), **add an
 inventory stack** (§4g, CLI `additem`), and **rename the player** (CLI `rename` — the first edit that splices the
@@ -155,15 +156,13 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    sets one `7C`-delimited f32 slot `0.0`→`15.0`) are now **LOCATED** (controlled diffs `crippled-*` / `chem-*`,
    2026-06-28, SPEC §4n). **The §4n "no-anchor" pessimism is reframed:** a no-op pair proved the still-player record is
    byte-stable bar one game-time `u32`, and the fields live in the **PlayerRef+1 record `0x06003E44`** (the §4i/§4j
-   record). Limb condition = **6 × float32, `-100` crippled / `-58` healed / `0` full**, order
-   `[Torso, LArm, RArm, LLeg, RLeg, Head]` (slots 0–4 each directly cripple/heal-confirmed, slot 5=Head by
-   elimination) (**all Beadley — one character at several save moments; cross-character NOT yet verified**; an earlier note
-   wrongly said "Nathan/Mace Windu, 3 characters" — filename-trust error). The data-offset **shifts with the havok
-   blob** even within Beadley (data+0x3A0 in most moments, **data+0x3A6** in the bigger Save-146 record), so it's
-   fixed relative to the **AV-array start (post-havok)**, not the record start. **Remaining before a reader/editor:**
-   (a) §4i treats the havok-move record's pre-`ExtraDataList` region as one opaque blob, so the **AV-array start
-   isn't separately located** — decode that; (b) **verify on a genuinely different character** (cripple a limb on
-   Mace Windu). Then a `PlayerLimbs` reader + same-length limb editor (repair limbs!) ships safely. **Remaining is mostly SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`,
+   record). **Limb condition is now DECODED + EDITABLE** (✅ shipped): 6 × float32 at
+   **actor-value slots 180–185** of the PlayerRef+1 record — the *same fixed-slot mechanism as karma (100)/XP (101)*,
+   `data+28+5·slot` — order `[Torso, LArm, RArm, LLeg, RLeg, Head]`, scale `0` full / `-58` healed / `-100` crippled.
+   `PlayerLimbConditions`/`TrySetLimbCondition`/`TryRepairAllLimbs`; CLI `limbs`/`setlimb`/`repairlimbs`. Cross-character
+   verified from the corpus (Beadley crippled ground-truth, Nathan healthy, Mace Windu Left Leg -10.61). *(The earlier
+   "havok-dependent offset" worry was a measurement error — slots are fixed, like karma's.)* The **active-effect slot
+   array** (chem sets one f32 `0→15`) is located in the same array but not yet field-mapped (read-only follow-up). **Remaining is mostly SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`,
    the new `0x07`/`0x09`/`0x0A` fields), decode the remaining `0x00`/`0x0A` delimited script/actor variants, and fold
    the QUST stage/objective decode (§6 #3) into the walk. See the controlled-diff shopping list below.
 2. **GlobalData full type coverage.** ◑ *Mostly done* — type **3 Global Variables** is fully decoded +

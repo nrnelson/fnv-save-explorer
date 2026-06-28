@@ -50,4 +50,70 @@ public class PlayerStatsTests
             Assert.Equal(-321f, FalloutSave.Parse(edited).Karma);
         }
     }
+
+    [Fact]
+    public void Limb_conditions_empty_when_actor_value_array_absent()
+    {
+        // Same graceful decline as karma/XP: the synthetic record has only a short (non-232-slot) array, so the
+        // limb slots (180–185) can't be located — read is empty and edits no-op (ROADMAP §4n).
+        var save = FalloutSave.Parse(InventorySave.Build());
+        Assert.Empty(save.PlayerLimbConditions());
+        Assert.False(save.TrySetLimbCondition("Left Leg", 0f));
+        Assert.False(save.TryRepairAllLimbs());
+        Assert.False(save.HasPendingEdits);
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_read_and_safely_edit_limbs(string path)
+    {
+        // Limb condition = six float32 at actor-value array slots 180–185 (ROADMAP §4n), located by the same
+        // mechanism as karma/XP. Where located, all six read as sane condition values (0 = full, negative =
+        // damage, ≈-100 = crippled) — verified across characters (Beadley/Nathan/Mace Windu); a misdecode onto
+        // wrong bytes would surface as a huge/NaN float. A same-length limb edit must not shift the file.
+        var save = FalloutSave.Load(path);
+        var limbs = save.PlayerLimbConditions();
+        if (limbs.Count == 0)
+            return; // record/array not locatable (e.g. havok-physics player record) — declines like karma/XP
+
+        Assert.Equal(6, limbs.Count);
+        Assert.Equal(ReferenceChangeForm.PlayerLimbNames, limbs.Select(l => l.Name).ToArray());
+        Assert.All(limbs, l => Assert.True(float.IsFinite(l.Condition) && l.Condition is >= -1000f and <= 100f,
+            $"{l.Name} = {l.Condition} out of sane limb-condition range ({Path.GetFileName(path)})"));
+
+        var clean = FalloutSave.Load(path);
+        Assert.True(clean.TrySetLimbCondition("Head", -12.5f));
+        var edited = clean.ToBytes();
+        Assert.Equal(clean.FileLength, edited.Length);
+        Assert.Equal(-12.5f, FalloutSave.Parse(edited).PlayerLimbConditions().First(l => l.Name == "Head").Condition);
+    }
+
+    [Fact]
+    public void Crippled_controlled_saves_decode_known_limb_conditions()
+    {
+        // Ground-truth pins from the Beadley cripple/heal controlled captures (ROADMAP §4n). Each check is
+        // skipped if that capture isn't on this machine, so the test is a no-op off the dev box.
+        var byName = FalloutSaveTests.RealSaves()
+            .Select(o => (string)o[0])
+            .GroupBy(p => Path.GetFileNameWithoutExtension(p), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        void Check(string save, string limb, float expected)
+        {
+            if (!byName.TryGetValue(save, out var path))
+                return;
+            var l = FalloutSave.Load(path).PlayerLimbConditions().FirstOrDefault(x => x.Name == limb);
+            Assert.Equal(expected, l.Condition);
+        }
+
+        Check("crippled-both-legs", "Left Leg", -100f);
+        Check("crippled-both-legs", "Right Leg", -100f);
+        Check("crippled-one-leg", "Left Leg", -100f);   // right repaired, left still crippled
+        Check("crippled-one-leg", "Right Leg", -58f);
+        Check("crippled-zero-legs", "Left Leg", -58f);
+        Check("crippled-zero-legs", "Right Leg", -58f);
+        Check("beadley-leftarmcripple", "Left Arm", -100f);
+        Check("beadley-armlegcripple", "Right Arm", -100f);
+        Check("beadley-armlegcripple", "Left Leg", -100f);
+    }
 }

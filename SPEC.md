@@ -845,59 +845,54 @@ Bachelor + Hoarder + Companion Suite; Save 146 = Confirmed Bachelor + Heavy Hand
 (trait); a vanilla mid-game save = Built to Destroy + Fast Shot + Swift Learner + Companion Suite — controlled +
 read-only-invariant + q1→q2 + separate-list-union tests pin it. Tooling: **`findname <save> "<text>" [SIG]`** + `recid`/`find`.
 
-**Player limb condition — LOCATED in the PlayerRef+1 record `0x06003E44` (controlled diffs, 2026-06-28).**
-> **Character caveat (corrected):** *every* save used below — `crippled-*`, `chem-*`, `churn*`, **and** the
-> `mw-*` files (the `mw-` prefix is a misnomer) — is the **same character, Beadley**, verified by `dump`'s player
-> name. So everything here is **one character at several save moments**; **cross-character invariance is NOT yet
-> verified** (the only other character on disk, Save 12 "Mace Windu", has no crippled-limb capture). An earlier draft
-> of this note wrongly attributed the saves to "Nathan"/"Mace Windu" and claimed a 3-character confirmation — that was
-> a filename-trust error.
+**Player limb condition — DECODED + EDITABLE (controlled diffs, 2026-06-28).** The player's six limb conditions are
+**float32 actor-value slots 180–185** in the `iref = PlayerRef+1` change form (record `0x06003E44` — the record that
+also holds inventory §4g / karma+XP §4j), located by the **same fixed-slot mechanism as karma (slot 100) / XP (slot
+101)**: `PlayerStatSlotOffset(slot) = dataOffset + 28 + slot×5` (the `[4-byte][7C]` gated array after the MOVE block).
+So a limb is `data+28+5·slot` = **data+0x3A0 + 5·(slot−180)** — a fixed slot index, **not** a hardcoded byte offset,
+and it declines on the variable havok-physics records exactly like karma/XP.
 
-A 3-state diff (`crippled-both-legs` → `crippled-one-leg` → `crippled-zero-legs`: a mine crippled two limbs, then
-each was repaired) localizes **per-limb condition** to a run of `7C`-delimited **float32** in the `iref = PlayerRef+1`
-change form (record FormID `0x06003E44` — the same record that holds inventory §4g / karma+XP §4j, **NOT** the
-FormID-`0x14` ACHR). The array is **6 × float32 on a 5-byte stride** (`[f32][7C]`×6). **Value scale:**
-**`-100.0` = crippled, `-58.0` = healed/uncrippled, `0.0` = undamaged** (each crippled limb flipped `-100→-58` exactly
-once in lockstep with its repair — the decisive single-variable signal). **Partial slot identity** (from
-`mw-limbpost`→`mw-limblegfix`→`mw-limbchestfix`, plus `beadley-armlegcripple`→`-legfix`→`-armfix`, healing one limb at
-a time): clearing the **chest** emptied base **+0x3A0**, a **leg** base **+0x3AF** (twice, independently), and an
-**arm** base **+0x3AA** → **slot 0 = Torso, slot 2 = Arm, slot 3 = Leg** (stride-5 indices; slots 1/4/5 unmapped —
-slot 1 is likely Head). Per the player's in-game Pip-Boy reading: `mw-limbpost` (also Beadley — the `mw-` prefix is a
-misnomer) crippled **Torso + Left Leg**, and `beadley-armlegcripple` crippled **Right Arm + Left Leg** — the **same
-Left Leg both times**, both clearing **+0x3AF**. And `crippled-both-legs`→`crippled-one-leg` repaired the **Right
-Leg** (both legs at +0x3AF/+0x3B4 crippled → only **+0x3AF** stays crippled). And `beadley-leftarmcripple`/`-fix` crippled+healed
-the **Left Arm** at **+0x3A5** (slot 1). **Full 6-slot map (stride 5 from base data+0x3A0):**
-**slot 0 = Torso, 1 = Left Arm, 2 = Right Arm, 3 = Left Leg, 4 = Right Leg, 5 = Head** — i.e. order
-`[Torso, LArm, RArm, LLeg, RLeg, Head]`. Slots 0–4 are each **directly confirmed** by a cripple/heal capture;
-**slot 5 = Head by elimination** (the only remaining body part; not yet directly captured). Torso and Head are
-center-mass (no L/R). **L/R is from the visual observation, not byte-derivable** (the save stores only six positional floats; the Pip-Boy figure faces the player,
-so its on-screen left = the player's right limb). All values/identities are **Beadley-only** so far.
+**Slot map** (each row directly confirmed by a Beadley cripple/heal capture, except Head by elimination):
 
-**The data-relative offset of the array is NOT constant — it tracks the variable havok-blob size**, shown *within
-Beadley's own saves*: base **data+0x3A0** in the `crippled-*`/`chem-*`/`churn*`/`mw-*` moments, but **data+0x3A6** in
-Save 146 (a bigger record, len 10497 vs ~9300–9600; all have havok-move flags `0xB0400832`). So the array is fixed
-relative to the **actor-value-array start (post-havok)**, i.e. `limbBase = AVArrayStart + const`, not to the record
-data start.
+| slot | limb | confirmed by |
+|---|---|---|
+| 180 | Torso | `mw-limbchestfix` cleared it (center-mass, no L/R) |
+| 181 | Left Arm | `beadley-leftarmcripple`/`-fix` |
+| 182 | Right Arm | `beadley-armlegcripple`→`-armfix` |
+| 183 | Left Leg | three sequences (always the left leg, always this slot) |
+| 184 | Right Leg | `crippled-both`→`crippled-one-leg` repaired the *right* leg here |
+| 185 | Head | by elimination (only remaining part; center-mass, not directly captured) |
 
-**Player active-effect slot array — LOCATED (`chem-*`, Beadley).** A clean chem pair (`chempre`→`chempost`: `tgm`,
-`player.additem` a chem, `player.equipitem` it, empty interior) surfaces an **array of `7C`-delimited float32 slots,
-almost all `0.0`**, in the same record's AV region; using the chem set **exactly one slot `0.0 → 15.0`** (effect
-magnitude), with a nearby `u16` also moving (likely the effect timer).
+**Value scale:** `0.0` = undamaged, `−58.0` = healed/uncrippled, `−100.0` = crippled (less-negative = less damage;
+each crippled limb flipped `−100→−58` once in lockstep with its repair). **L/R is from the player's in-game Pip-Boy
+reading, not byte-derivable** (the save stores only positional floats; the Pip-Boy figure faces the player, so its
+on-screen left = the player's right limb).
 
-**Methodology win — the ACHR region is byte-STABLE, reframing the §4n "volatile/unanchorable" pessimism.** The no-op
-pair (`churnA`→`churnB`, two back-to-back console saves, nothing changed) leaves the *entire* player record
-byte-identical **except a single game-time `u32` tick** (record-rel ≈`+0x10F`). So a still actor's record does not
-churn (the `xx xx 1E C5` float only churns while moving) — actor-region controlled diffs are clean. The old framing
-conflated *moving*-actor havok churn with the record being unanalysable. (Also: `idiff` desynced on the busy crippled
-cell — 3,785 records churned — so these findings came from **direct record-offset byte diffs**, the reliable tool
-when a cell is busy.)
+**Reader/editor shipped:** `FalloutSave.PlayerLimbConditions()` (six `PlayerLimb` records), `TrySetLimbCondition(name,
+value)` and `TryRepairAllLimbs()` (same-length float splices); CLI `limbs` / `setlimb` / `repairlimbs`. Verified
+read + round-trip on real saves.
 
-**Open before a shipped reader/editor:** (a) **locate the AV-array start** inside the havok-move record — §4i skips
-that record's pre-`ExtraDataList` region as one opaque blob, so the AV-array start isn't separately located; the
-limb offset (`AVArrayStart + const`) needs it. (b) **Verify cross-character** with a genuinely different character
-(e.g. cripple a limb on Mace Windu) — everything above is Beadley-only. A hardcoded `data+0x3A0` would mis-hit even
-Beadley's own Save-146 moment, so **no general reader is shipped yet**. The `crippled-*`/`mw-*`/`chem-*`/`churn*`
-Beadley pairs are retained controlled-diff assets (ROADMAP §6 #1/#5).
+> **Character note (corrected from an earlier draft):** *every* capture above — `crippled-*`, `chem-*`, `churn*`,
+> **and** the `mw-*` files (the `mw-` prefix is a misnomer) — is **Beadley** (verified via `dump`). An earlier draft
+> wrongly labeled them "Nathan"/"Mace Windu". **Cross-character is now verified anyway** from the existing corpus:
+> the slot-180–185 read returns sane condition values on **three** characters — Beadley (the crippled ground-truth),
+> **Nathan** Save 13 (all `0` = healthy), and **Mace Windu** Save 12 (Left Leg `−10.61`, rest `0`). A misdecode onto
+> wrong bytes would surface as a huge/NaN float; it doesn't. (My earlier "offset shifts with the havok blob /
+> data+0x3A6 on Save 146" claim was a **measurement error** — I had used the record *header* offset instead of the
+> *data* offset; via `find`'s true data-relative offset the limbs are at slot 180–185 on Save 146 too. The slot is
+> fixed, like karma's.)
+
+**Player active-effect slot array — LOCATED (`chem-*`, Beadley; read-only).** A clean chem pair (`chempre`→`chempost`:
+`tgm`, `player.additem` a chem, `player.equipitem` it, empty interior) sets **one slot of a `7C`-delimited float32
+array `0.0 → 15.0`** (effect magnitude), with a nearby `u16` also moving (likely the effect timer) — the actor's
+active-effect / AV-modifier block, in the same gated array. Not yet field-mapped to a reader.
+
+**Methodology win — the still-player ACHR record is byte-STABLE.** The no-op pair (`churnA`→`churnB`, two back-to-back
+console saves, nothing changed) leaves the *entire* player record byte-identical **except a single game-time `u32`
+tick** — so actor-region controlled diffs are clean once that counter is ignored (the `xx xx 1E C5` float only churns
+while the actor moves). The old §4n "volatile/unanchorable" framing conflated *moving*-actor havok churn with the
+record being unanalysable. (Also: `idiff` desynced on the busy crippled cell — 3,785 records churned — so these
+findings came from **direct record-offset byte diffs**, the reliable tool when a cell is busy.)
 
 ### 4o. Faction reputation (fame / infamy) — the type-0x2B change forms
 The player's **reputation with each faction** is a **type-`0x2B` change form** (len 10):
