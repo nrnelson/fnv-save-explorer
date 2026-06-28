@@ -38,6 +38,9 @@ if (args.Length < 2)
           fnvsave names <save.fos> [dataDir]  Report FormID -> name resolution status (which masters resolved)
           fnvsave notes <save.fos> [dataDir]  List the player's Pip-Boy Data -> Notes — READ and UNREAD (§4k/§4k.1)
           fnvsave perks <save.fos> [dataDir]  List the player's perks + traits (§4n; resolves PERK forms via masters)
+          fnvsave addictions <save.fos> [dataDir]   List the player's addictions — the player CHANGE_ACTOR record's
+                                              added-spell list filtered to Addiction-type SPELs (§4n); shows other
+                                              actor effects (traits/abilities) too
           fnvsave reputation <save.fos> [dataDir]   List faction fame/infamy (§4o; type-0x2B forms keyed by REPU)
           fnvsave player <save.fos> [dataDir]   One-screen player summary: header + SPECIAL + karma/XP/caps +
                                               skill mods + perks + reputation + notes + inventory (read-only)
@@ -333,6 +336,9 @@ try
             break;
         case "perks":
             Perks(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
+            break;
+        case "addictions":
+            Addictions(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
             break;
         case "reputation":
             Reputation(FalloutSave.Load(path), path, args.Length > 2 ? args[2] : null);
@@ -1113,6 +1119,39 @@ static void Perks(FalloutSave s, string savePath, string? dataDir)
     }
 }
 
+static void Addictions(FalloutSave s, string savePath, string? dataDir)
+{
+    // The player's addictions (SPEC §4n) — entries of the player CHANGE_ACTOR record's added-spell list whose SPEL
+    // is spell-type Addiction (SPIT type 10, e.g. "Buffout Withdrawal"). Identifying which SPELs are addictions
+    // needs the masters, so we pass that test into PlayerActorSpells. The same list also carries traits/abilities.
+    var db = PluginDatabase.ForSave(s, dataDir, GameDataLocator.FindMo2Mods(savePath));
+    if (db.Count == 0)
+    {
+        Console.WriteLine("Addictions need the game Data folder to identify SPEL forms — pass it as the 2nd argument.");
+        return;
+    }
+    if (s.PlayerActorChangeForm is null)
+    {
+        Console.WriteLine("Could not locate the player CHANGE_ACTOR record (form type 0x0A).");
+        return;
+    }
+
+    var addictions = s.PlayerActorSpells(db.IsAddiction);
+    Console.WriteLine($"Player addictions ({addictions.Count}):");
+    foreach (var a in addictions.OrderBy(a => db.Resolve(a.FormId) ?? "￿", StringComparer.OrdinalIgnoreCase))
+        Console.WriteLine($"  {db.Resolve(a.FormId) ?? "?",-32}  0x{a.FormId:X8}");
+
+    // Context: the rest of the actor's added-spell list (chargen traits, mod abilities) — not addictions.
+    var others = s.PlayerActorSpells(fid => db.RecordType(fid) == "SPEL")
+        .Where(sp => !db.IsAddiction(sp.FormId)).ToList();
+    if (others.Count > 0)
+    {
+        Console.WriteLine($"Other actor effects ({others.Count}; traits / abilities, not addictions):");
+        foreach (var o in others.OrderBy(o => db.Resolve(o.FormId) ?? "￿", StringComparer.OrdinalIgnoreCase))
+            Console.WriteLine($"  {db.Resolve(o.FormId) ?? "?",-32}  0x{o.FormId:X8}  [spell type {db.SpellType(o.FormId)}]");
+    }
+}
+
 // Unified read-only player summary — composes everything decoded (header, SPECIAL, karma/XP/caps, skills,
 // perks, reputation, notes, inventory) into one view. Names (perks/reputation/notes) need the masters; the
 // summary degrades gracefully without them. The ROADMAP's "analyze tooling" capstone over the decode.
@@ -1134,6 +1173,10 @@ static void PlayerSummary(FalloutSave s, string savePath, string? dataDir)
     {
         var perks = s.PlayerPerks(fid => db.RecordType(fid) == "PERK");
         Console.WriteLine($"  perks/traits ({perks.Count}): {string.Join(", ", perks.Select(p => db.Resolve(p.FormId) ?? "?").OrderBy(n => n))}");
+
+        var addictions = s.PlayerActorSpells(db.IsAddiction);
+        if (addictions.Count > 0)
+            Console.WriteLine($"  addictions ({addictions.Count}): {string.Join(", ", addictions.Select(a => db.Resolve(a.FormId) ?? "?").OrderBy(n => n))}");
 
         var reps = s.Reputations(fid => db.RecordType(fid) == "REPU")
             .OrderByDescending(r => r.Fame + r.Infamy).ToList();

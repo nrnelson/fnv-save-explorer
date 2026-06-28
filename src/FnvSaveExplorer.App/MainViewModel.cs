@@ -153,6 +153,20 @@ public sealed class PerkRow
     public string Source { get; init; } = "";
 }
 
+/// <summary>One entry of the player's added-spell/effect list — an addiction or a trait/ability; read-only
+/// display (SPEC §4n).</summary>
+public sealed class AddictionRow
+{
+    public uint FormId { get; init; }
+    public int ModIndex { get; init; }
+    public string Form => $"0x{FormId:X8} (mod {ModIndex:X2})";
+    public string Name { get; init; } = "";
+
+    /// <summary>"Addiction" (SPEL spell-type 10) vs "Trait/Ability" (the rest of the actor's added effects).</summary>
+    public string Kind { get; init; } = "";
+    public string Source { get; init; } = "";
+}
+
 /// <summary>One faction's reputation (fame/infamy); read-only display (ROADMAP §4o).</summary>
 public sealed class ReputationRow
 {
@@ -242,6 +256,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<InventoryRow> Inventory { get; } = [];
     public ObservableCollection<NoteRow> Notes { get; } = [];
     public ObservableCollection<PerkRow> Perks { get; } = [];
+    public ObservableCollection<AddictionRow> Addictions { get; } = [];
     public ObservableCollection<ReputationRow> Reputation { get; } = [];
     public ObservableCollection<GlobalRow> Globals { get; } = [];
     public ObservableCollection<QuestRow> Quests { get; } = [];
@@ -328,6 +343,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private string _perksInfo = "";
     public string PerksInfo { get => _perksInfo; private set => Set(ref _perksInfo, value); }
+
+    private string _addictionsInfo = "";
+    public string AddictionsInfo { get => _addictionsInfo; private set => Set(ref _addictionsInfo, value); }
 
     private string _reputationInfo = "";
     public string ReputationInfo { get => _reputationInfo; private set => Set(ref _reputationInfo, value); }
@@ -438,6 +456,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             PopulateInventory(save, invDb);
             PopulateNotes(save, invDb);
             PopulatePerks(save, invDb);
+            PopulateAddictions(save, invDb);
             PopulateReputation(save, invDb);
             PopulateGlobals(save, invDb);
             PopulateQuests(save, invDb);
@@ -486,6 +505,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         PopulateInventory(_save, db);
         PopulateNotes(_save, db);
         PopulatePerks(_save, db);
+        PopulateAddictions(_save, db);
         PopulateReputation(_save, db);
         PopulateGlobals(_save, db);
         PopulateQuests(_save, db);
@@ -650,6 +670,33 @@ public sealed class MainViewModel : INotifyPropertyChanged
             });
         PerksInfo = $"{Perks.Count} perk(s) + trait(s) (FNV stores traits as PERK forms). Read-only — adding a " +
                     "perk is a length-changing edit.";
+    }
+
+    /// <summary>Fills the addictions grid (SPEC §4n) — the player CHANGE_ACTOR record's added-spell list, with
+    /// addictions (SPEL spell-type 10) flagged vs trait/ability effects. Needs the masters to identify SPEL forms.</summary>
+    private void PopulateAddictions(FalloutSave save, PluginDatabase db)
+    {
+        Addictions.Clear();
+        if (db.Count == 0)
+        {
+            AddictionsInfo = "Addictions need the game's Data folder (FalloutNV.esm) to identify/name SPEL forms " +
+                             "— set it on the Edit tab.";
+            return;
+        }
+        foreach (var sp in save.PlayerActorSpells(fid => db.RecordType(fid) == "SPEL")
+                     .OrderByDescending(sp => db.IsAddiction(sp.FormId))
+                     .ThenBy(sp => db.Resolve(sp.FormId) ?? "￿", StringComparer.OrdinalIgnoreCase))
+            Addictions.Add(new AddictionRow
+            {
+                FormId = sp.FormId,
+                ModIndex = (int)(sp.FormId >> 24),
+                Name = db.Resolve(sp.FormId) ?? "",
+                Kind = db.IsAddiction(sp.FormId) ? "Addiction" : "Trait/Ability",
+                Source = save.FriendlySourceForModIndex((int)(sp.FormId >> 24)) ?? "",
+            });
+        var addictionCount = Addictions.Count(a => a.Kind == "Addiction");
+        AddictionsInfo = $"{addictionCount} addiction(s) of {Addictions.Count} added actor effect(s) " +
+                         "(addictions are Withdrawal SPELs, SPIT type 10). Read-only.";
     }
 
     /// <summary>Fills the reputation grid (ROADMAP §4o). Identifying REPU forms needs the masters.</summary>

@@ -194,6 +194,22 @@
                     </StackPanel>
                 </TabItem>
 
+                <TabItem Header="Addictions">
+                    <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10" Text="{Binding AddictionsInfo}"/>
+                        <DataGrid ItemsSource="{Binding Addictions}" AutoGenerateColumns="False" IsReadOnly="True"
+                                  CanUserAddRows="False" HeadersVisibility="Column" FontFamily="Consolas"
+                                  Width="660" HorizontalAlignment="Left" MaxHeight="440">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Effect" Binding="{Binding Name}" Width="260"/>
+                                <DataGridTextColumn Header="Kind" Binding="{Binding Kind}" Width="110"/>
+                                <DataGridTextColumn Header="FormID" Binding="{Binding Form}" Width="160"/>
+                                <DataGridTextColumn Header="Source (mod)" Binding="{Binding Source}" Width="120"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </StackPanel>
+                </TabItem>
+
                 <TabItem Header="Reputation">
                     <StackPanel Margin="10" IsEnabled="{Binding HasSave}">
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10" Text="{Binding ReputationInfo}"/>

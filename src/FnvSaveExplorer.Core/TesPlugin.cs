@@ -41,7 +41,7 @@ public sealed class TesPlugin
     /// (ROADMAP §4n); <c>GLOB</c> names the global-variable refs in GlobalData type 3 by their editor id, e.g.
     /// <c>GameDaysPassed</c> (ROADMAP §4c) — all indexed here yet deliberately kept out of <see cref="ItemTypes"/>.
     /// </summary>
-    private static readonly HashSet<string> NamedTypes = [.. ItemTypes, "QUST", "PERK", "REPU", "GLOB"];
+    private static readonly HashSet<string> NamedTypes = [.. ItemTypes, "QUST", "PERK", "REPU", "GLOB", "SPEL"];
 
     /// <summary>The quest verbs that can complete/advance/end a quest — harvested from every <c>SCPT</c> to size the
     /// event-completion graph (ROADMAP §6 #16 Stage 1). Pure display verbs (<c>SetObjectiveDisplayed</c>,
@@ -69,7 +69,7 @@ public sealed class TesPlugin
     /// <c>WEAP</c>/<c>ARMO</c> base-form max condition (the <c>DATA</c> health int32, ROADMAP §6 #4), or <c>0</c> for
     /// record types that don't carry one.
     /// </summary>
-    public IReadOnlyList<(uint LocalFormId, string Name, string Type, int NoteType, int Health)> Forms { get; }
+    public IReadOnlyList<(uint LocalFormId, string Name, string Type, int NoteType, int Health, int SpellType)> Forms { get; }
 
     /// <summary>The <c>QUST</c> records' decoded stage/objective structure, keyed by <b>plugin-local</b>
     /// FormID (re-keyed into save space by <see cref="PluginDatabase"/>) — the masters side of the quest-log
@@ -131,7 +131,7 @@ public sealed class TesPlugin
     private TesPlugin(
         string fileName,
         IReadOnlyList<string> masters,
-        IReadOnlyList<(uint, string, string, int, int)> forms,
+        IReadOnlyList<(uint, string, string, int, int, int)> forms,
         IReadOnlyList<QuestDefinition> quests,
         IReadOnlyList<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)> dialogueInfos,
         IReadOnlyList<CounterIncrement> counterIncrements,
@@ -183,7 +183,7 @@ public sealed class TesPlugin
                 masters.Add(ZString(data));
 
         // ---- top-level groups ----
-        var forms = new List<(uint, string, string, int, int)>();
+        var forms = new List<(uint, string, string, int, int, int)>();
         var quests = new List<QuestDefinition>();
         var dialogueInfos = new List<(uint, IReadOnlyList<QuestScriptEffect>, IReadOnlyList<InfoCondition>)>();
         // SCPT FormID -> (GameMode block source, declared local-variable names) (ROADMAP §6 #16)
@@ -441,7 +441,7 @@ public sealed class TesPlugin
     /// <summary>Reads the records (and defensively skips any nested groups) inside one top-level item group.</summary>
     private static void ReadRecords(
         Stream fs, long contentSize, bool localized,
-        List<(uint, string, string, int, int)> forms, List<QuestDefinition> quests,
+        List<(uint, string, string, int, int, int)> forms, List<QuestDefinition> quests,
         Dictionary<uint, (string GameMode, List<string> Locals)> scripts,
         Dictionary<uint, IReadOnlyDictionary<int, string>> scriptVarNames,
         List<CounterIncrement> counterIncrements,
@@ -514,6 +514,7 @@ public sealed class TesPlugin
             string? edid = null, full = null;
             var noteType = -1;
             var health = 0;
+            var spellType = -1;
             foreach (var (type, sub) in subs)
             {
                 if (type == "EDID") edid = ZString(sub);
@@ -523,10 +524,14 @@ public sealed class TesPlugin
                 // offset 4 (ROADMAP §6 #4). Clamp negatives to 0 (treated as "no max").
                 else if (type == "DATA" && (sig == "WEAP" || sig == "ARMO") && sub.Length >= 8)
                     health = Math.Max(0, BinaryPrimitives.ReadInt32LittleEndian(sub.AsSpan(4, 4)));
+                // SPEL SPIT = uint32 spellType, ... — the FNV spell-type enum; type 10 = Addiction (a withdrawal
+                // effect). Lets the player added-spell list flag which entries are addictions (SPEC §4n).
+                else if (type == "SPIT" && sig == "SPEL" && sub.Length >= 4)
+                    spellType = (int)BinaryPrimitives.ReadUInt32LittleEndian(sub.AsSpan(0, 4));
             }
             var name = full ?? edid;
             if (!string.IsNullOrEmpty(name))
-                forms.Add((formId, name, sig, noteType, health)); // sig is the record type (WEAP/ARMO/ALCH/AMMO/MISC/…)
+                forms.Add((formId, name, sig, noteType, health, spellType)); // sig is the record type (WEAP/ARMO/ALCH/SPEL/…)
             if (sig == "QUST")
                 quests.Add(ParseQuest(formId, subs, localized, full, edid));
         }

@@ -1383,6 +1383,68 @@ public sealed class FalloutSave
         return true;
     }
 
+    // ---- Player CHANGE_ACTOR record: added spells / effects, incl. addictions (SPEC §4n) ------------
+
+    /// <summary>The player's <b>CHANGE_ACTOR</b> change form (form type <c>0x0A</c>, iref =
+    /// playerBase <c>0x07</c> + 1) — the record holding the actor's added-spell list (addictions live here),
+    /// SPECIAL, name, and AI package data. Located by the iref convention and validated by
+    /// <see cref="ChangeActorPayload.TryDecode"/> (so a stray <c>0x0A</c> record can't be mistaken for it).
+    /// Null if it can't be located/decoded.</summary>
+    public ChangeFormHeader? PlayerActorChangeForm
+    {
+        get
+        {
+            var iref = FindIref(0x07);
+            if (iref < 0)
+                return null;
+            foreach (var cf in EnumerateChangeForms())
+            {
+                if (cf.Iref != iref + 1 || cf.FormType != ChangeActorPayload.FormType)
+                    continue;
+                var data = _raw.AsSpan(cf.DataOffset, cf.DataLength);
+                return ChangeActorPayload.TryDecode(data, cf.ChangeFlags, out _) ? cf : (ChangeFormHeader?)null;
+            }
+            return null;
+        }
+    }
+
+    /// <summary>One entry of the player's added-spell list: the base <c>SPEL</c> FormID it resolves to and the raw
+    /// 3-byte refID that names it (the FormID-array index + 1, §4g convention).</summary>
+    public readonly record struct ActorSpell(int RefId, uint FormId);
+
+    /// <summary>
+    /// The player's <b>added spells / actor effects</b> (SPEC §4n) — a count-prefixed list in the player
+    /// CHANGE_ACTOR record (<see cref="PlayerActorChangeForm"/>): <c>[count×4][7C]</c> then
+    /// <c>count × ([spellRef:3 BE][7C])</c> then a <c>[00][7C]</c> trailer, each <c>spellRef</c> resolving via
+    /// <c>FormIdArray[spellRef − 1]</c> to a <c>SPEL</c> record. The list mixes <b>addictions</b> (SPEL spell-type
+    /// <c>Addiction</c>, e.g. "Buffout Withdrawal"), chargen <b>traits</b> ("Built to Destroy"), and mod
+    /// <b>abilities</b> ("Skilled Bonus"). As with <see cref="PlayerPerks"/>, deciding "is this FormID the kind I
+    /// want?" needs the masters, so the caller injects <paramref name="isSpellForm"/> (e.g.
+    /// <c>fid =&gt; db.IsAddiction(fid)</c> for addictions only, or <c>fid =&gt; db.RecordType(fid) == "SPEL"</c>
+    /// for every actor effect). Deduplicated by FormID; empty if the record can't be located. Read-only (adding/
+    /// removing a spell is length-changing).
+    /// <para>Cracked by the <c>beadley-addiction-*</c> controlled FIFO diff: adding Buffout → Alcohol → Med-X grew
+    /// the list newest-first (Buffout <c>0x0030BB</c> → "Buffout Withdrawal" via the −1 index), FIFO removal dropped
+    /// the oldest.</para>
+    /// </summary>
+    public IReadOnlyList<ActorSpell> PlayerActorSpells(Func<uint, bool> isSpellForm)
+    {
+        ArgumentNullException.ThrowIfNull(isSpellForm);
+        if (PlayerActorChangeForm is not { } cf
+            || !ChangeActorPayload.TryDecode(_raw.AsSpan(cf.DataOffset, cf.DataLength), cf.ChangeFlags, out var rec))
+            return [];
+        var seen = new HashSet<uint>();
+        var result = new List<ActorSpell>();
+        foreach (var (refId, _) in rec.Spells)
+        {
+            var formId = ResolveIref(refId - 1);   // the §4g "+1" convention
+            if (formId == 0 || !isSpellForm(formId) || !seen.Add(formId))
+                continue;
+            result.Add(new ActorSpell(refId, formId));
+        }
+        return result;
+    }
+
     /// <summary>The player's standing with one faction: the <c>REPU</c> faction FormID and its
     /// <see cref="Fame"/>/<see cref="Infamy"/> (0–100 floats). A faction with both 0 shows no standing in the
     /// Pip-Boy.</summary>

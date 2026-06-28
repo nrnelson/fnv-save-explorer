@@ -701,8 +701,11 @@ unlabelled):** both verified across vanilla + base VNV, the length matching the 
   **dominant `0x020C`/len-58 variant (≥99% of all `0x0A`: vanilla 22.6k, base VNV 50.3k) is now SIZED** by `cfwalk`
   into its three `0x7C`-delimited spans (delimiters at `+0x07`/`+0x1C`/`+0x39`), with a **constant `0x32` tag at
   `+0x0B`** and **zero padding at `+0x2B..+0x38`**; the variable bytes are float-shaped placement/havok state, not
-  yet field-named (needs a §7 controlled diff). Larger variants (len 706) hold the player name + a long float run
-  (position/rotation/scale-shaped) and remain located, not field-decoded.
+  yet field-named (needs a §7 controlled diff). The **player CHANGE_ACTOR variant** (`iref = playerBase+1`, the
+  larger len-706/735 records + the minimal len-48) is now **field-DECODED** as a changeFlags-gated section walk
+  (MOVE / added-spell list / SPECIAL / name / package-data gap) — `Core/ChangeActorPayload.cs`, rendered by `cfwalk`
+  and consumed by the addiction reader (§4n). Other (NPC/creature) `0x0A` records that don't fit that structure stay
+  the `0x7C`-token view.
 - `0x01` REFR / `0x02` ACHR — the reference path: MOVE block, havok/AV array, ExtraDataList, inventory, and the
   karma/XP slots are decoded (§4g–§4j); the rest of the actor-value array and most base state remain `unknown`.
   `cfwalk` breaks a MOVE-anchored record into its located spans — `MOVE block[27]`, `havok/actor-value
@@ -888,22 +891,43 @@ read + round-trip on real saves.
 array `0.0 → 15.0`** (effect magnitude), with a nearby `u16` also moving (likely the effect timer) — the actor's
 active-effect / AV-modifier block, in the same gated array. Not yet field-mapped to a reader.
 
-**Player addictions — DECODED (controlled FIFO diff `beadley-addiction-*`, 2026-06-28; reader is a follow-up).**
-A 7-state controlled sequence (add Buffout → Alcohol → Med-X, then remove FIFO until recovered) pins addictions to a
-**count-prefixed ref list** inside the player's **CHANGE_ACTOR record** — `iref = playerBase(0x07) + 1`, formType
-`0x0A` (cross-character confirmed: present at that iref on Beadley/Nathan/Mace Windu). The list:
-```
-[count×4 : u8][7C]  then  (count/4) × [addictionRef : 3 bytes BE][7C]  then  [00][7C]   # newest entry first
-```
-(the `count×4` convention is the same as the perk list §4n.) Each added addiction **appends a FormID-array entry**
-(the addiction effect instance) and prepends its 3-byte refID to the list; FIFO removal drops the oldest. Observed
-refs: **Buffout `0x0030BB`, Alcohol `0x0030BC`, Med-X `0x0030BD`** (sequential — consecutive new array entries), each
-resolving via the FormID array to the addiction effect. The same record also carries the player's SPECIAL
-(`06 06 06 06 06 05 05`) and name. **Reader deferred:** the list's offset *within* the record is **variable** — the
-0x0A CHANGE_ACTOR record is flag-gated (Beadley len 48/flags `0x36`; Nathan len 706/`0x834`; MW len 735/`0x836`), so a
-robust `PlayerAddictions` reader needs the 0x0A section parse (decode the changeFlags-gated sections to reach the
-addiction list) **or** a §4n-style validated count-prefixed-list scan — logged as a §6 #1 follow-up. The
-`beadley-addiction-*` 7-save FIFO sequence is the retained controlled-diff asset.
+**Player CHANGE_ACTOR record — DECODED + addiction reader SHIPPED (gated-section parse, 2026-06-28).** The
+player's **CHANGE_ACTOR change form** (form type `0x0A`, `iref = playerBase(0x07) + 1`; cross-character confirmed on
+Beadley/Nathan/Mace Windu) is now decoded as an **ordered, changeFlags-gated section sequence** by
+`Core/ChangeActorPayload.cs` (`TryDecode`/`Walk`), which **consumes the payload exactly** on every player record in
+the corpus (the §4f "lands exactly" invariant — a real-save theory pins it). Sections, in order:
+
+| # | section | gate | layout |
+|---|---|---|---|
+| 1 | MOVE block | bit 1 (`CHANGE_REFR_MOVE`) | 24 fixed bytes + `7C` (25 B) — the only section that can precede the spell list |
+| 2 | **added-spell list** | always | `[count×4 : u8][7C]` + `(count/4)×[spellRef:3 BE][7C]` + `[00][7C]` (newest first) |
+| 3 | SPECIAL | always | 7 bytes (each 1..10) + `7C` |
+| 4 | name | always | `[u16 len][7C][bytes][7C]` (matches the save-header name) |
+| 5 | actor/AI package data | bit 11 (`CHANGE_ACTOR_EXTRA_PACKAGE_DATA`) | the remainder — float-heavy; left as an `unknown[n]` gap |
+
+The three flag combos seen on the player record are `0x036` (bit1 MOVE, no package — e.g. Beadley len 48), `0x834`
+(no MOVE, package — Nathan len 706) and `0x836` (both — MW len 735); bits 2/4/5 are set on every record but add no
+bytes here, so **only the optional bit-1 block precedes the list** (the list is at `data+25` with MOVE, else
+`data+0`).
+
+**The "addiction list" is really the actor's added-spell list** (`SPEL` refs) — it mixes **addictions** (FNV SPEL
+spell-type `Addiction` = `SPIT` type **10**, e.g. "Buffout Withdrawal"), chargen **traits** ("Built to Destroy", an
+Ability), and mod **abilities** ("Skilled Bonus", OWB). Each `spellRef` resolves via `FormIdArray[spellRef − 1]`
+(the §4g "+1" convention) to a `SPEL` record. **Cracked by the `beadley-addiction-*` controlled FIFO** (add Buffout
+→ Alcohol → Med-X, then FIFO-remove): `0x0030BB` → "Buffout Withdrawal", `0x0030BC` → "Alcohol Withdrawal",
+`0x0030BD` → "Med-X Withdrawal" (each via the −1 index; direct indexing is off by one). Adding an addiction appends a
+FormID-array entry and prepends its refID; removal drops the oldest.
+
+**Reader shipped:** `FalloutSave.PlayerActorSpells(isSpellForm)` (anchored to the decoded record — validated, not a
+loose scan, so it can't over-report) + `PlayerActorChangeForm`. `TesPlugin` now indexes `SPEL` and captures the
+`SPIT` spell-type → `PluginDatabase.SpellType`/`IsAddiction` (type 10). CLI **`addictions`** (addiction subset +
+trait/ability context) and **`cfwalk`** (labeled sections with resolved spell names + explicit package gap); GUI
+**Addictions** tab. Read-only (adding/removing a spell is length-changing). Ground-truth-pinned tests (the FIFO
+count `0→1→2→3→1→2→0`, the masters `IsAddiction` filter, the synthetic section walk, and the corpus full-length
+theory). (Note: the deferred zero-perk `AddPerk` locator lives in a *different* record — the player **reference**
+change form, `iref = PlayerRef 0x14 + 1`, where `PlayerPerks` reads — so this base-actor `0x0A` decode doesn't
+unblock it; that follow-up still needs the reference record's trailing-region grammar.) The `beadley-addiction-*`
+7-save FIFO is the retained controlled-diff asset.
 
 **Methodology win — the still-player ACHR record is byte-STABLE.** The no-op pair (`churnA`→`churnB`, two back-to-back
 console saves, nothing changed) leaves the *entire* player record byte-identical **except a single game-time `u32`

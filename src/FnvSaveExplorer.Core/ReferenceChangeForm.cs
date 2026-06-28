@@ -61,6 +61,11 @@ public static class ReferenceChangeForm
     /// <summary>CHANGE_REFR_INVENTORY (bit 5): the reference carries an inventory item list.</summary>
     public const uint ChangeRefrInventory = 0x00000020;
 
+    /// <summary>CHANGE_ACTOR_EXTRA_PACKAGE_DATA (bit 11): on a CHANGE_ACTOR record (form type 0x0A) a trailing
+    /// actor/AI package-data blob follows the base actor data (FNV-corpus-confirmed on the player record: present
+    /// on Nathan/MW <c>0x834</c>/<c>0x836</c>, absent on Beadley <c>0x036</c> — SPEC §4n / <see cref="ChangeActorPayload"/>).</summary>
+    public const uint ActorPackageData = 0x00000800;
+
     /// <summary>Byte length of the MOVE block (cell ref 3 + position 3×f32 + rotation 3×f32 = 27),
     /// followed by a single <c>0x7C</c> delimiter. Verified across every player inventory record.</summary>
     public const int MoveBlockLength = 27;

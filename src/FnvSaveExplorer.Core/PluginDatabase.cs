@@ -26,6 +26,7 @@ public sealed class PluginDatabase
     private readonly Dictionary<uint, string> _types; // FormID -> record signature (WEAP/ARMO/ALCH/AMMO/MISC/…)
     private readonly Dictionary<uint, int> _noteTypes; // FormID -> NOTE media byte (0=Sound 1=Text 2=Image 3=Voice)
     private readonly Dictionary<uint, int> _itemHealths; // FormID -> WEAP/ARMO base-form max condition (DATA health, §6 #4)
+    private readonly Dictionary<uint, int> _spellTypes; // FormID -> SPEL SPIT spell-type (10 = Addiction, §4n)
     private readonly Dictionary<uint, QuestDefinition> _quests; // FormID -> QUST stage/objective structure (§6 #10)
 
     /// <summary>The game <c>Data</c> folder the base/DLC names came from, or <c>null</c> when none was found.</summary>
@@ -54,12 +55,13 @@ public sealed class PluginDatabase
     private IReadOnlyList<CounterGate>? _counterGates; // lazily-built counter-gated completion graph
     private IReadOnlyList<ExternalCompletion>? _externalCompletions; // lazily-built external event-completion graph
 
-    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, int> itemHealths, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null, Dictionary<uint, IReadOnlyList<InfoCondition>>? dialogueInfoConditions = null, IReadOnlyList<CounterIncrement>? counterIncrements = null, IReadOnlyList<ExternalQuestEffect>? externalQuestEffects = null, IReadOnlyDictionary<uint, uint>? actorScripts = null, IReadOnlyDictionary<uint, uint>? placedActorBases = null, IReadOnlyDictionary<uint, IReadOnlySet<uint>>? completionEnableRefs = null, IReadOnlyDictionary<string, uint>? placedRefEdids = null)
+    private PluginDatabase(Dictionary<uint, string> names, Dictionary<uint, string> types, Dictionary<uint, int> noteTypes, Dictionary<uint, int> itemHealths, Dictionary<uint, int> spellTypes, Dictionary<uint, QuestDefinition> quests, string? dataFolder, string? modsFolder, IReadOnlyList<string> resolved, HashSet<uint>? dialogueStarted = null, Dictionary<uint, IReadOnlyList<QuestScriptEffect>>? dialogueInfoEffects = null, Dictionary<uint, IReadOnlyList<InfoCondition>>? dialogueInfoConditions = null, IReadOnlyList<CounterIncrement>? counterIncrements = null, IReadOnlyList<ExternalQuestEffect>? externalQuestEffects = null, IReadOnlyDictionary<uint, uint>? actorScripts = null, IReadOnlyDictionary<uint, uint>? placedActorBases = null, IReadOnlyDictionary<uint, IReadOnlySet<uint>>? completionEnableRefs = null, IReadOnlyDictionary<string, uint>? placedRefEdids = null)
     {
         _names = names;
         _types = types;
         _noteTypes = noteTypes;
         _itemHealths = itemHealths;
+        _spellTypes = spellTypes;
         _quests = quests;
         DataFolder = dataFolder;
         ModsFolder = modsFolder;
@@ -131,7 +133,7 @@ public sealed class PluginDatabase
     public IReadOnlyDictionary<string, uint> PlacedReferenceEdids => _placedRefEdids;
 
     /// <summary>An empty database; every <see cref="Resolve"/> returns <c>null</c>.</summary>
-    public static readonly PluginDatabase Empty = new([], [], [], [], [], null, null, []);
+    public static readonly PluginDatabase Empty = new([], [], [], [], [], [], null, null, []);
 
     /// <summary>
     /// Builds a database for <paramref name="save"/>, auto-detecting the game <c>Data</c> folder (or using an
@@ -159,6 +161,7 @@ public sealed class PluginDatabase
         var types = new Dictionary<uint, string>();
         var noteTypes = new Dictionary<uint, int>();
         var itemHealths = new Dictionary<uint, int>();
+        var spellTypes = new Dictionary<uint, int>();
         var quests = new Dictionary<uint, QuestDefinition>();
         var resolved = new List<string>();
         var dialogueTargetEdids = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // INFO StartQuest/SetStage targets
@@ -199,7 +202,7 @@ public sealed class PluginDatabase
             if (plugin.Masters.Count < remap.Length)
                 remap[plugin.Masters.Count] = i; // the plugin's own forms
 
-            foreach (var (localFormId, name, type, noteType, health) in plugin.Forms)
+            foreach (var (localFormId, name, type, noteType, health, spellType) in plugin.Forms)
             {
                 if (Remap(localFormId, remap) is not { } saveFormId)
                     continue; // references a master that isn't in this save's load order
@@ -209,6 +212,8 @@ public sealed class PluginDatabase
                     noteTypes[saveFormId] = noteType;
                 if (health > 0)
                     itemHealths[saveFormId] = health;
+                if (spellType >= 0)
+                    spellTypes[saveFormId] = spellType;
             }
 
             // QUST definitions: re-key the quest's own FormID AND each objective's target-ref FormIDs through
@@ -293,7 +298,7 @@ public sealed class PluginDatabase
             if (questByEdid.TryGetValue(questEdid, out var qFormId) && placedRefEdids.TryGetValue(refEdid, out var rFormId))
                 ((HashSet<uint>)(completionEnableRefs.TryGetValue(qFormId, out var set) ? set : completionEnableRefs[qFormId] = new HashSet<uint>())).Add(rFormId);
 
-        return new PluginDatabase(names, types, noteTypes, itemHealths, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects, infoConditions, counterIncrements, externalQuestEffects, actorScripts, placedActorBases, completionEnableRefs, placedRefEdids);
+        return new PluginDatabase(names, types, noteTypes, itemHealths, spellTypes, quests, dataFolder, modsFolder, resolved, dialogueStarted, infoEffects, infoConditions, counterIncrements, externalQuestEffects, actorScripts, placedActorBases, completionEnableRefs, placedRefEdids);
     }
 
     /// <summary>Re-keys a plugin-local FormID into save space using the plugin's high-byte → save-index
@@ -366,6 +371,19 @@ public sealed class PluginDatabase
     /// <c>DATA</c> health int32 (ROADMAP §6 #4), or <c>null</c> if the FormID isn't a weapon/armor or carries no
     /// health. This is base-form metadata: the save stores only the current condition, never the max.</summary>
     public int? ItemHealthMax(uint formId) => _itemHealths.TryGetValue(formId, out var h) && h > 0 ? h : null;
+
+    /// <summary>FNV spell-type enum for the SPEL spell-type the GECK assigns: 0=Actor Effect, 1=Disease, 2=Power,
+    /// 3=Lesser Power, 4=Ability, 5=Poison, 10=Addiction. Used to flag addictions in the player added-spell list.</summary>
+    public const int SpellTypeAddiction = 10;
+
+    /// <summary>The <c>SPEL</c> spell-type (the <c>SPIT</c> first field) of a base form, or <c>null</c> when the
+    /// FormID isn't an indexed spell. Base-form metadata read from the masters (SPEC §4n).</summary>
+    public int? SpellType(uint formId) => _spellTypes.TryGetValue(formId, out var t) ? t : null;
+
+    /// <summary>True when a FormID is an <b>addiction</b> — a <c>SPEL</c> of spell-type
+    /// <see cref="SpellTypeAddiction"/> (e.g. "Buffout Withdrawal"). This is how the player added-spell list
+    /// (<see cref="FalloutSave.PlayerActorSpells"/>) is filtered to addictions only (SPEC §4n).</summary>
+    public bool IsAddiction(uint formId) => SpellType(formId) == SpellTypeAddiction;
 
     /// <summary>The Pip-Boy tab a save FormID's item appears under, or <c>null</c> if its record type is
     /// unknown. The category is a pure function of the base form's record type (it is not stored in the

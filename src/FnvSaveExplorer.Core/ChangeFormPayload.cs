@@ -154,6 +154,13 @@ public static class ChangeFormPayload
                 break;
             }
 
+            // 0x0A player CHANGE_ACTOR record — the gated-section actor base data (added-spell list incl.
+            // addictions, SPECIAL, name, then optional AI package data). Self-validating, so any 0x0A record that
+            // parses as this structure is rendered as labeled sections; the rest fall to the token view below.
+            case 0x0A when ChangeActorPayload.TryDecode(d, flags, out _):
+                foreach (var line in ChangeActorPayload.Walk(flags, d, resolveRef)) yield return line;
+                break;
+
             // Delimited script/animation/actor state — STRUCTURE known (0x7C-tokenized with embedded
             // [u16 len][7C][ascii][7C] strings), FIELDS not yet labelled (§4l: 0x00, 0x0A). Show the tokens so
             // the structure is visible while the whole payload remains honestly "not field-decoded".

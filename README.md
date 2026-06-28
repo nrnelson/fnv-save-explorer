@@ -29,7 +29,9 @@ a CLI — and validated against real saves.
 | **Karma + XP** (float actor-values in the player reference) | ✅ decoded **and safely editable** — cracked via a float-aware diff (slot 100 = karma, 101 = XP), confirmed on a 2nd character |
 | **Pip-Boy notes** (Data → Notes, read **and** unread) | ✅ fully decoded — read markers (corpus-proven over 45,783) + the acquired-notes ref-list in the player inventory record; CLI + GUI show the full list with read/unread status + media type (Text/Voice/Sound/Image). Read-only |
 | **Pip-Boy quest list** (the computed in-game Quests tab) | 🟢 computed by `QuestPipboy` from masters quest scripts + save signals (SGE startup, formType-7 completion, said-INFO dialogue), not just read from the save (ROADMAP §6 #16); CLI `pipboy` + GUI. Validated on 3 Pip-Boy screenshots: vanilla early = **7/7 exact**; modded mid = 13/24; modded late = 28/68 at **94% precision**. **Boundary:** quests completed via world events (kills/activators) show active-not-completed — the engine recomputes that at load with no readable save signal. Read-only |
-| **Change forms** (perks, other per-actor state) | 🔬 walker + inventory + skills + per-stack extra data + notes + quest state decoded; remaining per-record internals (perks) **next** |
+| **Perks + traits** (player reference change form) | ✅ count-prefixed perk list decoded (FNV stores traits as PERKs too); CLI `perks` + GUI. Read-only |
+| **Addictions** (player CHANGE_ACTOR record) | ✅ the `0x0A` record decoded as a changeFlags-gated section walk (MOVE / added-spell list / SPECIAL / name / package data); addictions = the added-spell entries of SPEL type 10 ("X Withdrawal"). Cracked by the `beadley-addiction-*` FIFO; CLI `addictions` + GUI. Read-only |
+| **Change forms** (other per-actor state) | 🔬 walker + inventory + skills + per-stack extra data + notes + quest state + actor base data decoded; remaining per-record internals enumerable via `cfwalk` |
 
 ## The `.fos` format (validated against real New Vegas saves)
 
@@ -170,8 +172,8 @@ even though the body isn't fully understood.
 
 - `src/FnvSaveExplorer.Core` — UI-agnostic parser/writer (`FalloutSave`, `ByteReader`, `SaveScreenshot`)
   plus the FormID-name resolver (`TesPlugin`, `PluginDatabase`, `GameDataLocator`).
-- `src/FnvSaveExplorer.App` — WPF GUI: screenshot, character panel, plugins, File Location Table, SPECIAL/skills/inventory/caps/karma/XP safe edits, named inventory, and the full Notes tab (read/unread + media type).
-- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`, `special`, `skills`, `setskill`, `inventory`, `setcount`, `setcondition`, `names`, `notes`, `caps`/`setcaps`, `karma`/`xp`/`setkarma`/`setxp`, `walk`, `refdump`, `find`, `diff`/`idiff` (+ `idiff … clean`)/`fdiff`, `notescan`, `resolve`, `playerdump`, … (run with no args to list all).
+- `src/FnvSaveExplorer.App` — WPF GUI: screenshot, character panel, plugins, File Location Table, SPECIAL/skills/inventory/caps/karma/XP safe edits, named inventory, the full Notes tab (read/unread + media type), and Perks / Addictions tabs.
+- `src/FnvSaveExplorer.Cli` — `dump`, `flt`, `check`, `setlevel`, `special`, `skills`, `setskill`, `inventory`, `setcount`, `setcondition`, `names`, `notes`, `perks`, `addictions`, `caps`/`setcaps`, `karma`/`xp`/`setkarma`/`setxp`, `walk`, `cfwalk`, `refdump`, `find`, `diff`/`idiff` (+ `idiff … clean`)/`fdiff`, `notescan`, `resolve`, `playerdump`, … (run with no args to list all).
 - `tests/FnvSaveExplorer.Tests` — synthetic-save unit tests + a theory that round-trips every real `.fos` it finds.
 
 ## Usage
