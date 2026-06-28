@@ -150,10 +150,13 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    and — **new (structural corpus-alignment pass)** — the `0x00` len-6 map-marker/flags variant (§4m), the dominant
    `0x0A` len-58/`0x020C` actor record (3 delimited spans + pinned tag/zero-pad), the `0x07` len-9/`0x60000000` +
    len-42/`0xE0000000` variants, and the `0x09`/`0x40000000` count-prefixed family (`len = 6 + 14·(n/4)`). REFR/ACHR
-   are broken into their located spans (MOVE / havok-AV array / ExtraDataList+inventory). **Remaining is mostly
-   SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`, the new `0x07`/`0x09`/`0x0A` fields),
-   decode the remaining `0x00`/`0x0A` delimited script/actor variants, and fold the QUST stage/objective decode
-   (§6 #3) into the walk. See the controlled-diff shopping list below.
+   are broken into their located spans (MOVE / havok-AV array / ExtraDataList+inventory). Inside the **PlayerRef ACHR
+   volatile region**, **player limb condition is now LOCATED** (controlled diff `crippled-*`, 2026-06-28, SPEC §4n):
+   a `7C`-delimited float32 run where a crippled leg = `-100.0` and repairing it lifts to `-58.0` (each leg adjacent,
+   flips once per repair) — read-only finding, robust per-character anchor still pending (same volatile-region wall as
+   the perk slot). **Remaining is mostly SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`,
+   the new `0x07`/`0x09`/`0x0A` fields), decode the remaining `0x00`/`0x0A` delimited script/actor variants, and fold
+   the QUST stage/objective decode (§6 #3) into the walk. See the controlled-diff shopping list below.
 2. **GlobalData full type coverage.** ◑ *Mostly done* — type **3 Global Variables** is fully decoded +
    editable (§4c, `GlobalDataDecoder`; deterministic on all 607 saves), type **0** Misc Stats and type **2**
    registry structure were already decoded, and **every other table-1 type now has visible structure** (new

@@ -845,6 +845,23 @@ Bachelor + Hoarder + Companion Suite; Save 146 = Confirmed Bachelor + Heavy Hand
 (trait); a vanilla mid-game save = Built to Destroy + Fast Shot + Swift Learner + Companion Suite — controlled +
 read-only-invariant + q1→q2 + separate-list-union tests pin it. Tooling: **`findname <save> "<text>" [SIG]`** + `recid`/`find`.
 
+**Player limb condition — LOCATED in the ACHR record (controlled diff `crippled-*`, 2026-06-28).** A 3-state
+controlled diff (`crippled-both-legs` → `crippled-one-leg` → `crippled-zero-legs`: ran over a mine to cripple both
+legs, then repaired one leg, then the other) localizes the player's **per-limb condition** to a run of `7C`-delimited
+**float32** values inside the PlayerRef ACHR change form (this save: record-relative ≈`+0x512`, i.e. file `0x6D8F4`).
+Each **crippled leg = `-100.0`** (`00 00 C8 C2`); **repairing it lifts the float to `-58.0`** (`00 00 68 C2`), and the
+two leg floats are **adjacent**, each flipping exactly once in lockstep with the per-leg repair — the decisive
+single-variable signal. Neighbouring floats in the same run held other limbs' damage (`-88.21`, a constant `-58.0`,
+several `0.0` = undamaged), consistent with the 6-limb set damaged unevenly by the blast. (The value is a
+condition/damage figure, not 0–100 health: `-100` = fully crippled, less-negative = less damaged.) The wider record
+also carried the usual per-record game-time float churn (`xx xx 1E C5`) + a slowly-rising current-HP float, filtered
+out. **Robust per-character locator is deferred** — like the perk slot above, this lives in the **volatile actor
+region (§4n)** with no character-invariant anchor yet, so no general reader/editor is shipped (a hardcoded offset
+would corrupt other saves). The `crippled-*` triple is retained as the controlled-diff asset for the eventual
+ACHR-grammar decode (ROADMAP §6 #1/#5). **Aside:** `idiff` mis-aligned (skipped) the player record on this pair —
+3,785 records churned and the FormID-keyed walk desynced; the finding came from a **direct record-offset byte diff**,
+the reliable tool when a cell is busy.
+
 ### 4o. Faction reputation (fame / infamy) — the type-0x2B change forms
 The player's **reputation with each faction** is a **type-`0x2B` change form** (len 10):
 ```
