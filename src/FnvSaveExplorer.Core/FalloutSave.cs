@@ -240,8 +240,9 @@ public sealed class FalloutSave
     }
 
     /// <summary>Decodes a GlobalData type-2 payload into its <c>(FormId, RefId, Status)</c> registry entries, given
-    /// a <paramref name="resolve"/> mapping a raw 3-byte refID to a save-space FormID. Pure/testable — separated
-    /// from <see cref="StateChangedRefs"/> so it can be exercised with a synthetic payload (ROADMAP §6 #16).</summary>
+    /// a <paramref name="resolve"/> mapping a raw 3-byte refID to a save-space FormID. <c>Status</c> is a u16
+    /// <b>bitfield</b> of reference change-categories (bit 0 = dead; see <see cref="IsDeadStatus"/>). Pure/testable
+    /// — separated from <see cref="StateChangedRefs"/> so it can be exercised with a synthetic payload.</summary>
     public static IReadOnlyList<(uint FormId, int RefId, int Status)> DecodeStateChangedRefs(
         byte[] data, Func<int, uint> resolve)
     {
@@ -287,10 +288,20 @@ public sealed class FalloutSave
         return true;
     }
 
-    /// <summary>The references the type-2 registry records as <b>dead</b> (status 1) — the kill signal a counter/
-    /// event-gated quest's completion is re-derived from (ROADMAP §6 #16 Stage 2).</summary>
+    /// <summary>The type-2 registry <c>Status</c> is a <b>bitfield</b> of reference change-categories, not an enum
+    /// (ROADMAP §6 #2, controlled diffs 2026-06-28): observed values 1–7/9/11 are combinations of bits 0–3.
+    /// <b>Bit 0 (<c>0x1</c>) = dead/killed</b> — proven by fresh kills entering the registry at status 1
+    /// (gtg/fih: absent→1) and by killing an already-tracked ref bumping it by exactly +1 (the <c>killloot</c>
+    /// pair: a live mantis at status 2 → 3 on death; looting it added nothing). Bits 1–3 are other change
+    /// categories, not yet individually identified.</summary>
+    public static bool IsDeadStatus(int status) => (status & 0x1) != 0;
+
+    /// <summary>The references the type-2 registry records as <b>dead</b> — the kill signal a counter/event-gated
+    /// quest's completion is re-derived from (ROADMAP §6 #16 Stage 2). Tests <see cref="IsDeadStatus"/> (the dead
+    /// bit), so a ref that died <i>and</i> carries another change bit (e.g. status 3) still counts — the
+    /// <c>== 1</c> check used to miss those (the mantis-at-3 case, ROADMAP §6 #2).</summary>
     public IReadOnlySet<uint> DeadReferences() =>
-        StateChangedRefs().Where(r => r.Status == 1 && r.FormId != 0).Select(r => r.FormId).ToHashSet();
+        StateChangedRefs().Where(r => IsDeadStatus(r.Status) && r.FormId != 0).Select(r => r.FormId).ToHashSet();
 
     /// <summary>References the save records as <b>enabled</b> (ROADMAP §6 #16 Stage 2): a reference that was
     /// <i>Initially Disabled</i> in the masters and then <c>Enable</c>d carries a <c>CHANGE_FORM_FLAGS</c> (bit0)

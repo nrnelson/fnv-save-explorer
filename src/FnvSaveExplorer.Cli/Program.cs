@@ -621,12 +621,12 @@ static void Deaths(FalloutSave s, string savePath, string? dataDir)
     var byStatus = refs.GroupBy(r => r.Status).OrderBy(g => g.Key);
     Console.WriteLine($"GlobalData type-2 registry: {refs.Count} state-changed reference(s)");
     Console.WriteLine($"  status histogram: {string.Join("  ", byStatus.Select(g => $"{g.Key}:{g.Count()}"))}");
-    Console.WriteLine($"  dead (status 1): {refs.Count(r => r.Status == 1)}\n");
+    Console.WriteLine($"  dead (status bit0 set): {refs.Count(r => FalloutSave.IsDeadStatus(r.Status))}   (status is a bitfield, §6 #2)\n");
     foreach (var (formId, refId, status) in refs)
     {
         var name = db.Resolve(formId) ?? db.RecordType(formId) ?? "";
-        var deadTag = status == 1 ? " [DEAD]" : "";
-        Console.WriteLine($"  refId 0x{refId:X6} -> 0x{formId:X8}  status {status}{deadTag}  {name}");
+        var deadTag = FalloutSave.IsDeadStatus(status) ? " [DEAD]" : "";
+        Console.WriteLine($"  refId 0x{refId:X6} -> 0x{formId:X8}  status {status} (0x{status:X}){deadTag}  {name}");
     }
 }
 

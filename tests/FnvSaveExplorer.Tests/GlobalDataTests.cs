@@ -70,6 +70,23 @@ public class GlobalDataTests
         Assert.Equal(0x0021BC, entries[0].RefId);
     }
 
+    [Theory]
+    [InlineData(0, false)]   // no bits
+    [InlineData(1, true)]    // dead only
+    [InlineData(2, false)]   // bit1 only — alive
+    [InlineData(3, true)]    // dead + bit1 (the killloot mantis 2->3 case)
+    [InlineData(5, true)]    // dead + bit2
+    [InlineData(7, true)]    // dead + bit1 + bit2
+    [InlineData(4, false)]   // bit2 only — alive
+    [InlineData(9, true)]    // dead + bit3
+    public void IsDeadStatus_tests_the_dead_bit_not_an_exact_value(int status, bool dead)
+    {
+        // ROADMAP §6 #2: the type-2 status is a BITFIELD (bit0 = dead), proven by the killloot controlled diff
+        // (a live ref at status 2 -> 3 on death). So a ref that died AND carries another change bit (status 3/5/7)
+        // must still count as dead — the old `== 1` check missed those.
+        Assert.Equal(dead, FalloutSave.IsDeadStatus(status));
+    }
+
     [Fact]
     public void StateChangedRefs_empty_registry_decodes_to_nothing()
     {

@@ -19,6 +19,10 @@ on; here's why,"** not "impossible."
   under-reports creature deaths. **The kill-poll is limited to NPC-kill quests** (gangers ARE
   registry-keyed by base FormID — the Ghost Town Gunfight case). Generic-creature quests need the
   editor-ref→dead-instance binding (a deeper ACHR decode).
+  - *Update (2026-06-28):* the type-2 `Status` is a **bitfield**, bit 0 = dead (ROADMAP §6 #2, `killloot`
+    diff). `DeadReferences` now tests the dead **bit** not `== 1`, so it no longer drops dead refs that also
+    carry another change bit (status 3/5/7). This recovers *some* of the under-reported deaths but NOT the
+    editor-ref→runtime-instance binding gap above — that still blocks generic-creature kill quests.
 - **The stuck quests don't persist their gate vars.** The QUST script-var block is decoded
   (`CHANGE_QUEST_SCRIPT`, bit30 — `QuestScriptVars`), but only quests with a bit30 change form expose
   vars. Wang Dang (`doonce`) has no change form, "They Went That-a-Way"/VMQ01 (`GotJessupNote`) is a

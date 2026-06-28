@@ -47,7 +47,7 @@ quicksave). The test theory auto-discovers them (and a local `samples/`) and ski
 CLI commands: `dump`, `screenshot`, `check`, `flt`, `probe`, `hex`, `globals`, `stats`, `setstat`, `formids`,
 `findplayer`, `playerdump`, `special`, `setspecial`, `skills`, `setskill`, `inventory`, `setcount`,
 `setcondition`, `names`, `notes`, `perks`, `reputation`, `setreputation`, `player`, `setlevel`, `caps`, `setcaps`, `karma`, `xp`, `setkarma`, `setxp`, `gdwalk`, `setglobal`, `diff`, plus
-R&D helpers `walk`, `survey`, `cfwalk`, `gddump`, `gdscan`, `gdtypescan`, `recid`, `findname`, `refdump`, `edlscan`, `invsig`, `notescan`, `resolve`, `idiff`, `fdiff`, `find`, `irefscan`.
+R&D helpers `walk`, `survey`, `cfwalk`, `gddump`, `gdscan`, `gdtypescan`, `recid`, `findname`, `refdump`, `edlscan`, `invsig`, `notescan`, `resolve`, `idiff`, `fdiff`, `regdiff`, `find`, `irefscan`.
 Run with no args to list them. (`edlscan <dir>` aggregates the modded ExtraDataList grammar + a deterministic-path
 tally across a save folder; `invsig <dir>` prints a per-save decoded-inventory signature for byte-identical-decode checks — §4i;
 `notescan <dir>` aggregates the read-note markers — flag-value + `0x1F`→NOTE + inventory-reference tallies — §4k.1.)
@@ -162,9 +162,17 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    shape-validated by `gdscan`. Types **1/4/5/6/8/9/10** render as structural `0x7C` token trees (boundaries +
    primitive kinds + resolved refIDs + ASCII strings) by `gdwalk` — notably **type 10** holds radio music-track
    paths and **type 9** holds 12-byte position runs + item refs. New diagnostic: `gdtypescan <dir>` (per-type
-   length/delimiter/leading-byte/vsval-stride survey across a corpus). **Remaining (all SEMANTICS, need §7
-   controlled diffs):** name the type-1/4/5/6/8/9/10 fields and type 7's rare entry grammar; pin the type-2 registry
-   status codes — only `1`=death is confirmed; `gdscan`'s histogram shows `2–7` plus rare `9`/`11`, semantics-unknown.
+   length/delimiter/leading-byte/vsval-stride survey across a corpus). **Type-2 registry status — cracked as a
+   BITFIELD (controlled diffs 2026-06-28, CLI `regdiff`):** the per-ref `Status` is not an enum but a bitfield of
+   reference change-categories (observed values `1–7`/`9`/`11` = combinations of bits 0–3, which is why `1`
+   dominates). **Bit 0 (`0x1`) = dead/killed** — fresh kills enter at status 1 (gtg/fih: absent→1) and killing an
+   already-tracked ref bumps it by exactly +1 (the `killloot` pair: a live mantis at status 2 → 3 on death; looting
+   added nothing). `FalloutSave.IsDeadStatus`/`DeadReferences` now test the dead **bit** (was `== 1`), recovering
+   dead refs that also carry another change bit (the mantis-at-3 — previously under-reported, DECISIONS.md). **Negatives
+   (also new):** pick-up / drop / empty-a-container / pick-lock+open-door do **not** touch the registry (they live in
+   REFR/container change forms), so it is narrow — actor death + a few other disable/destroy categories. **Remaining
+   SEMANTICS (need §7 diffs):** identify bits 1–3 (harvest a flora node is the next experiment), name the
+   type-1/4/5/6/8/9/10 fields and type 7's rare entry grammar.
    The separate `GlobalData3` type-1000 record (its own FLT section) is still undecoded — adjacent future work.
 3. **Quest / Pip-Boy interpreter** (former #16) — now a *consumer* of the decode, not bespoke probes.
    Remaining recall needs either the editor-ref→dead-instance binding (creature kills) or more
