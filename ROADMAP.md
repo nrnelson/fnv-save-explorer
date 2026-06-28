@@ -155,8 +155,9 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    sets one `7C`-delimited f32 slot `0.0`→`15.0`) are now **LOCATED** (controlled diffs `crippled-*` / `chem-*`,
    2026-06-28, SPEC §4n). **The §4n "no-anchor" pessimism is reframed:** a no-op pair proved the still-player record is
    byte-stable bar one game-time `u32`, and the fields live in the **PlayerRef+1 record `0x06003E44`** (the §4i/§4j
-   record). Limb condition = **6 × float32, `-100` crippled / `-58` healed / `0` full**, slot 0 = Torso, slot 3 = Leg
-   (**all Beadley — one character at several save moments; cross-character NOT yet verified**; an earlier note
+   record). Limb condition = **6 × float32, `-100` crippled / `-58` healed / `0` full**, order
+   `[Torso, LArm, RArm, LLeg, RLeg, Head]` (slots 0–4 each directly cripple/heal-confirmed, slot 5=Head by
+   elimination) (**all Beadley — one character at several save moments; cross-character NOT yet verified**; an earlier note
    wrongly said "Nathan/Mace Windu, 3 characters" — filename-trust error). The data-offset **shifts with the havok
    blob** even within Beadley (data+0x3A0 in most moments, **data+0x3A6** in the bigger Save-146 record), so it's
    fixed relative to the **AV-array start (post-havok)**, not the record start. **Remaining before a reader/editor:**

@@ -865,10 +865,12 @@ a time): clearing the **chest** emptied base **+0x3A0**, a **leg** base **+0x3AF
 slot 1 is likely Head). Per the player's in-game Pip-Boy reading: `mw-limbpost` (also Beadley — the `mw-` prefix is a
 misnomer) crippled **Torso + Left Leg**, and `beadley-armlegcripple` crippled **Right Arm + Left Leg** — the **same
 Left Leg both times**, both clearing **+0x3AF**. And `crippled-both-legs`→`crippled-one-leg` repaired the **Right
-Leg** (both legs at +0x3AF/+0x3B4 crippled → only **+0x3AF** stays crippled). So: **slot 0 = Torso** (center-mass,
-no L/R, like the head), **slot 2 = Right Arm**, **slot 3 = Left Leg** (confirmed across 3 sequences), **slot 4 =
-Right Leg**; slots **1** (likely Head) and **5** (likely Left Arm) remain unmapped — **5 of 6 located**. **L/R is
-from the visual observation, not byte-derivable** (the save stores only six positional floats; the Pip-Boy figure faces the player,
+Leg** (both legs at +0x3AF/+0x3B4 crippled → only **+0x3AF** stays crippled). And `beadley-leftarmcripple`/`-fix` crippled+healed
+the **Left Arm** at **+0x3A5** (slot 1). **Full 6-slot map (stride 5 from base data+0x3A0):**
+**slot 0 = Torso, 1 = Left Arm, 2 = Right Arm, 3 = Left Leg, 4 = Right Leg, 5 = Head** — i.e. order
+`[Torso, LArm, RArm, LLeg, RLeg, Head]`. Slots 0–4 are each **directly confirmed** by a cripple/heal capture;
+**slot 5 = Head by elimination** (the only remaining body part; not yet directly captured). Torso and Head are
+center-mass (no L/R). **L/R is from the visual observation, not byte-derivable** (the save stores only six positional floats; the Pip-Boy figure faces the player,
 so its on-screen left = the player's right limb). All values/identities are **Beadley-only** so far.
 
 **The data-relative offset of the array is NOT constant — it tracks the variable havok-blob size**, shown *within
