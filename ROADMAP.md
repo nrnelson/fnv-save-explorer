@@ -169,10 +169,13 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    already-tracked ref bumps it by exactly +1 (the `killloot` pair: a live mantis at status 2 → 3 on death; looting
    added nothing). `FalloutSave.IsDeadStatus`/`DeadReferences` now test the dead **bit** (was `== 1`), recovering
    dead refs that also carry another change bit (the mantis-at-3 — previously under-reported, DECISIONS.md). **Negatives
-   (also new):** pick-up / drop / empty-a-container / pick-lock+open-door do **not** touch the registry (they live in
-   REFR/container change forms), so it is narrow — actor death + a few other disable/destroy categories. **Remaining
-   SEMANTICS (need §7 diffs):** identify bits 1–3 (harvest a flora node is the next experiment), name the
-   type-1/4/5/6/8/9/10 fields and type 7's rare entry grammar.
+   (also new, 6 distinct controlled pairs):** pick-up, drop, empty-a-container, pick-lock+open-door, **collect a
+   snow globe**, and **dig up a grave** all leave the registry byte-identical (they live in REFR/container change
+   forms). So **no player world-interaction touches it — only actor death/destruction does.** Bits 1–3 are likely
+   internal actor-state flags, not player events: in the `killloot` pair the mantis was status **2 while still
+   alive** (bit 1 set by the engine pre-death), so they can't be driven by a clean single input the way bit 0 can.
+   **Remaining SEMANTICS:** bits 1–3 would need death-variation diffs (dismember/gib) and may resist clean
+   isolation; also name the type-1/4/5/6/8/9/10 fields and type 7's rare entry grammar.
    The separate `GlobalData3` type-1000 record (its own FLT section) is still undecoded — adjacent future work.
 3. **Quest / Pip-Boy interpreter** (former #16) — now a *consumer* of the decode, not bespoke probes.
    Remaining recall needs either the editor-ref→dead-instance binding (creature kills) or more
