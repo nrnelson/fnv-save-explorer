@@ -880,6 +880,11 @@ results from the same controlled pairs overturn the earlier "no anchor" read:
    - **Mace Windu** (`mw-limbpost`, 2 crippled): base **data+0x3A0** (crippled at +0x3A0/+0x3AF). *Same offset as Nathan.*
    - **Beadley** (Save 146): base **data+0x3A6** — **shifted ~6 B later**, and its record is bigger (len 10497 vs
      ~9300–9600), all three with havok-move flags `0xB0400832`.
+   **Value scale + partial identity** (MW `mw-limbpost`→`mw-limblegfix`→`mw-limbchestfix`, healing one limb at a time):
+   **`-100.0` = crippled, `-58.0` = healed/uncrippled, `0.0` = undamaged** (the `-58` healed value matches Nathan, so
+   the scale is character-invariant). Healing the **leg** cleared the slot at **+0x3AF** and the **chest** cleared
+   **+0x3A0** → **slot 0 (base) = Torso/Chest, slot 3 = a Leg** (stride-5 indices; the other four slots' body-part
+   mapping is unmapped — the player couldn't cripple a single limb in isolation).
    So the offset is **NOT a universal data-relative constant** — it tracks the **variable havok-blob size** before the
    actor-value array (Nathan/MW aligned only because their blobs were the same size; Beadley's differs). The array is
    fixed relative to the **AV-array start (post-havok)**, i.e. `limbBase = AVArrayStart + const`. The effect array
