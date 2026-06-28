@@ -855,12 +855,37 @@ single-variable signal. Neighbouring floats in the same run held other limbs' da
 several `0.0` = undamaged), consistent with the 6-limb set damaged unevenly by the blast. (The value is a
 condition/damage figure, not 0–100 health: `-100` = fully crippled, less-negative = less damaged.) The wider record
 also carried the usual per-record game-time float churn (`xx xx 1E C5`) + a slowly-rising current-HP float, filtered
-out. **Robust per-character locator is deferred** — like the perk slot above, this lives in the **volatile actor
-region (§4n)** with no character-invariant anchor yet, so no general reader/editor is shipped (a hardcoded offset
-would corrupt other saves). The `crippled-*` triple is retained as the controlled-diff asset for the eventual
-ACHR-grammar decode (ROADMAP §6 #1/#5). **Aside:** `idiff` mis-aligned (skipped) the player record on this pair —
-3,785 records churned and the FormID-keyed walk desynced; the finding came from a **direct record-offset byte diff**,
-the reliable tool when a cell is busy.
+out. **Aside:** `idiff` mis-aligned (skipped) the player record on this pair — 3,785 records churned and the
+FormID-keyed walk desynced; the finding came from a **direct record-offset byte diff**, the reliable tool when a
+cell is busy.
+
+**Player active-effect slot array — LOCATED (controlled diff `chem-*`, 2026-06-28).** A clean chem pair (`chempre`
+→ `chempost`: `tgm`, `player.additem` a chem, `player.equipitem` it — empty interior, no movement) surfaces an
+**array of `7C`-delimited float32 slots, almost all `0.0`**, at record-relative ≈`+0x1BB`; using the chem set
+**exactly one slot `0.0 → 15.0`** (the effect magnitude). A paired `u16` a bit earlier also moved (likely the effect
+timer). This is the actor's active-effect / AV-modifier block.
+
+**The ACHR "volatile region" is actually byte-STABLE + has a usable anchor (reframes the §4n pessimism).** Two
+results from the same controlled pairs overturn the earlier "no anchor" read:
+1. **No-op pair** (`churnA`→`churnB`, two back-to-back console saves, nothing changed): the *entire* player record is
+   byte-identical **except a single game-time `u32` tick** at record-rel ≈`+0x10F`. So a still player's ACHR record
+   does **not** churn — controlled diffs on it are clean once that one counter is ignored (the `xx xx 1E C5` float
+   only churns while the actor is physically moving). Earlier "volatile" pessimism conflated *moving*-actor havok
+   churn with the record being unanalysable.
+2. **Fixed internal layout.** The limb array (rel `+0x510`) and effect array (rel `+0x1BB`) sit at the **same
+   record-relative offsets, byte-identical, across two unrelated Nathan sessions** (the `crippled-*` and `chem-*`
+   captures). Cross-character: **Beadley** shows the same limb array (again with `-58.0` slots) at ~the same offset;
+   **Mace Windu** is **shifted** — because the pre-array region (MOVE block + havok blob) is **variable-length per
+   actor/moment**. That variable region is exactly what **§4i already locates deterministically** (MOVE + fixed
+   1160-B array, or the ExtraDataList-header anchor for havok-move records). **So limb/effect are at fixed offsets
+   within the §4i actor-value array — anchorable to the array start, not the record start.**
+
+**Next step toward a shipped reader/editor:** express the limb (`+0x510`) and effect (`+0x1BB`) offsets **relative to
+the §4i array start** (`InventorySearchStart`-style anchor) and verify that array-relative offset is constant across
+characters (needs one more character's limb ground-truth). Then a robust `PlayerLimbs`/`PlayerEffects` reader — and a
+same-length float editor for limb condition — becomes safe. Until that cross-character verification, no general
+reader is shipped (a record-relative offset would mis-hit Mace-Windu-style shifted layouts). The `crippled-*` +
+`chem-*` + `churn*` pairs are retained as the controlled-diff assets (ROADMAP §6 #1/#5).
 
 ### 4o. Faction reputation (fame / infamy) — the type-0x2B change forms
 The player's **reputation with each faction** is a **type-`0x2B` change form** (len 10):

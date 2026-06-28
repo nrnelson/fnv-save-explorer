@@ -151,10 +151,13 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    `0x0A` len-58/`0x020C` actor record (3 delimited spans + pinned tag/zero-pad), the `0x07` len-9/`0x60000000` +
    len-42/`0xE0000000` variants, and the `0x09`/`0x40000000` count-prefixed family (`len = 6 + 14·(n/4)`). REFR/ACHR
    are broken into their located spans (MOVE / havok-AV array / ExtraDataList+inventory). Inside the **PlayerRef ACHR
-   volatile region**, **player limb condition is now LOCATED** (controlled diff `crippled-*`, 2026-06-28, SPEC §4n):
-   a `7C`-delimited float32 run where a crippled leg = `-100.0` and repairing it lifts to `-58.0` (each leg adjacent,
-   flips once per repair) — read-only finding, robust per-character anchor still pending (same volatile-region wall as
-   the perk slot). **Remaining is mostly SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`,
+   region**, **limb condition** (crippled leg `-100.0`→`-58.0` on repair) and the **active-effect slot array** (a chem
+   sets one `7C`-delimited f32 slot `0.0`→`15.0`) are now **LOCATED** (controlled diffs `crippled-*` / `chem-*`,
+   2026-06-28, SPEC §4n). **The §4n "no-anchor" pessimism is reframed:** a no-op pair proved the still-player record is
+   byte-stable bar one game-time `u32`, and these fields sit at **fixed offsets within the §4i actor-value array**
+   (byte-identical across two Nathan sessions; cross-character they shift only by the variable MOVE/havok pre-region
+   that §4i already locates). Next: express the offsets **relative to the §4i array start**, verify cross-character,
+   then ship `PlayerLimbs`/`PlayerEffects` readers + a same-length limb editor. **Remaining is mostly SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`,
    the new `0x07`/`0x09`/`0x0A` fields), decode the remaining `0x00`/`0x0A` delimited script/actor variants, and fold
    the QUST stage/objective decode (§6 #3) into the walk. See the controlled-diff shopping list below.
 2. **GlobalData full type coverage.** ◑ *Mostly done* — type **3 Global Variables** is fully decoded +
