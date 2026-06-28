@@ -163,7 +163,10 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    **controlled-confirmed**: a Mace Windu left-leg cripple lands on the same slot 183 at the same -100 floor (+ Nathan
    healthy, Beadley full ground-truth). *(The earlier
    "havok-dependent offset" worry was a measurement error — slots are fixed, like karma's.)* The **active-effect slot
-   array** (chem sets one f32 `0→15`) is located in the same array but not yet field-mapped (read-only follow-up). **Remaining is mostly SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`,
+   array** (chem sets one f32 `0→15`) is located in the same array but not yet field-mapped (read-only follow-up).
+   **Addictions** are also decoded (controlled FIFO diff `beadley-addiction-*`, SPEC §4n): a count-prefixed 3-byte-ref
+   list in the player **CHANGE_ACTOR record** (`iref = playerBase+1`, formType 0x0A) — `[count×4][7C] + refs[3] +
+   [00][7C]`; reader deferred pending the flag-gated 0x0A section parse (the list's offset varies by character). **Remaining is mostly SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`,
    the new `0x07`/`0x09`/`0x0A` fields), decode the remaining `0x00`/`0x0A` delimited script/actor variants, and fold
    the QUST stage/objective decode (§6 #3) into the walk. See the controlled-diff shopping list below.
 2. **GlobalData full type coverage.** ◑ *Mostly done* — type **3 Global Variables** is fully decoded +

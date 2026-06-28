@@ -888,6 +888,23 @@ read + round-trip on real saves.
 array `0.0 → 15.0`** (effect magnitude), with a nearby `u16` also moving (likely the effect timer) — the actor's
 active-effect / AV-modifier block, in the same gated array. Not yet field-mapped to a reader.
 
+**Player addictions — DECODED (controlled FIFO diff `beadley-addiction-*`, 2026-06-28; reader is a follow-up).**
+A 7-state controlled sequence (add Buffout → Alcohol → Med-X, then remove FIFO until recovered) pins addictions to a
+**count-prefixed ref list** inside the player's **CHANGE_ACTOR record** — `iref = playerBase(0x07) + 1`, formType
+`0x0A` (cross-character confirmed: present at that iref on Beadley/Nathan/Mace Windu). The list:
+```
+[count×4 : u8][7C]  then  (count/4) × [addictionRef : 3 bytes BE][7C]  then  [00][7C]   # newest entry first
+```
+(the `count×4` convention is the same as the perk list §4n.) Each added addiction **appends a FormID-array entry**
+(the addiction effect instance) and prepends its 3-byte refID to the list; FIFO removal drops the oldest. Observed
+refs: **Buffout `0x0030BB`, Alcohol `0x0030BC`, Med-X `0x0030BD`** (sequential — consecutive new array entries), each
+resolving via the FormID array to the addiction effect. The same record also carries the player's SPECIAL
+(`06 06 06 06 06 05 05`) and name. **Reader deferred:** the list's offset *within* the record is **variable** — the
+0x0A CHANGE_ACTOR record is flag-gated (Beadley len 48/flags `0x36`; Nathan len 706/`0x834`; MW len 735/`0x836`), so a
+robust `PlayerAddictions` reader needs the 0x0A section parse (decode the changeFlags-gated sections to reach the
+addiction list) **or** a §4n-style validated count-prefixed-list scan — logged as a §6 #1 follow-up. The
+`beadley-addiction-*` 7-save FIFO sequence is the retained controlled-diff asset.
+
 **Methodology win — the still-player ACHR record is byte-STABLE.** The no-op pair (`churnA`→`churnB`, two back-to-back
 console saves, nothing changed) leaves the *entire* player record byte-identical **except a single game-time `u32`
 tick** — so actor-region controlled diffs are clean once that counter is ignored (the `xx xx 1E C5` float only churns
