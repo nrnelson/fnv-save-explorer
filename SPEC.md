@@ -872,20 +872,29 @@ results from the same controlled pairs overturn the earlier "no anchor" read:
    does **not** churn — controlled diffs on it are clean once that one counter is ignored (the `xx xx 1E C5` float
    only churns while the actor is physically moving). Earlier "volatile" pessimism conflated *moving*-actor havok
    churn with the record being unanalysable.
-2. **Fixed internal layout.** The limb array (rel `+0x510`) and effect array (rel `+0x1BB`) sit at the **same
-   record-relative offsets, byte-identical, across two unrelated Nathan sessions** (the `crippled-*` and `chem-*`
-   captures). Cross-character: **Beadley** shows the same limb array (again with `-58.0` slots) at ~the same offset;
-   **Mace Windu** is **shifted** — because the pre-array region (MOVE block + havok blob) is **variable-length per
-   actor/moment**. That variable region is exactly what **§4i already locates deterministically** (MOVE + fixed
-   1160-B array, or the ExtraDataList-header anchor for havok-move records). **So limb/effect are at fixed offsets
-   within the §4i actor-value array — anchorable to the array start, not the record start.**
+2. **Fixed internal layout — in the PlayerRef+1 record `0x06003E44`.** Re-keyed against the **right** record (the
+   `iref = PlayerRef+1` change form that already holds inventory §4g / karma+XP §4j — NOT the FormID-`0x14` ACHR), the
+   **limb-condition array is 6 × float32 on a 5-byte stride** (`[f32][7C]`×6), crippled = `-100.0`, healed lifts
+   toward `0.0` (undamaged). Confirmed across **3 characters** by `find`ing the crippled/-58 floats inside that record:
+   - **Nathan** (`crippled-*`): array base **data+0x3A0** (legs at +0x3AF/+0x3B4).
+   - **Mace Windu** (`mw-limbpost`, 2 crippled): base **data+0x3A0** (crippled at +0x3A0/+0x3AF). *Same offset as Nathan.*
+   - **Beadley** (Save 146): base **data+0x3A6** — **shifted ~6 B later**, and its record is bigger (len 10497 vs
+     ~9300–9600), all three with havok-move flags `0xB0400832`.
+   So the offset is **NOT a universal data-relative constant** — it tracks the **variable havok-blob size** before the
+   actor-value array (Nathan/MW aligned only because their blobs were the same size; Beadley's differs). The array is
+   fixed relative to the **AV-array start (post-havok)**, i.e. `limbBase = AVArrayStart + const`. The effect array
+   (chem `0.0→15.0` slot) lives in the same record's AV region, likewise post-havok.
 
-**Next step toward a shipped reader/editor:** express the limb (`+0x510`) and effect (`+0x1BB`) offsets **relative to
-the §4i array start** (`InventorySearchStart`-style anchor) and verify that array-relative offset is constant across
-characters (needs one more character's limb ground-truth). Then a robust `PlayerLimbs`/`PlayerEffects` reader — and a
-same-length float editor for limb condition — becomes safe. Until that cross-character verification, no general
-reader is shipped (a record-relative offset would mis-hit Mace-Windu-style shifted layouts). The `crippled-*` +
-`chem-*` + `churn*` pairs are retained as the controlled-diff assets (ROADMAP §6 #1/#5).
+**Next step toward a shipped reader/editor — the remaining hard part is locating the AV-array start.** §4i jumps over
+the havok-move record's variable pre-`ExtraDataList` region as one opaque blob (it only needs the ExtraDataList/​
+inventory start, found by header scan); the **AV-array start *inside* that blob is not separately located**. Once it
+is (decode the havok-blob tail / AV-array header), limb = `AVArrayStart + 0x?? `, 6 floats — then a `PlayerLimbs`
+reader + a same-length limb-condition float editor (repair limbs!) is safe. A hardcoded `data+0x3A0` would mis-hit
+Beadley-style (different havok size) saves, so **no general reader is shipped yet**. The `crippled-*` + `mw-limb*` +
+`chem-*` + `churn*` pairs are the retained controlled-diff assets (ROADMAP §6 #1/#5). **Methodology win:** the no-op
+`churn*` pair proved the still-player record is byte-stable bar one game-time `u32`, so actor-region diffs ARE clean —
+the old §4n "unanchorable volatile region" framing was too pessimistic; the only real obstacle left is the havok-blob
+length in front of the AV array.
 
 ### 4o. Faction reputation (fame / infamy) — the type-0x2B change forms
 The player's **reputation with each faction** is a **type-`0x2B` change form** (len 10):

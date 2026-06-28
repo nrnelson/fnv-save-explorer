@@ -154,10 +154,12 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    region**, **limb condition** (crippled leg `-100.0`→`-58.0` on repair) and the **active-effect slot array** (a chem
    sets one `7C`-delimited f32 slot `0.0`→`15.0`) are now **LOCATED** (controlled diffs `crippled-*` / `chem-*`,
    2026-06-28, SPEC §4n). **The §4n "no-anchor" pessimism is reframed:** a no-op pair proved the still-player record is
-   byte-stable bar one game-time `u32`, and these fields sit at **fixed offsets within the §4i actor-value array**
-   (byte-identical across two Nathan sessions; cross-character they shift only by the variable MOVE/havok pre-region
-   that §4i already locates). Next: express the offsets **relative to the §4i array start**, verify cross-character,
-   then ship `PlayerLimbs`/`PlayerEffects` readers + a same-length limb editor. **Remaining is mostly SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`,
+   byte-stable bar one game-time `u32`, and the fields live in the **PlayerRef+1 record `0x06003E44`** (the §4i/§4j
+   record). Limb condition = **6 × float32, crippled `-100.0`**, confirmed across **3 characters** (Nathan & Mace
+   Windu at data+0x3A0; **Beadley at data+0x3A6** — shifted by its larger havok blob). So the offset is fixed
+   relative to the **AV-array start (post-havok)**, not the record start. **Remaining hard part:** §4i treats the
+   havok-move record's pre-`ExtraDataList` region as one opaque blob, so the **AV-array start isn't separately
+   located** — decode that and a `PlayerLimbs` reader + same-length limb-condition editor (repair limbs!) ship safely. **Remaining is mostly SEMANTICS (needs controlled diffs):** name the sized types (`0x20`–`0x32`,
    the new `0x07`/`0x09`/`0x0A` fields), decode the remaining `0x00`/`0x0A` delimited script/actor variants, and fold
    the QUST stage/objective decode (§6 #3) into the walk. See the controlled-diff shopping list below.
 2. **GlobalData full type coverage.** ◑ *Mostly done* — type **3 Global Variables** is fully decoded +
