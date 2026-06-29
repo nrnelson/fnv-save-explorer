@@ -201,11 +201,10 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    internal actor-state flags, not player events: in the `killloot` pair the mantis was status **2 while still
    alive** (bit 1 set by the engine pre-death), so they can't be driven by a clean single input the way bit 0 can.
    **Remaining SEMANTICS:** bits 1–3 would need death-variation diffs (dismember/gib) and may resist clean
-   isolation — **a dismember controlled pair (`dismember-pre`→`dismember-post`, 2026-06-29) confirms this:** the
-   dismembered creature (a PACK ref `0x001651B1`) entered the registry at **status 1 (plain death)**, i.e.
-   dismemberment sets **no distinct registry bit** — the dismembered-limbs state lives in the creature's own actor
-   change form (bit 17 `ACTOR_DISMEMBERED_LIMBS`), not the type-2 registry. So bits 1–3 stay engine-internal and
-   unisolated (consistent with the `killloot` mantis-at-2-while-alive observation). Also name the
+   isolation. (An attempted `dismember-pre`/`dismember-post` capture is **inconclusive** — the in-game
+   dismemberment was never confirmed, and the pair is a busy-cell diff, not a clean single-input pair, so it
+   bears no weight on bits 1–3; the registry change it shows, a ref entering at status 1, is just an ordinary
+   death/tracking entry. A *confirmed* dismember/gib controlled pair is still needed.) Also name the
    type-1/4/5/6/8/9/10 fields and type 7's rare entry grammar.
    The separate `GlobalData3` type-1000 record (its own FLT section) is still undecoded — adjacent future work.
 3. **Quest / Pip-Boy interpreter** (former #16) — now a *consumer* of the decode, not bespoke probes.
