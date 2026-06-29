@@ -557,6 +557,15 @@ static void QuestGuard(FalloutSave s, string savePath, string questHex, string? 
     foreach (var q in db.Quests.Values) if (!string.IsNullOrEmpty(q.Edid)) byEdid[q.Edid!] = q.FormId;
     var dead = s.DeadReferences();
 
+    // Bind a local-var resolver to THIS quest: each persisted script var (keyed by SLSD slot) named via the
+    // masters' SLSD/SCVR table, so a named-var guard (e.g. `bPlayerRentedRoom == 1`) evaluates (ROADMAP §6 #3).
+    var varMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    if (QuestScriptVars.Read(s).TryGetValue(formId, out var qvars))
+        foreach (var v in qvars)
+            if (db.QuestScriptVarName(formId, v.Index) is { } nm)
+                varMap[nm] = (int)Math.Round(v.Value);
+    Func<string, int?> resolveVar = nm => varMap.TryGetValue(nm, out var val) ? val : null;
+
     var guard = new GuardEvaluator(
         dead, db.PlacedReferenceEdids,
         e => byEdid.TryGetValue(e, out var f) ? f : null,
@@ -564,7 +573,8 @@ static void QuestGuard(FalloutSave s, string savePath, string questHex, string? 
         f => pq.TryGetValue(f, out var q) ? q.State == PipboyQuestState.Completed : false,
         _ => null,
         (f, n) => pq.TryGetValue(f, out var q) ? q.Objectives.Any(o => o.Index == n && o.Completed) : false,
-        (f, n) => pq.TryGetValue(f, out var q) ? q.Objectives.Any(o => o.Index == n) : false);
+        (f, n) => pq.TryGetValue(f, out var q) ? q.Objectives.Any(o => o.Index == n) : false,
+        resolveVar);
 
     var computed = pq.TryGetValue(formId, out var cq) ? cq.State.ToString() : "(not shown)";
     Console.WriteLine($"{questHex}  {def.Name} [{def.Edid}]  computed={computed}  dead-refs={dead.Count}  placedRefEdids={db.PlacedReferenceEdids.Count}\n");
@@ -589,6 +599,28 @@ static void QuestGuard(FalloutSave s, string savePath, string questHex, string? 
         Console.WriteLine($"  [{verdict}] {e.Verb} {e.TargetQuestEdid} {e.Arg1}={e.Arg2}");
         foreach (var g in e.Guards)
             Console.WriteLine($"        {guard.Holds(g),-6} | {g.Trim()}");
+    }
+
+    // Named script vars now resolvable against the save (§6 #3): show the quest's persisted vars and the
+    // GameMode effects whose guards reference one — these used to be uniformly "unknown".
+    if (varMap.Count > 0)
+    {
+        Console.WriteLine($"\n--- persisted script vars ({varMap.Count}; SLSD/SCVR names) ---");
+        foreach (var (nm, val) in varMap.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
+            Console.WriteLine($"  {nm,-28} = {val}");
+
+        Console.WriteLine("\n--- GameMode effects gated on a named var ---");
+        foreach (var e in QuestScript.Parse(def.GameModeScript))
+        {
+            if (!e.Guards.Any(g => varMap.Keys.Any(nm => g.Contains(nm, StringComparison.OrdinalIgnoreCase)))
+                || e.Guards.Any(g => g.Contains("getdead", StringComparison.OrdinalIgnoreCase)))
+                continue;
+            var verdict = e.Guards.All(g => guard.Holds(g) == true) ? "FIRE"
+                : e.Guards.Any(g => guard.Holds(g) == false) ? "blocked" : "unknown";
+            Console.WriteLine($"  [{verdict}] {e.Verb} {e.TargetQuestEdid} {e.Arg1}={e.Arg2}");
+            foreach (var g in e.Guards)
+                Console.WriteLine($"        {guard.Holds(g),-6} | {g.Trim()}");
+        }
     }
 }
 

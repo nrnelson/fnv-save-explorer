@@ -26,6 +26,7 @@ public sealed class GuardEvaluator
     private readonly Func<uint, int?> _questStage;
     private readonly Func<uint, int, bool?> _objCompleted;
     private readonly Func<uint, int, bool?> _objDisplayed;
+    private readonly Func<string, int?>? _resolveVar;
 
     /// <param name="dead">Save death registry: ref FormIDs (save-space) recorded as dead.</param>
     /// <param name="refEdids">Named placed-ref EDID → save-space FormID (<see cref="PluginDatabase.PlacedReferenceEdids"/>).</param>
@@ -35,6 +36,9 @@ public sealed class GuardEvaluator
     /// <param name="questStage">Quest FormID → highest reached stage, or null when unknown.</param>
     /// <param name="objCompleted">(Quest FormID, objective index) → completed? (null = unknown).</param>
     /// <param name="objDisplayed">(Quest FormID, objective index) → displayed? (null = unknown).</param>
+    /// <param name="resolveVar">A bare script-variable name → its persisted value (null = unknown). Bind this to the
+    /// quest whose script the guard belongs to, mapping each SLSD variable name (<see cref="PluginDatabase.QuestScriptVarName"/>)
+    /// to the save's persisted <c>QuestScriptVars</c> value (ROADMAP §6 #3). Omit (null) to leave local vars unknown.</param>
     public GuardEvaluator(
         IReadOnlySet<uint> dead,
         IReadOnlyDictionary<string, uint> refEdids,
@@ -43,7 +47,8 @@ public sealed class GuardEvaluator
         Func<uint, bool?> questCompleted,
         Func<uint, int?> questStage,
         Func<uint, int, bool?> objCompleted,
-        Func<uint, int, bool?> objDisplayed)
+        Func<uint, int, bool?> objDisplayed,
+        Func<string, int?>? resolveVar = null)
     {
         _dead = dead;
         _refEdids = refEdids;
@@ -53,6 +58,7 @@ public sealed class GuardEvaluator
         _questStage = questStage;
         _objCompleted = objCompleted;
         _objDisplayed = objDisplayed;
+        _resolveVar = resolveVar;
     }
 
     /// <summary>Three-valued evaluation of <paramref name="guard"/>: <c>true</c>/<c>false</c> when decidable from
@@ -159,7 +165,13 @@ public sealed class GuardEvaluator
             return _refEdids.TryGetValue(refName, out var rf) ? (_dead.Contains(rf) ? 1 : 0) : null;
         }
 
-        return null; // bare local var / global / unmodelled function
+        // Bare identifier — try resolving it as a quest script variable against the save's persisted vars
+        // (ROADMAP §6 #3). The resolver is bound to this guard's quest, so it returns null for any name that
+        // isn't one of that quest's SLSD variables (a global / other-quest var / world query stays unknown).
+        if (_resolveVar is not null && head.Length > 0 && (char.IsLetter(head[0]) || head[0] == '_'))
+            return _resolveVar(head);
+
+        return null; // bare local var (no resolver) / global / unmodelled function
     }
 
     private static readonly Dictionary<string, int> Arity = new(StringComparer.OrdinalIgnoreCase)

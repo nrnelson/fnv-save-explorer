@@ -201,15 +201,25 @@ approaches already ruled out are in **[docs/DECISIONS.md](docs/DECISIONS.md)** (
    internal actor-state flags, not player events: in the `killloot` pair the mantis was status **2 while still
    alive** (bit 1 set by the engine pre-death), so they can't be driven by a clean single input the way bit 0 can.
    **Remaining SEMANTICS:** bits 1–3 would need death-variation diffs (dismember/gib) and may resist clean
-   isolation; also name the type-1/4/5/6/8/9/10 fields and type 7's rare entry grammar.
+   isolation — **a dismember controlled pair (`dismember-pre`→`dismember-post`, 2026-06-29) confirms this:** the
+   dismembered creature (a PACK ref `0x001651B1`) entered the registry at **status 1 (plain death)**, i.e.
+   dismemberment sets **no distinct registry bit** — the dismembered-limbs state lives in the creature's own actor
+   change form (bit 17 `ACTOR_DISMEMBERED_LIMBS`), not the type-2 registry. So bits 1–3 stay engine-internal and
+   unisolated (consistent with the `killloot` mantis-at-2-while-alive observation). Also name the
+   type-1/4/5/6/8/9/10 fields and type 7's rare entry grammar.
    The separate `GlobalData3` type-1000 record (its own FLT section) is still undecoded — adjacent future work.
 3. **Quest / Pip-Boy interpreter** (former #16) — now a *consumer* of the decode, not bespoke probes.
    Remaining recall needs either the editor-ref→dead-instance binding (creature kills) or more
    ground-truth oracles; the walls are catalogued in DECISIONS.md. ◑ *Smaller win done:* the QUST var
    block's **SLSD index→source name** is now read from the masters' `SCPT` `SLSD`/`SCVR` table
    (`PluginDatabase.QuestScriptVarName`; CLI `qvars` shows names, e.g. Novac → `bKillerMale`/
-   `bPlayerRentedRoom`). Remaining: wire those names into `GuardEvaluator` so a named-var guard can be
-   evaluated against the persisted `QuestScriptVars`.
+   `bPlayerRentedRoom`). ✅ *Named-var guards now evaluate:* `GuardEvaluator` takes an optional
+   `resolveVar` (a bare script-var name → its persisted value), so a guard like `bPlayerRentedRoom == 1`
+   resolves three-valued against the save instead of being uniformly unknown — the caller binds the resolver
+   per-quest from `QuestScriptVars` (persisted, keyed by SLSD slot) × `QuestScriptVarName` (slot→name). Wired
+   into CLI `qguard` (shows the quest's resolved vars + var-gated GameMode effects); unit-tested. An unknown
+   name still stays unknown (precision-first). Remaining: fold the evaluator into the live Pip-Boy compute (it
+   is still only exercised by `qguard`), which needs the editor-ref→dead-instance binding above.
 4. ~~**Item condition maximums** (former #11): read the base-form Health so per-item condition shows a cap.~~
    ✅ **Done** — the cap is the int32 at offset 4 of the `WEAP`/`ARMO` `DATA` subrecord (`value, health, weight`),
    read from the masters by `TesPlugin` → `PluginDatabase.ItemHealthMax(formId)` (base-form metadata, same path as

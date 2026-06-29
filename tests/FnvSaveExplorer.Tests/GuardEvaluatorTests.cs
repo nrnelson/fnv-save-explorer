@@ -15,7 +15,8 @@ public class GuardEvaluatorTests
         IReadOnlySet<uint> dead,
         IReadOnlyDictionary<string, uint>? refEdids = null,
         Func<uint, bool?>? completed = null,
-        Func<uint, int, bool?>? objCompleted = null)
+        Func<uint, int, bool?>? objCompleted = null,
+        Func<string, int?>? resolveVar = null)
     {
         refEdids ??= new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase) { ["VFSFistoREF"] = 0x55 };
         var byEdid = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase) { ["VFSAtomicPimp"] = 0x1000, ["OtherQuest"] = 0x2000 };
@@ -26,8 +27,14 @@ public class GuardEvaluatorTests
             completed ?? (_ => false),                    // completed
             _ => null,                                    // stage unknown
             objCompleted ?? ((_, _) => false),            // objective completed
-            (_, _) => false);                             // objective displayed
+            (_, _) => false,                              // objective displayed
+            resolveVar);                                  // local script-var name -> value (§6 #3)
     }
+
+    // A resolver bound to a quest with two persisted script vars (the SLSD/SCVR-named values from the save).
+    private static readonly Func<string, int?> Vars = nm =>
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { ["bPlayerRentedRoom"] = 1, ["nKills"] = 3 }
+            .TryGetValue(nm, out var v) ? v : (int?)null;
 
     [Fact]
     public void Blank_guard_holds()
@@ -95,5 +102,42 @@ public class GuardEvaluatorTests
     public void Unknown_quest_edid_is_unknown()
     {
         Assert.Null(Build(None).Holds("GetQuestCompleted NoSuchQuest == 1"));
+    }
+
+    // ----- §6 #3: named script vars resolve against the save's persisted QuestScriptVars -----
+
+    [Fact]
+    public void Named_var_guard_evaluates_against_persisted_value()
+    {
+        var g = Build(None, resolveVar: Vars);
+        Assert.True(g.Holds("bPlayerRentedRoom == 1"));   // persisted value 1
+        Assert.False(g.Holds("bPlayerRentedRoom == 0"));
+        Assert.True(g.Holds("nKills >= 3"));              // counter comparison
+        Assert.False(g.Holds("nKills >= 5"));
+        Assert.True(g.Holds("bPlayerRentedRoom"));        // bare truthiness (1 != 0)
+    }
+
+    [Fact]
+    public void Unresolved_var_stays_unknown_even_with_a_resolver()
+    {
+        // A name the quest's var table doesn't carry (a global / other-quest var) must stay unknown, not false —
+        // the precision-first guarantee holds for vars too.
+        Assert.Null(Build(None, resolveVar: Vars).Holds("bSomeOtherFlag == 1"));
+    }
+
+    [Fact]
+    public void Without_a_resolver_named_vars_remain_unknown()
+    {
+        // Backward-compatible: no resolver supplied -> a bare var is still unknown (precision-first default).
+        Assert.Null(Build(None).Holds("bPlayerRentedRoom == 1"));
+    }
+
+    [Fact]
+    public void Named_var_combines_with_GetDead_under_kleene_logic()
+    {
+        // boss dead AND room rented -> fire; boss alive -> blocked (false dominates AND).
+        const string guard = "VFSFistoREF.GetDead && bPlayerRentedRoom == 1";
+        Assert.True(Build(new HashSet<uint> { 0x55 }, resolveVar: Vars).Holds(guard));
+        Assert.False(Build(None, resolveVar: Vars).Holds(guard));
     }
 }
