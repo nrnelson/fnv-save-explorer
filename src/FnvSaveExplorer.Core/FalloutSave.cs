@@ -1166,6 +1166,38 @@ public sealed class FalloutSave
         return true;
     }
 
+    // ---- Active actor-value modifiers (chem / equipment effects, §4n) ------------------------------
+
+    /// <summary>One active actor-value modifier: the array <see cref="Slot"/> (= the actor-value index),
+    /// its <see cref="Name"/> (e.g. "Action Points"), the current <see cref="Modifier"/> the active effects add
+    /// to that AV, and the float's absolute file offset.</summary>
+    public readonly record struct ActorValueModifier(int Slot, string Name, float Modifier, int ValueOffset);
+
+    /// <summary>
+    /// The player's <b>active actor-value modifiers</b> (SPEC §4n) — the non-zero slots of the dense
+    /// actor-value array's <b>low region</b> (slots 0..76, indexed directly by actor-value index), which hold the
+    /// net modifier currently applied to each AV by active effects (chems, equipment, temporary buffs). Distinct
+    /// from the high region (slot = AV + 77) that caches karma/XP/skill bonuses/limb condition (§4j/§4n).
+    /// <para>Cracked by the <c>chempre</c>→<c>chempost</c> controlled diff (a Jet consumed): slot 12 went 0 → 15,
+    /// matching Jet's masters ALCH effect exactly (actorValue 12 = Action Points, magnitude 15) — so the slot
+    /// index is the effect's actor-value index and the slot value is the magnitude.</para>
+    /// Empty when the actor-value array isn't locatable (same graceful decline as karma/XP). Read-only — these are
+    /// engine-recomputed from the actor's active effects, so they aren't a safe edit target.
+    /// </summary>
+    public IReadOnlyList<ActorValueModifier> PlayerActiveEffects()
+    {
+        var result = new List<ActorValueModifier>();
+        for (var av = 0; av < ReferenceChangeForm.ActorValueModifierSlotCount; av++)
+        {
+            if (PlayerStatOffset(av) is not { } off)
+                return av == 0 ? [] : result;   // array not located at all → empty; a mid-run miss can't happen
+            var v = BinaryPrimitives.ReadSingleLittleEndian(_raw.AsSpan(off, 4));
+            if (v != 0f && float.IsFinite(v))
+                result.Add(new ActorValueModifier(av, ReferenceChangeForm.ActorValueName(av), v, off));
+        }
+        return result;
+    }
+
     /// <summary>The base FormID of bottle caps — the FNV currency. Caps are not a standalone save field;
     /// the engine stores them as an ordinary inventory stack of this form, so they decode and edit through
     /// the inventory path (confirmed: a real save's inventory carries an <c>0x0000000F</c> "Bottle Cap"

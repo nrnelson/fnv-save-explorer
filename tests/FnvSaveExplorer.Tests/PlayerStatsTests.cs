@@ -119,4 +119,49 @@ public class PlayerStatsTests
         // at the SAME crippled floor (-100), proving the slot map + scale generalize (ROADMAP §4n part B).
         Check("macewindu-limbcripple-post", "Left Leg", -100f);
     }
+
+    [Fact]
+    public void Chem_controlled_saves_decode_active_av_modifier()
+    {
+        // Active actor-value modifiers live in the LOW region of the dense array (slot = AV index), §4n.
+        // Ground truth: chempre→chempost consumes one Jet, whose masters ALCH effect is actorValue 12
+        // (Action Points) magnitude 15 — so an "Action Points +15" modifier must appear only in chempost.
+        var byName = FalloutSaveTests.RealSaves()
+            .Select(o => (string)o[0])
+            .GroupBy(p => Path.GetFileNameWithoutExtension(p), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        FalloutSave.ActorValueModifier? Ap(string save) =>
+            byName.TryGetValue(save, out var path)
+                ? FalloutSave.Load(path).PlayerActiveEffects().Cast<FalloutSave.ActorValueModifier?>()
+                    .FirstOrDefault(e => e!.Value.Slot == 12)
+                : null;
+
+        if (byName.ContainsKey("chempost"))
+        {
+            var post = Ap("chempost");
+            Assert.NotNull(post);
+            Assert.Equal("Action Points", post!.Value.Name);
+            Assert.Equal(15f, post.Value.Modifier);
+        }
+        if (byName.ContainsKey("chempre"))
+            Assert.Null(Ap("chempre")); // Jet not yet taken — no Action Points modifier
+    }
+
+    [Theory]
+    [MemberData(nameof(FalloutSaveTests.RealSaves), MemberType = typeof(FalloutSaveTests))]
+    public void Real_saves_active_av_modifiers_are_sane(string path)
+    {
+        // Where the actor-value array is locatable, every reported active modifier sits in the low region
+        // (slot 0..76), is finite, and isn't absurd — a misread of havok bytes would surface as a wild/NaN
+        // float, not the clean small modifiers chems/equipment produce. Read-only (no edit path to verify).
+        var effects = FalloutSave.Load(path).PlayerActiveEffects();
+        Assert.All(effects, e =>
+        {
+            Assert.InRange(e.Slot, 0, ReferenceChangeForm.ActorValueModifierSlotCount - 1);
+            Assert.True(float.IsFinite(e.Modifier) && Math.Abs(e.Modifier) <= 100_000f,
+                $"slot {e.Slot} modifier {e.Modifier} out of sane range ({Path.GetFileName(path)})");
+            Assert.NotEqual(0f, e.Modifier); // zero slots are not reported
+        });
+    }
 }

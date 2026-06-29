@@ -129,6 +129,45 @@ public static class ReferenceChangeForm
     public static readonly string[] PlayerLimbNames =
         ["Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "Head"];
 
+    // ---- Active actor-value modifiers: the LOW region of the same array (ROADMAP §4n) --------------
+    // The dense actor-value array has two regions. The HIGH region (slot = AV-index + 77) caches base/
+    // permanent values: karma (AV 23 → slot 100), XP (AV 24 → 101), skill book bonuses (AV+77, §4j),
+    // limb condition (AV 103–108 → 180–185). The LOW region (slot = AV-index directly, 0..76) holds the
+    // actor's CURRENT active-effect modifier per actor value — what chems / equipment effects add right now.
+    // CONFIRMED by a controlled diff (`chempre`→`chempost`: a Jet consumed) cross-checked against the masters:
+    // the dense-array slot 12 went 0 → 15, and Jet's ALCH effect is exactly actorValue 12 (ActionPoints),
+    // magnitude 15 — so slot index == the effect's actor-value index and slot value == the magnitude.
+
+    /// <summary>Number of slots in the low (active-effect modifier) region: slots 0..76 (AV 0..76). The
+    /// value/cache region begins at slot 77 (AV 0 + 77), which is why karma (AV 23) caches at slot 100.</summary>
+    public const int ActorValueModifierSlotCount = PlayerKarmaSlot - 23; // 77 — karma is AV 23 at slot 100
+
+    private static readonly string?[] ActorValueNameTable = BuildActorValueNames();
+
+    /// <summary>The FNV actor-value name for index <paramref name="av"/> (e.g. 12 → "Action Points",
+    /// 5 → "Strength", 40 → "Science"), or <c>"AV {n}"</c> for indices we don't name (AI/combat AVs). Used to
+    /// label the active-effect modifier slots.</summary>
+    public static string ActorValueName(int av) =>
+        av >= 0 && av < ActorValueNameTable.Length && ActorValueNameTable[av] is { } n ? n : $"AV {av}";
+
+    static string?[] BuildActorValueNames()
+    {
+        // Confident indices: SPECIAL + derived stats (0–24) and the skills (32–45, from §4e's verified AV map).
+        // 25–31 (FO3-era limb-condition AVs) and 46+ (AI/combat AVs) are left unnamed → "AV n".
+        var l = new string?[46];
+        l[0] = "Aggression"; l[1] = "Confidence"; l[2] = "Energy"; l[3] = "Responsibility"; l[4] = "Mood";
+        l[5] = "Strength"; l[6] = "Perception"; l[7] = "Endurance"; l[8] = "Charisma"; l[9] = "Intelligence";
+        l[10] = "Agility"; l[11] = "Luck"; l[12] = "Action Points"; l[13] = "Carry Weight"; l[14] = "Crit Chance";
+        l[15] = "Heal Rate"; l[16] = "Health"; l[17] = "Melee Damage"; l[18] = "Damage Resistance";
+        l[19] = "Poison Resistance"; l[20] = "Rad Resistance"; l[21] = "Speed Multiplier"; l[22] = "Fatigue";
+        l[23] = "Karma"; l[24] = "XP";
+        // Skills (AV index 0x20–0x2D; 0x21 BigGuns is unused in FNV) — matches §4e.
+        l[32] = "Barter"; l[34] = "Energy Weapons"; l[35] = "Explosives"; l[36] = "Lockpick"; l[37] = "Medicine";
+        l[38] = "Melee Weapons"; l[39] = "Repair"; l[40] = "Science"; l[41] = "Guns"; l[42] = "Sneak";
+        l[43] = "Speech"; l[44] = "Survival"; l[45] = "Unarmed";
+        return l;
+    }
+
     /// <summary>
     /// Absolute file offset of the float32 in the player reference's post-MOVE actor-value array at
     /// 0-indexed <paramref name="slot"/> (e.g. <see cref="PlayerKarmaSlot"/> / <see cref="PlayerXpSlot"/>),

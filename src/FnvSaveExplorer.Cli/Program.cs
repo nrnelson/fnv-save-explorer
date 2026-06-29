@@ -77,6 +77,7 @@ if (args.Length < 2)
           fnvsave setkarma <in.fos> <out.fos> <value>  Edit the player's karma (writes a new file)
           fnvsave setxp <in.fos> <out.fos> <value>     Edit the player's XP    (writes a new file)
           fnvsave limbs <save.fos>           Show the player's 6 limb conditions (§4n; 0=full, -100=crippled)
+          fnvsave effects <save.fos>         Show active actor-value modifiers (§4n; chem/equipment effects, e.g. Jet +15 AP)
           fnvsave setlimb <in.fos> <out.fos> "<limb>" <value>   Edit one limb's condition (0=repaired; new file)
           fnvsave repairlimbs <in.fos> <out.fos>   Repair all limbs to full (condition 0; writes a new file)
           fnvsave diff <a.fos> <b.fos> [body|cf]   Byte-diff two saves (best on controlled pairs); 'body'
@@ -407,6 +408,9 @@ try
             return SetPlayerStat(path, args[2], "Karma", float.Parse(args[3]), (s, v) => s.TrySetKarma(v), s => s.Karma);
         case "setxp":
             return SetPlayerStat(path, args[2], "XP", float.Parse(args[3]), (s, v) => s.TrySetXp(v), s => s.Xp);
+        case "effects":
+            Effects(FalloutSave.Load(path));
+            break;
         case "limbs":
             Limbs(FalloutSave.Load(path));
             break;
@@ -1178,6 +1182,10 @@ static void PlayerSummary(FalloutSave s, string savePath, string? dataDir)
         if (addictions.Count > 0)
             Console.WriteLine($"  addictions ({addictions.Count}): {string.Join(", ", addictions.Select(a => db.Resolve(a.FormId) ?? "?").OrderBy(n => n))}");
 
+        var effects = s.PlayerActiveEffects();
+        if (effects.Count > 0)
+            Console.WriteLine($"  active AV modifiers ({effects.Count}): {string.Join(", ", effects.Select(e => $"{e.Name} {e.Modifier:+0.#;-0.#}"))}");
+
         var reps = s.Reputations(fid => db.RecordType(fid) == "REPU")
             .OrderByDescending(r => r.Fame + r.Infamy).ToList();
         Console.WriteLine($"  reputation ({reps.Count} factions): {string.Join(", ", reps.Select(r => $"{db.Resolve(r.FactionFormId) ?? "?"} {r.Fame:0}/{r.Infamy:0}"))}");
@@ -1640,6 +1648,22 @@ static void Limbs(FalloutSave s)
         var state = l.Condition <= -100f ? "CRIPPLED" : l.Condition < 0f ? "damaged" : "ok";
         Console.WriteLine($"  slot {l.Slot}  {l.Name,-10} {l.Condition,8:0.##}  [{state}]");
     }
+}
+
+static void Effects(FalloutSave s)
+{
+    // The player's active actor-value modifiers (§4n) — the low region of the dense actor-value array (slot =
+    // AV index) holds the net modifier active effects (chems / equipment) currently apply to each AV. Cracked +
+    // masters-cross-checked on Jet (slot 12 = Action Points, +15). Read-only (engine-recomputed from effects).
+    var effects = s.PlayerActiveEffects();
+    if (effects.Count == 0)
+    {
+        Console.WriteLine("No active actor-value modifiers (or the player reference record / array wasn't located).");
+        return;
+    }
+    Console.WriteLine($"Active actor-value modifiers ({effects.Count}; from chems / equipment / temporary effects):");
+    foreach (var e in effects)
+        Console.WriteLine($"  slot {e.Slot,3}  {e.Name,-20} {e.Modifier,+8:0.##}");
 }
 
 static int SetLimb(string inPath, string outPath, string limb, float value)

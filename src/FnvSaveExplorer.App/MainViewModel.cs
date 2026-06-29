@@ -473,6 +473,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 $"{bodyBytes:N0} bytes of globals, change forms and the FormID array follow — " +
                 "preserved verbatim and not yet decoded.";
 
+            // Active actor-value modifiers (§4n) — the net modifier active effects (chems / equipment) apply to
+            // each AV (read-only). Cracked + masters-cross-checked on Jet (Action Points +15).
+            var effects = save.PlayerActiveEffects();
+            if (effects.Count > 0)
+                BodyInfo += "\n\nActive actor-value modifiers (chems / equipment / temporary effects):\n  " +
+                            string.Join("\n  ", effects.Select(e => $"{e.Name} {e.Modifier:+0.##;-0.##}"));
+
             HasSave = true;
             WindowTitle = $"FNV Save Explorer — {Path.GetFileName(path)}";
             Status = $"Loaded {Path.GetFileName(path)} ({save.FileLength:N0} bytes).";

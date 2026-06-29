@@ -886,10 +886,22 @@ read + round-trip on real saves.
 > *data* offset; via `find`'s true data-relative offset the limbs are at slot 180–185 on Save 146 too. The slot is
 > fixed, like karma's.)
 
-**Player active-effect slot array — LOCATED (`chem-*`, Beadley; read-only).** A clean chem pair (`chempre`→`chempost`:
-`tgm`, `player.additem` a chem, `player.equipitem` it, empty interior) sets **one slot of a `7C`-delimited float32
-array `0.0 → 15.0`** (effect magnitude), with a nearby `u16` also moving (likely the effect timer) — the actor's
-active-effect / AV-modifier block, in the same gated array. Not yet field-mapped to a reader.
+**Player active actor-value modifiers — DECODED + reader shipped (`chempre`→`chempost`, 2026-06-29).** The dense
+actor-value array (the §4i/§4j post-MOVE `[f32][7C]` array of the player reference record) has **two regions**: the
+**high region** caches values/permanent modifiers at **slot = AV-index + 77** (karma AV 23 → slot 100, XP AV 24 →
+101, skill-book bonuses §4j, limb condition AV 103–108 → slots 180–185), and the **low region** (**slot = AV-index
+directly, slots 0–76**) holds the actor's **current active-effect modifier per actor value** — what chems / equipment
+/ temporary effects add right now. **Decisively confirmed**: the `chempre`→`chempost` controlled pair (a **Jet**
+consumed, inventory count 4→3) flips **exactly one slot 12: `0.0 → 15.0`**, and Jet's masters `ALCH` effect is
+**`actorValue = 12` (Action Points), `magnitude = 15`** — so the **slot index equals the effect's actor-value index
+and the slot value equals the magnitude** (a masters cross-check, not a guess). Cross-save sanity holds (clean small
+integer modifiers at meaningful AV slots: Perception +1, Melee/Speech +2, Agility −1 — never havok noise).
+`FalloutSave.PlayerActiveEffects()` reads the non-zero low-region slots and names them via the FNV actor-value enum
+(`ReferenceChangeForm.ActorValueName`); CLI **`effects`** + the `player` summary + the GUI **Body** tab surface them.
+**Read-only** (the engine recomputes these from the actor's active effects at load, so they aren't a safe edit
+target). The effect's countdown timer is not in this array (it changed in the grown record region / an inserted
+`0x32` counter, not the slot). Located via the same `PlayerStatSlotOffset` mechanism as karma/XP/limbs, so it
+declines gracefully on havok-physics player records.
 
 **Player CHANGE_ACTOR record — DECODED + addiction reader SHIPPED (gated-section parse, 2026-06-28).** The
 player's **CHANGE_ACTOR change form** (form type `0x0A`, `iref = playerBase(0x07) + 1`; cross-character confirmed on
