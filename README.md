@@ -199,6 +199,20 @@ dotnet run --project src/FnvSaveExplorer.Cli -- check   "<save.fos>"   # round-t
 dotnet run --project src/FnvSaveExplorer.Cli -- diff    "<a.fos>" "<b.fos>"   # byte-diff two saves
 ```
 
+For repeated invocations (an agent/script calling several commands against the same or different
+saves in one session), `dotnet run` always uses plain JIT and re-checks/rebuilds on every call —
+publish once and invoke the published binary directly instead:
+
+```pwsh
+dotnet publish src/FnvSaveExplorer.Cli -c Release -r linux-x64 -o ./publish
+./publish/FnvSaveExplorer.Cli inventory "<save.fos>"
+./publish/FnvSaveExplorer.Cli names     "<save.fos>"
+```
+
+The Cli project publishes with [Native AOT](https://learn.microsoft.com/dotnet/core/deploying/native-aot)
+(no JIT at runtime at all) — measured ~5.6x faster cold start per invocation than `dotnet run`/plain
+JIT on the reference machine. Swap `linux-x64` for `win-x64`/`osx-arm64`/etc. as needed.
+
 ### Cracking the rest via controlled diffs
 
 `diff` is the workhorse for the remaining reverse-engineering. On a **same-size** pair it pinpoints

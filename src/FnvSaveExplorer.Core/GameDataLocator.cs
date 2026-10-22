@@ -12,12 +12,26 @@ public static class GameDataLocator
     /// <summary>The base-game master; its presence marks a valid Data folder.</summary>
     public const string MasterEsm = "FalloutNV.esm";
 
+    /// <summary>Process-lifetime cache of the resolved Data folder per override path: the candidate set only
+    /// depends on <paramref name="overridePath"/> (plus the static, unchanging-during-a-session filesystem), so
+    /// re-probing every candidate (including several hardcoded, usually-nonexistent Windows install paths) on
+    /// every single call is wasted work across a repeated-call session.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _dataFolderCache = new();
+
     public static string? FindDataFolder(string? overridePath = null)
     {
+        var key = overridePath ?? "";
+        if (_dataFolderCache.TryGetValue(key, out var cached))
+            return cached;
+        string? found = null;
         foreach (var candidate in Candidates(overridePath))
             if (HasMaster(candidate))
-                return candidate;
-        return null;
+            {
+                found = candidate;
+                break;
+            }
+        _dataFolderCache[key] = found;
+        return found;
     }
 
     /// <summary>
