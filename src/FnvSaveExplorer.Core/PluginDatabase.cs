@@ -154,7 +154,48 @@ public sealed class PluginDatabase
     public static PluginDatabase Build(IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, bool withDialogue = false, bool withActors = false)
         => Build(loadOrder, pluginPaths, null, null, withDialogue, withActors);
 
+    /// <summary>In-process cache of fully-built databases, keyed by load order + each resolved plugin's file
+    /// fingerprint (length + last-write time) + folder/flag inputs. A <see cref="PluginDatabase"/> is immutable
+    /// once built (its lazily-memoized <see cref="CounterGates"/>/<see cref="ExternalCompletions"/> are idempotent
+    /// to recompute), so sharing a cache hit across repeated calls with an unchanged load order is safe; any
+    /// plugin file changing (different size/mtime) or the load order/folders/flags differing misses and rebuilds.
+    /// Second layer of the "agent tooling" fix alongside <see cref="TesPlugin"/>'s own per-file cache: this one
+    /// also saves the per-call remap/merge work across the whole load order, not just the file decode.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, PluginDatabase> _buildCache = new();
+
     private static PluginDatabase Build(
+        IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, string? dataFolder, string? modsFolder, bool withDialogue = false, bool withActors = false)
+    {
+        var key = BuildCacheKey(loadOrder, pluginPaths, dataFolder, modsFolder, withDialogue, withActors);
+        if (_buildCache.TryGetValue(key, out var cached))
+            return cached;
+        var built = BuildCore(loadOrder, pluginPaths, dataFolder, modsFolder, withDialogue, withActors);
+        _buildCache[key] = built;
+        return built;
+    }
+
+    private static string BuildCacheKey(
+        IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, string? dataFolder, string? modsFolder, bool withDialogue, bool withActors)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(dataFolder).Append('\u0001').Append(modsFolder).Append('\u0001').Append(withDialogue).Append('\u0001').Append(withActors);
+        foreach (var name in loadOrder)
+        {
+            sb.Append('\u0001').Append(name).Append('=');
+            if (pluginPaths.TryGetValue(name, out var path))
+            {
+                var fi = new FileInfo(path);
+                sb.Append(fi.Exists ? fi.Length : -1).Append(':').Append(fi.Exists ? fi.LastWriteTimeUtc.Ticks : -1);
+            }
+            else
+            {
+                sb.Append("missing");
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static PluginDatabase BuildCore(
         IReadOnlyList<string> loadOrder, IReadOnlyDictionary<string, string> pluginPaths, string? dataFolder, string? modsFolder, bool withDialogue = false, bool withActors = false)
     {
         var names = new Dictionary<uint, string>();
@@ -309,6 +350,14 @@ public sealed class PluginDatabase
         return saveHigh < 0 ? null : ((uint)saveHigh << 24) | (localFormId & 0x00FFFFFF);
     }
 
+    /// <summary>Process-lifetime cache of the resolved plugin-name -&gt; path map, keyed by the
+    /// (dataFolder, modsFolder) pair: a <c>Data</c>/<c>mods</c> tree's file set doesn't change while a CLI
+    /// invocation or GUI session is running, so re-walking it on every <see cref="ForSave"/>/<see cref="Build(IReadOnlyList{string},string,bool,bool)"/>
+    /// call (previously unconditional, on top of the per-plugin/per-database caches above) was pure waste for a
+    /// repeated-call session. A cache hit returns a fresh copy, preserving the "independent dictionary per call"
+    /// contract callers (including tests) rely on.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string DataFolder, string ModsFolder), Dictionary<string, string>> _collectCache = new();
+
     /// <summary>
     /// Builds a plugin-name → file-path map from the game <c>Data</c> folder (top-level) and, when given, an
     /// MO2 <c>mods\</c> folder (each mod's root). The Data folder wins, so the real base game / DLC files are
@@ -316,6 +365,10 @@ public sealed class PluginDatabase
     /// </summary>
     public static Dictionary<string, string> CollectPlugins(string? dataFolder, string? modsFolder)
     {
+        var key = (dataFolder ?? "", modsFolder ?? "");
+        if (_collectCache.TryGetValue(key, out var cachedPaths))
+            return new Dictionary<string, string>(cachedPaths, StringComparer.OrdinalIgnoreCase);
+
         var paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (dataFolder is not null && Directory.Exists(dataFolder))
             foreach (var f in EnumeratePlugins(dataFolder))
@@ -324,7 +377,8 @@ public sealed class PluginDatabase
             foreach (var mod in Directory.EnumerateDirectories(modsFolder))
                 foreach (var f in EnumeratePlugins(mod)) // MO2 maps each mod's root into Data, so plugins sit here
                     paths.TryAdd(Path.GetFileName(f), f);
-        return paths;
+        _collectCache[key] = paths;
+        return new Dictionary<string, string>(paths, StringComparer.OrdinalIgnoreCase);
     }
 
     private static IEnumerable<string> EnumeratePlugins(string folder) =>

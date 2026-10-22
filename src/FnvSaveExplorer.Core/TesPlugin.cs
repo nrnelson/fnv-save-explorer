@@ -154,10 +154,29 @@ public sealed class TesPlugin
         CompletionEnables = completionEnables;
     }
 
+    /// <summary>
+    /// In-process cache of parsed plugins, keyed by absolute path + a cheap file fingerprint (length and last
+    /// write time) plus the read flags. <see cref="TesPlugin"/> is fully immutable once built, so a cache hit is
+    /// always safe to share; a changed file (different length/mtime) simply misses and is re-parsed. This is the
+    /// fix for the "agent tooling" issue: <see cref="PluginDatabase.Build(IReadOnlyList{string}, string, bool, bool)"/>
+    /// previously re-read and re-decoded every plugin master from scratch on every single call (e.g. every CLI
+    /// invocation of <c>inventory</c>/<c>names</c>/<c>notes</c>/<c>perks</c>/... in a long-lived process, or every
+    /// repeated GUI refresh) even though the plugin files never changed between calls.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Path, long Length, long WriteTicks, bool ReadDialogue, bool ReadActors), TesPlugin> _cache = new();
+
     public static TesPlugin Load(string path, bool readDialogue = false, bool readActors = false)
     {
+        var full = Path.GetFullPath(path);
+        var info = new FileInfo(full);
+        var key = (full, info.Length, info.LastWriteTimeUtc.Ticks, readDialogue, readActors);
+        if (_cache.TryGetValue(key, out var cached))
+            return cached;
+
         using var fs = File.OpenRead(path);
-        return Read(fs, Path.GetFileName(path), readDialogue, readActors);
+        var plugin = Read(fs, Path.GetFileName(path), readDialogue, readActors);
+        _cache[key] = plugin;
+        return plugin;
     }
 
     /// <summary>Parses a plugin from an arbitrary (seekable) stream — used by tests with an in-memory plugin.
